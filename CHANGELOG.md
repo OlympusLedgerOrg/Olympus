@@ -4,6 +4,33 @@ All notable changes to the Olympus protocol are documented in this file.
 
 ## Unreleased
 
+### Added
+
+- **Signed timestamps make validity windows evaluate at signing time
+  (key-rotation series, part 6).** Two artifacts previously carried
+  timestamps their signatures did not cover, forcing trust-window checks to
+  wall-clock now and making the signing keys effectively unretirable:
+  - _Ceremony manifests_: schema version 3 folds `created_unix` into the
+    coordinator-signed digest (`OLY:CEREMONY:MANIFEST:V3`), and
+    `verify_coordinator_signature` window-checks the coordinator's
+    trusted-issuer entry at that authenticated creation time (with a one-day
+    forward-skew bound rejecting future-dated manifests). A retired
+    coordinator key keeps vouching for manifests it signed while valid.
+    Contributor-allowlist windows follow the same version-dependent time
+    base. Legacy v1/v2 manifests keep the wall-clock-now check, since their
+    `created_unix` is attacker-editable; `generate_manifest` now emits v3.
+  - _Record snapshots_: the ingest snapshot signature now folds a
+    `signed_at` timestamp into a V2 signing digest (`OLY_SNP2` Poseidon
+    domain, disjoint from the legacy `OLY_SNAP`), stored in the
+    `snapshot_sig` JSON without any schema migration.
+    `POST /ingest/proofs/verify` accepts a `checkpoint_authority` issuer
+    only if its validity window covers the authenticated signing time, so
+    retired-key snapshot verification now actually enforces the window it
+    was designed around (resolves the deferral recorded on #1608).
+    Historical rows without `signed_at` verify via the V1 digest with the
+    pre-existing no-window behavior — stripping or editing a V2 row's
+    timestamp breaks its signature rather than downgrading it.
+
 ### Removed
 
 - **redaction: prune the rejected rasterized-tile subsystem (ADR-0023/0024).**

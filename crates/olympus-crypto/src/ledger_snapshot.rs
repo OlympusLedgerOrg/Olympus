@@ -30,6 +30,16 @@ pub const SNAPSHOT_DEPTH: usize = 20;
 /// Domain separator — MUST equal `zk::snapshot::SIGNING_DOMAIN`.
 const SIGNING_DOMAIN: u64 = 0x4F4C595F534E4150; // "OLY_SNAP"
 
+/// Domain separator for the V2 (timestamped) signing payload — MUST equal
+/// `zk::snapshot::SIGNING_DOMAIN_V2`. V2 appends the authority's signing
+/// time (unix seconds) to the fold, so a relying party can evaluate the
+/// signer's trust-window at the *authenticated* signing time instead of
+/// having no signature-covered timestamp at all (which is what makes
+/// checkpoint-authority keys retirable — see `docs/key-rotation.md`).
+/// A distinct domain keeps V1 and V2 digests disjoint: a V1 signature can
+/// never verify as a V2 one (or vice versa) over the same snapshot fields.
+const SIGNING_DOMAIN_V2: u64 = 0x4F4C595F534E5032; // "OLY_SNP2"
+
 /// `DomainPoseidonNode(2, left, right)` = `Poseidon(Poseidon(2, left), right)`.
 /// NODE=2 (audit L-4 split): the snapshot tree is the document_existence tree
 /// (`anchoring::own_checkpoint` proves existence over `snapshot_root`), so its
@@ -91,6 +101,14 @@ pub struct LedgerSnapshot {
     pub signature_r8y: String,
     /// BJJ signature s as 32-byte BE hex.
     pub signature_s: String,
+    /// Authority signing time (unix seconds), folded into the V2 signing
+    /// digest. `None` selects the legacy V1 digest (historical snapshots
+    /// produced before the timestamp was signed); `Some` selects V2. The
+    /// two use disjoint Poseidon domains, so a stored V2 snapshot cannot
+    /// be "downgraded" by stripping this field — the V1 digest would no
+    /// longer match the signature.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signed_at_unix: Option<i64>,
 }
 
 /// The single `Fr` that gets BJJ-signed. MUST match the signer's fold in
@@ -113,6 +131,40 @@ pub fn signing_digest(
     acc = poseidon_hash(acc, Fr::from(tree_size));
     acc = poseidon_hash(acc, ch_fr);
     acc = poseidon_hash(acc, orig_fr);
+    Some(acc)
+}
+
+/// The V2 (timestamped) signing digest. MUST match the signer's fold in
+/// `zk::snapshot::signing_digest_v2` byte-for-byte: identical to V1 except
+/// the domain tag is [`SIGNING_DOMAIN_V2`] and `signed_at_unix` is folded
+/// in as the final element. `signed_at_unix` must be non-negative (it is a
+/// wall-clock unix timestamp; the signer never emits a negative value, and
+/// accepting one here would let two distinct i64s alias one field element
+/// through the `as u64` cast).
+#[allow(clippy::too_many_arguments)]
+pub fn signing_digest_v2(
+    snapshot_root: &str,
+    leaf: &str,
+    leaf_index: u64,
+    tree_size: u64,
+    content_hash: &str,
+    original_root: &str,
+    signed_at_unix: i64,
+) -> Option<Fr> {
+    if signed_at_unix < 0 {
+        return None;
+    }
+    let root_fr = hex_to_fr(snapshot_root)?;
+    let leaf_fr = hex_to_fr(leaf)?;
+    let ch_fr = hex_to_fr(content_hash)?;
+    let orig_fr = hex_to_fr(original_root)?;
+    let mut acc = poseidon_hash(Fr::from(SIGNING_DOMAIN_V2), root_fr);
+    acc = poseidon_hash(acc, leaf_fr);
+    acc = poseidon_hash(acc, Fr::from(leaf_index));
+    acc = poseidon_hash(acc, Fr::from(tree_size));
+    acc = poseidon_hash(acc, ch_fr);
+    acc = poseidon_hash(acc, orig_fr);
+    acc = poseidon_hash(acc, Fr::from(signed_at_unix as u64));
     Some(acc)
 }
 
@@ -179,16 +231,36 @@ pub fn verify_snapshot(
         return false;
     }
 
-    let digest = match signing_digest(
-        &snapshot.snapshot_root,
-        &fr_to_hex(leaf),
-        snapshot.snapshot_index,
-        snapshot.snapshot_size,
-        content_hash,
-        original_root,
-    ) {
-        Some(d) => d,
-        None => return false,
+    // V1/V2 dispatch: a snapshot carrying an authenticated signing time uses
+    // the V2 fold (disjoint domain + `signed_at_unix` as the final element);
+    // a historical snapshot without one uses the legacy V1 fold. The caller
+    // decides what to do with the timestamp's *trust* semantics (e.g. window
+    // checks against a trusted-issuer set); this function only guarantees
+    // that whatever `signed_at_unix` says, it is covered by the signature.
+    let digest = match snapshot.signed_at_unix {
+        Some(signed_at) => match signing_digest_v2(
+            &snapshot.snapshot_root,
+            &fr_to_hex(leaf),
+            snapshot.snapshot_index,
+            snapshot.snapshot_size,
+            content_hash,
+            original_root,
+            signed_at,
+        ) {
+            Some(d) => d,
+            None => return false,
+        },
+        None => match signing_digest(
+            &snapshot.snapshot_root,
+            &fr_to_hex(leaf),
+            snapshot.snapshot_index,
+            snapshot.snapshot_size,
+            content_hash,
+            original_root,
+        ) {
+            Some(d) => d,
+            None => return false,
+        },
     };
 
     let r8x = match hex_to_fr(&snapshot.signature_r8x) {
@@ -270,6 +342,7 @@ mod tests {
             signature_r8x: "00".repeat(32),
             signature_r8y: "00".repeat(32),
             signature_s: "00".repeat(32),
+            signed_at_unix: None,
         };
         let original_root = fr_to_hex(leaf);
         // All-zero sig against a real-looking pubkey: verifier must reject.
@@ -345,6 +418,7 @@ mod tests {
             signature_r8x: fr_to_hex(sig.r8.x),
             signature_r8y: fr_to_hex(sig.r8.y),
             signature_s: fr_to_hex(perm_s_to_ark(&sig.s)),
+            signed_at_unix: None,
         };
 
         assert!(verify_snapshot(
@@ -419,6 +493,7 @@ mod tests {
             signature_r8x: r8x_hex,
             signature_r8y: r8y_hex,
             signature_s: s_hex,
+            signed_at_unix: None,
         };
 
         let s_ark = perm_s_to_ark(&sig.s);
@@ -500,6 +575,7 @@ mod tests {
             signature_r8x: "00".repeat(32),
             signature_r8y: "00".repeat(32),
             signature_s: "00".repeat(32),
+            signed_at_unix: None,
         };
         assert!(!verify_snapshot(
             &snap,
@@ -563,6 +639,7 @@ mod tests {
             signature_r8x: fr_to_hex(sig.r8.x),
             signature_r8y: fr_to_hex(sig.r8.y),
             signature_s: fr_to_hex(perm_s_to_ark(&sig.s)),
+            signed_at_unix: None,
         };
         assert!(verify_snapshot(
             &snap,
@@ -590,6 +667,7 @@ mod tests {
             signature_r8x: "00".repeat(32),
             signature_r8y: "00".repeat(32),
             signature_s: "00".repeat(32),
+            signed_at_unix: None,
         };
         assert!(!verify_snapshot(
             &snap_a,
@@ -609,6 +687,7 @@ mod tests {
             signature_r8x: "00".repeat(32),
             signature_r8y: "00".repeat(32),
             signature_s: "00".repeat(32),
+            signed_at_unix: None,
         };
         assert!(!verify_snapshot(
             &snap_b,
@@ -717,6 +796,136 @@ mod tests {
         mixed.push('A');
         mixed.push('b');
         assert!(hex_to_fr(&mixed).is_none());
+    }
+
+    /// V2 (timestamped) snapshot: sign the V2 digest, verify with
+    /// `signed_at_unix: Some(..)`, and pin every failure direction the new
+    /// field introduces — each negative names the exact mutation it rejects
+    /// so this can't pass on an unrelated early parse error.
+    #[test]
+    fn v2_timestamped_snapshot_roundtrips_and_binds_signed_at() {
+        use babyjubjub_permissive::PrivateKey;
+
+        let sk = PrivateKey::from_bytes(&[11u8; 32]).unwrap();
+        let (pk_x, pk_y) = sk.public().coords();
+
+        let empty = empty_chain();
+        let leaf = Fr::from(31_337u64);
+        let path_elements: Vec<Fr> = (0..SNAPSHOT_DEPTH).map(|d| empty[d]).collect();
+        let path_indices = vec![0u8; SNAPSHOT_DEPTH];
+        let root = reconstruct_root(leaf, &path_elements, &path_indices).unwrap();
+
+        let snapshot_root_hex = fr_to_hex(root);
+        let leaf_hex = fr_to_hex(leaf);
+        let content_hash = "34".repeat(32);
+        let original_root = leaf_hex.clone();
+        let signed_at: i64 = 1_780_000_000;
+
+        let digest = signing_digest_v2(
+            &snapshot_root_hex,
+            &leaf_hex,
+            0,
+            1,
+            &content_hash,
+            &original_root,
+            signed_at,
+        )
+        .expect("v2 digest");
+        let sig = sk.sign(digest).expect("sign");
+
+        let snap = LedgerSnapshot {
+            snapshot_root: snapshot_root_hex.clone(),
+            snapshot_index: 0,
+            snapshot_size: 1,
+            path_elements_hex: path_elements.iter().map(|f| fr_to_hex(*f)).collect(),
+            path_indices,
+            signature_r8x: fr_to_hex(sig.r8.x),
+            signature_r8y: fr_to_hex(sig.r8.y),
+            signature_s: fr_to_hex(perm_s_to_ark(&sig.s)),
+            signed_at_unix: Some(signed_at),
+        };
+
+        // Positive: the V2 signature verifies with the matching timestamp.
+        assert!(verify_snapshot(
+            &snap,
+            &content_hash,
+            &original_root,
+            pk_x,
+            pk_y
+        ));
+
+        // Downgrade: stripping the timestamp selects the V1 digest, which the
+        // V2 signature was never taken over — the disjoint domains must reject.
+        let mut stripped = snap.clone();
+        stripped.signed_at_unix = None;
+        assert!(
+            !verify_snapshot(&stripped, &content_hash, &original_root, pk_x, pk_y),
+            "stripping signed_at_unix must not downgrade a V2 signature to V1"
+        );
+
+        // Tamper: shifting the claimed signing time changes the V2 digest.
+        let mut shifted = snap.clone();
+        shifted.signed_at_unix = Some(signed_at + 1);
+        assert!(
+            !verify_snapshot(&shifted, &content_hash, &original_root, pk_x, pk_y),
+            "signed_at_unix must be bound by the signature"
+        );
+
+        // Malformed: a negative timestamp is rejected by the digest builder
+        // itself (the signer never emits one; `as u64` would alias it).
+        let mut negative = snap.clone();
+        negative.signed_at_unix = Some(-1);
+        assert!(!verify_snapshot(
+            &negative,
+            &content_hash,
+            &original_root,
+            pk_x,
+            pk_y
+        ));
+        assert!(signing_digest_v2(
+            &snapshot_root_hex,
+            &leaf_hex,
+            0,
+            1,
+            &content_hash,
+            &original_root,
+            -1,
+        )
+        .is_none());
+        // Boundary: exactly 0 (the epoch itself) is a valid — if suspicious —
+        // timestamp and must be accepted; only strictly-negative values are
+        // rejected. Kills the `< 0` → `<= 0` mutant on the guard.
+        assert!(signing_digest_v2(
+            &snapshot_root_hex,
+            &leaf_hex,
+            0,
+            1,
+            &content_hash,
+            &original_root,
+            0,
+        )
+        .is_some());
+
+        // And the converse downgrade: a V1 signature must not verify once a
+        // timestamp is claimed.
+        let v1_digest = signing_digest(
+            &snapshot_root_hex,
+            &leaf_hex,
+            0,
+            1,
+            &content_hash,
+            &original_root,
+        )
+        .expect("v1 digest");
+        let v1_sig = sk.sign(v1_digest).expect("sign v1");
+        let mut upgraded = snap.clone();
+        upgraded.signature_r8x = fr_to_hex(v1_sig.r8.x);
+        upgraded.signature_r8y = fr_to_hex(v1_sig.r8.y);
+        upgraded.signature_s = fr_to_hex(perm_s_to_ark(&v1_sig.s));
+        assert!(
+            !verify_snapshot(&upgraded, &content_hash, &original_root, pk_x, pk_y),
+            "a V1 signature must not satisfy a snapshot claiming a signed_at_unix"
+        );
     }
 
     /// Round-trip property: every `Fr` encoded by `fr_to_hex` decodes

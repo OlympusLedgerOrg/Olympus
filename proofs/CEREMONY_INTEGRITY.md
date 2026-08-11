@@ -20,13 +20,13 @@ contributor's own footgun. For a real multi-party ceremony (Phase 2
 with N ≥ 3 contributors, distributed across organizations / countries),
 the failure modes multiply:
 
-| Failure mode | Detection without integrity check | Detection with this doc's protocol |
-|---|---|---|
-| Contributor A's vkey + Contributor B's zkey accidentally shipped | At first real proof verification (production) | At binary startup (fail-closed) |
-| Re-run on one circuit, forgot to re-run on another | At first proof of unchanged circuit (silent if no one tests it) | At binary startup |
-| Malicious contributor swaps in a backdoored zkey post-ceremony | Cryptographic verification of the proof itself MIGHT catch some classes, but not all (the swapped zkey could prove what the manifest claims) | Manifest signature mismatch at load time |
-| Operator copies new keys to prod but forgets the vkey JSON | At first production proof | At deploy verification |
-| Phase-2 contribution chain has a missing link (contributor 7's input ≠ contributor 6's output) | Hard to detect after the fact | Per-contribution BLAKE3 chain in the manifest |
+| Failure mode                                                                                   | Detection without integrity check                                                                                                            | Detection with this doc's protocol            |
+| ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
+| Contributor A's vkey + Contributor B's zkey accidentally shipped                               | At first real proof verification (production)                                                                                                | At binary startup (fail-closed)               |
+| Re-run on one circuit, forgot to re-run on another                                             | At first proof of unchanged circuit (silent if no one tests it)                                                                              | At binary startup                             |
+| Malicious contributor swaps in a backdoored zkey post-ceremony                                 | Cryptographic verification of the proof itself MIGHT catch some classes, but not all (the swapped zkey could prove what the manifest claims) | Manifest signature mismatch at load time      |
+| Operator copies new keys to prod but forgets the vkey JSON                                     | At first production proof                                                                                                                    | At deploy verification                        |
+| Phase-2 contribution chain has a missing link (contributor 7's input ≠ contributor 6's output) | Hard to detect after the fact                                                                                                                | Per-contribution BLAKE3 chain in the manifest |
 
 ## ADR-0030 — redaction_validity circuit removed
 
@@ -69,7 +69,7 @@ coordinator signature is embedded in the top-level coordinator object.
 
 ```json
 {
-  "version": 2,
+  "version": 3,
   "ceremony_id": "olympus-mainnet-2026Q2",
   "circuit": "document_existence",
   "created_unix": 1748275200,
@@ -84,11 +84,11 @@ coordinator signature is embedded in the top-level coordinator object.
     "computed_from": "circuit.r1cs"
   },
   "artifacts": {
-    "zkey":     { "name": "document_existence.zkey",      "size": 8775536,  "blake3": "..." },
-    "vkey":     { "name": "document_existence_vkey.json", "size": 2046,     "blake3": "..." },
-    "ark_zkey": { "name": "document_existence.ark.zkey",  "size": 8775536,  "blake3": "..." },
-    "r1cs":     { "name": "document_existence.r1cs",      "size": 2784268,  "blake3": "..." },
-    "wasm":     { "name": "document_existence.wasm",      "size": 1878819,  "blake3": "..." }
+    "zkey": { "name": "document_existence.zkey", "size": 8775536, "blake3": "..." },
+    "vkey": { "name": "document_existence_vkey.json", "size": 2046, "blake3": "..." },
+    "ark_zkey": { "name": "document_existence.ark.zkey", "size": 8775536, "blake3": "..." },
+    "r1cs": { "name": "document_existence.r1cs", "size": 2784268, "blake3": "..." },
+    "wasm": { "name": "document_existence.wasm", "size": 1878819, "blake3": "..." }
   },
   "contributions": [
     {
@@ -115,33 +115,59 @@ The `running_chain_hash` field at each contribution is
 zero bytes for `index == 0`). Any missing or out-of-order contribution
 breaks the chain and the coordinator signature fails to verify.
 
-### What the coordinator signature binds (V2)
+### What the coordinator signature binds (V3)
 
-The coordinator does **not** sign the bare contribution-chain hash. It
-signs a domain-separated digest (`OLY:CEREMONY:MANIFEST:V2`) that binds
-the runtime-relevant fields:
+The coordinator does **not** sign the bare contribution-chain hash. For a
+version-3 manifest (the current `generate_manifest` output) it signs a
+domain-separated digest (`OLY:CEREMONY:MANIFEST:V3`) that binds the
+runtime-relevant fields **including the creation time**:
 
 ```text
 coordinator_message = BLAKE3(
-    "OLY:CEREMONY:MANIFEST:V2"
-    || lp(circuit) || lp(ceremony_id)
+    "OLY:CEREMONY:MANIFEST:V3"
+    || lp(circuit) || lp(ceremony_id) || created_unix(i64 LE)
     || vkey.blake3(32) || ark_zkey.blake3(32) || r1cs.blake3(32) || wasm.blake3(32)
     || final_running_chain_hash(32)
 )
 ```
 
-(`lp(x) = u64_le(len) || x`.) This closes a binding-scope gap: V1 signed
+(`lp(x) = u64_le(len) || x`.) Note the distinction between the manifest's
+**schema version** (the JSON `version` field: 1, 2, or 3) and the
+**signing recipe** (the domain tag): manifests of schema version 1–2 are
+both verified under the artifact-binding recipe tagged
+`OLY:CEREMONY:MANIFEST:V2` (same layout as above, without the
+`created_unix` element); schema version 3 uses the
+`OLY:CEREMONY:MANIFEST:V3` recipe above. The disjoint tags make
+cross-version relabelling fail closed. The _historical_ recipe V1 —
+which signed only `final_running_chain_hash` — is no longer implemented
+or accepted by any verifier in the tree; every manifest, whatever its
+schema version, must carry a signature over the full artifact map to
+verify at all.
+
+The artifact binding closes recipe V1's binding-scope gap: it signed
 only `final_running_chain_hash`, leaving the artifact digests — most
-importantly `vkey.blake3`, the key `/zk/verify` loads to verify *every*
+importantly `vkey.blake3`, the key `/zk/verify` loads to verify _every_
 proof — outside the signature. The other runtime checks (build.rs
 `blake3(vkey) == manifest.vkey.blake3`; `load_proving_key_with_manifest`
 `blake3(ark_zkey) == manifest.ark_zkey.blake3`) only assert the on-disk
-file matches the digest *recorded in the manifest* — digests that were
-themselves unsigned under V1. An attacker who could edit the manifest
-could therefore substitute a backdoored vkey/zkey, update the recorded
-blake3s, and the coordinator signature would still verify. Under V2 any
-edit to an artifact digest, the circuit name, or the ceremony id breaks
-the coordinator signature. The reference implementation is
+file matches the digest _recorded in the manifest_ — digests that were
+themselves unsigned under recipe V1. An attacker who could edit the
+manifest could therefore substitute a backdoored vkey/zkey, update the
+recorded blake3s, and the recipe-V1 coordinator signature would still
+verify. Under recipe V2+ any edit to an artifact digest, the circuit
+name, or the ceremony id breaks the coordinator signature.
+
+Binding `created_unix` (V3) additionally anchors **when** the coordinator
+vouched: issuer validity windows are evaluated at the signed creation
+time instead of wall-clock now, so a coordinator key can be retired
+(bounded `valid_until`) without invalidating the manifests it signed
+while valid — see `docs/key-rotation.md` ("the ceremony-coordinator
+trap"). A v3 manifest forward-dated more than one day past the
+verifier's clock is rejected (`CreatedInFuture`). Legacy v1/v2 manifests
+keep the wall-clock-now window check, since their `created_unix` is
+attacker-editable.
+
+The reference implementation is
 `CeremonyManifest::coordinator_signing_digest`; `generate_manifest`
 signs the exact same digest, so generator and verifier cannot drift.
 
@@ -157,9 +183,9 @@ both canonical pubkey coordinates. Verification:
 2. For every contribution, verify its signature and require its key to appear
    in the independently managed trusted-contributor policy for that timestamp.
    Repeated rows from the same key count as one identity.
-3. Verify the coordinator's BJJ signature over the **V2 digest** above
-   (artifacts + circuit + ceremony id + final chain hash) against
-   `coordinator.bjj_pubkey`.
+3. Verify the coordinator's BJJ signature over the version-appropriate
+   digest above (V3: artifacts + circuit + ceremony id + creation time +
+   final chain hash) against `coordinator.bjj_pubkey`.
 
 Each embedded contribution signature authenticates the structured contribution
 record and its exact chain position. It does **not** independently prove that
@@ -189,7 +215,8 @@ All four checks below are now live. See `src-tauri/src/zk/manifest.rs`
 for the schema + verification functions, `src-tauri/build.rs` for the
 compile-time check, `src-tauri/src/zk/zkey.rs` for the runtime
 `.ark.zkey` check, and `src-tauri/src/main.rs:detect_placeholder_artifacts`
-+ `verify_ceremony_manifests` for the startup pass.
+
+- `verify_ceremony_manifests` for the startup pass.
 
 1. **Compile-time manifest embed.** ✅ `src-tauri/build.rs` reads each
    circuit's manifest + vkey, asserts
@@ -208,9 +235,10 @@ compile-time check, `src-tauri/src/zk/zkey.rs` for the runtime
 3. **Startup coordinator-signature check.** ✅ `main.rs` calls
    `verify_ceremony_manifests` right after `bjj_trusted_issuers` is
    populated. Each manifest's contribution chain is recomputed,
-   coordinator pubkey membership in the trusted set is checked, and
-   the BJJ-EdDSA signature over the V2 digest (artifacts + circuit +
-   ceremony id + final running-chain-hash; see "What the coordinator
+   coordinator pubkey membership in the trusted set is checked
+   (window-evaluated at the signed `created_unix` for v3 manifests,
+   at wall-clock now for legacy v1/v2), and the BJJ-EdDSA signature
+   over the version-appropriate digest (see "What the coordinator
    signature binds") is verified via
    `crate::zk::witness::baby_jubjub::verify_signature`.
 
@@ -222,17 +250,17 @@ compile-time check, `src-tauri/src/zk/zkey.rs` for the runtime
 
 ### Wiring summary
 
-| File | Lines | Purpose |
-|---|---|---|
-| `src-tauri/src/zk/manifest.rs` | new | schema + verify helpers |
-| `src-tauri/src/bin/generate_manifest.rs` | new | one-shot ceremony manifest generator |
-| `src-tauri/build.rs` | edited | check #1 (vkey blake3) |
-| `src-tauri/src/zk/zkey.rs` | edited | check #2 (.ark.zkey blake3) |
-| `src-tauri/src/zk/verify.rs` | edited | `*_MANIFEST_JSON` constants |
-| `src-tauri/src/zk/prove.rs` | edited | route through manifest-checked load |
-| `src-tauri/src/main.rs` | edited | check #3 + #4 (startup signature gate) |
-| `proofs/setup_circuits.sh` | edited | invoke generator after export_ark_zkey |
-| `proofs/keys/manifests/*.json` | new | per-circuit signed manifests (committed) |
+| File                                     | Lines  | Purpose                                  |
+| ---------------------------------------- | ------ | ---------------------------------------- |
+| `src-tauri/src/zk/manifest.rs`           | new    | schema + verify helpers                  |
+| `src-tauri/src/bin/generate_manifest.rs` | new    | one-shot ceremony manifest generator     |
+| `src-tauri/build.rs`                     | edited | check #1 (vkey blake3)                   |
+| `src-tauri/src/zk/zkey.rs`               | edited | check #2 (.ark.zkey blake3)              |
+| `src-tauri/src/zk/verify.rs`             | edited | `*_MANIFEST_JSON` constants              |
+| `src-tauri/src/zk/prove.rs`              | edited | route through manifest-checked load      |
+| `src-tauri/src/main.rs`                  | edited | check #3 + #4 (startup signature gate)   |
+| `proofs/setup_circuits.sh`               | edited | invoke generator after export_ark_zkey   |
+| `proofs/keys/manifests/*.json`           | new    | per-circuit signed manifests (committed) |
 
 ## Operator runbook
 
@@ -244,8 +272,8 @@ atomically** for any one circuit:
 
 - `proofs/keys/<circuit>.ark.zkey`
 - `proofs/keys/verification_keys/<circuit>_vkey.json`
-- `proofs/build/<circuit>.r1cs`        (build artifact, dev convenience)
-- `proofs/build/<circuit>_js/<circuit>.wasm`  (build artifact)
+- `proofs/build/<circuit>.r1cs` (build artifact, dev convenience)
+- `proofs/build/<circuit>_js/<circuit>.wasm` (build artifact)
 
 If you regenerate one and not the others, the test/build will fail in
 confusing ways. If you commit the .ark.zkey but not the vkey JSON, CI
@@ -278,7 +306,7 @@ For each commit that includes ceremony artifacts:
 
 1. Confirm artifact mtimes are within minutes of each other (above).
 2. Confirm `cargo test -p olympus-desktop --test zk_prove_existence
-   --features prover` actually passes — this is the cheapest
+--features prover` actually passes — this is the cheapest
    end-to-end check that the vkey JSON and the .ark.zkey come from the
    same ceremony.
 3. Update `proofs/keys/PROVENANCE.md` with the ceremony date, PTAU
@@ -288,18 +316,34 @@ For each commit that includes ceremony artifacts:
 
 ### When you receive a ceremony bundle from a contributor
 
-Until the runtime check lands, this is manual:
+The runtime startup gate (`verify_ceremony_manifests`, "Runtime checks"
+above) verifies the coordinator signature, contribution chain, and
+artifact digests once the bundle is installed — fail-closed (`exit 2`)
+under `OLYMPUS_ENV=production`, warn-and-continue in dev. It cannot,
+however, validate what it never sees: pre-installation checks on the
+bundle itself remain the operator's job, and one cryptographic property
+is outside the runtime's scope entirely (step 3 below — Phase-2
+increment validity of each intermediate `.zkey`, which the manifest
+chain attests but does not prove). Before unpacking:
 
-1. Verify the bundle's coordinator signature against the published
-   coordinator pubkey (out-of-band; e.g. signed announcement on the
-   project's release page).
+1. Confirm the coordinator pubkey in `manifest.json` matches the
+   published coordinator key (out-of-band; e.g. signed announcement on
+   the project's release page), and that it is the key configured in
+   your `OLYMPUS_BJJ_TRUSTED_ISSUERS_JSON` with the
+   `ceremony_coordinator` role — otherwise the startup gate will refuse
+   the manifest after installation.
 2. Replay the contribution chain — recompute `running_chain_hash` from
    the contribution list, confirm it matches the manifest's final value.
+   (The startup gate repeats this check on every boot.)
 3. For each `contributions[i]`, run
    `snarkjs zkey verify <circuit>.r1cs <ptau> contributions/<i>.zkey`.
    That confirms the contribution is a valid Phase-2 increment over the
-   previous step.
-4. Hash every artifact and confirm against `manifest.json`.
+   previous step — the one check no runtime gate performs, since the
+   intermediate `.zkey` files are not shipped to consumers.
+4. Hash every artifact and confirm against `manifest.json`. (The
+   startup gate re-checks the vkey at compile time and the `.ark.zkey`
+   at load time; `r1cs`/`wasm` digests are bound by the coordinator
+   signature.)
 5. Only then unpack into `proofs/keys/` and rebuild.
 
 ### Production ceremony — Phase 2 with multiple contributors

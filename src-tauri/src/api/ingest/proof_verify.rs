@@ -305,6 +305,29 @@ pub(super) async fn verify_proof_bundle(
             )))
         }
     };
+    // Optional authenticated signing time (V2 snapshots). Present → the V2
+    // signing digest covers it; absent → legacy V1 row. A present-but-non-
+    // integer value is corruption, not legacy — fail as Invalid rather than
+    // silently downgrading to the V1 digest (which the signature would then
+    // reject with a misleading "signature check did not pass" detail).
+    let signed_at_unix: Option<i64> = match sig_json.get("signed_at") {
+        None => None,
+        Some(v) => match v.as_i64() {
+            Some(t) => Some(t),
+            None => {
+                return Ok(Json(build(
+                    body.proof_id,
+                    Some(row.proof_id),
+                    content_hash,
+                    SnapshotVerifyStatus::Invalid,
+                    "Stored snapshot_sig.signed_at is not an integer.",
+                    Some(snapshot_root_str),
+                    Some(snapshot_index_i as u64),
+                    Some(snapshot_size_i as u64),
+                )))
+            }
+        },
+    };
 
     let snapshot = CryptoSnapshot {
         snapshot_root: snapshot_root_str.clone(),
@@ -315,16 +338,25 @@ pub(super) async fn verify_proof_bundle(
         signature_r8x: sig_r8x,
         signature_r8y: sig_r8y,
         signature_s: sig_s,
+        signed_at_unix,
     };
 
     // Trust anchor: try every entry in the trusted-issuer set that grants
     // the `CheckpointAuthority` role (ADR-0041 role separation — e.g. a
     // ceremony-coordinator-only entry cannot vouch for a snapshot), not just
     // the current authority pubkey. This is the symmetric counterpart of the
-    // redaction-side issuer check — it makes rotation work (an old snapshot
-    // signed by a now-retired key still verifies if that key is in the
-    // trusted set with a `valid_until` covering the snapshot's signing time)
-    // and lets federation members verify snapshots signed by their peers.
+    // redaction-side issuer check — it makes rotation work and lets
+    // federation members verify snapshots signed by their peers.
+    //
+    // Validity windows: a V2 snapshot carries an authenticated `signed_at`
+    // (folded into the signing digest, so it cannot be edited to slide into
+    // a retired key's window), and each candidate issuer must `covers()` that
+    // signing time — an old snapshot signed by a now-retired key still
+    // verifies when the retired key's registry window covers it. Legacy V1
+    // rows have no signature-covered signing time, so no window is evaluated
+    // for them (an unauthenticated DB timestamp must not enter the trust
+    // decision); they keep the pre-window behavior of matching any
+    // checkpoint-authority key.
     //
     // The bootstrap-minted key is always entry 0 of `bjj_trusted_issuers`
     // and carries all roles, so the default single-operator case keeps the
@@ -340,6 +372,7 @@ pub(super) async fn verify_proof_bundle(
         &state.bjj_trusted_issuers,
         olympus_crypto::trust_list::TrustRole::CheckpointAuthority,
     )
+    .filter(|issuer| signed_at_unix.is_none_or(|t| issuer.covers(t)))
     .any(|issuer| {
         verify_snapshot(
             &snapshot,

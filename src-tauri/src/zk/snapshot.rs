@@ -37,6 +37,13 @@ use crate::zk::witness::existence::DEPTH;
 /// hash the system might produce.
 const SIGNING_DOMAIN: u64 = 0x4F4C595F534E4150; // "OLY_SNAP"
 
+/// Domain separator for the V2 (timestamped) signing payload — MUST equal
+/// `olympus_crypto::ledger_snapshot::SIGNING_DOMAIN_V2`. V2 folds the
+/// authority's signing time (unix seconds) into the digest so relying
+/// parties can evaluate trust windows at the authenticated signing time
+/// (what makes checkpoint-authority keys retirable — `docs/key-rotation.md`).
+const SIGNING_DOMAIN_V2: u64 = 0x4F4C595F534E5032; // "OLY_SNP2"
+
 #[derive(Debug, Error)]
 pub enum SnapshotError {
     #[error("Poseidon error: {0}")]
@@ -47,6 +54,8 @@ pub enum SnapshotError {
     BjjSign(#[from] BabyJubJubError),
     #[error("invalid field-element hex: {0}")]
     BadFieldHex(String),
+    #[error("signed_at_unix must be non-negative, got {0}")]
+    NegativeSignedAt(i64),
 }
 
 /// The frozen snapshot a single record carries for the rest of its life.
@@ -75,6 +84,12 @@ pub struct LedgerSnapshot {
     pub signature_r8y: String,
     /// BJJ signature s as 32-byte BE hex.
     pub signature_s: String,
+    /// Authority signing time (unix seconds), folded into the V2 signing
+    /// digest by [`signing_digest_v2`]. Every snapshot produced by
+    /// [`snapshot_new_record`] carries one; the verifier side
+    /// (`olympus_crypto::ledger_snapshot`) keeps the field optional so
+    /// historical V1-signed rows remain verifiable.
+    pub signed_at_unix: i64,
 }
 
 /// Parse a hex-encoded field element. Strict: requires exactly 32 bytes
@@ -130,6 +145,43 @@ pub fn signing_digest(
     acc = hash2(acc, Fr::from(tree_size))?;
     acc = hash2(acc, ch_fr)?;
     acc = hash2(acc, orig_fr)?;
+    Ok(acc)
+}
+
+/// The V2 (timestamped) signing digest: identical fold to [`signing_digest`]
+/// except the domain tag is [`SIGNING_DOMAIN_V2`] and `signed_at_unix` is
+/// appended as the final element. The disjoint domain guarantees a V1
+/// signature never verifies as V2 (or vice versa) over the same fields.
+/// MUST match `olympus_crypto::ledger_snapshot::signing_digest_v2`
+/// byte-for-byte — parity is locked by `tests/snapshot_cross_crate_parity.rs`.
+///
+/// `signed_at_unix` must be non-negative: it is a wall-clock timestamp, and
+/// the `as u64` cast would otherwise alias two distinct i64 values onto one
+/// field element.
+#[allow(clippy::too_many_arguments)]
+pub fn signing_digest_v2(
+    snapshot_root: &str,
+    leaf: &str,
+    leaf_index: u64,
+    tree_size: u64,
+    content_hash: &str,
+    original_root: &str,
+    signed_at_unix: i64,
+) -> Result<Fr, SnapshotError> {
+    if signed_at_unix < 0 {
+        return Err(SnapshotError::NegativeSignedAt(signed_at_unix));
+    }
+    let root_fr = hex_to_fr(snapshot_root)?;
+    let leaf_fr = hex_to_fr(leaf)?;
+    let ch_fr = hex_to_fr(content_hash)?;
+    let orig_fr = hex_to_fr(original_root)?;
+    let mut acc = hash2(Fr::from(SIGNING_DOMAIN_V2), root_fr)?;
+    acc = hash2(acc, leaf_fr)?;
+    acc = hash2(acc, Fr::from(leaf_index))?;
+    acc = hash2(acc, Fr::from(tree_size))?;
+    acc = hash2(acc, ch_fr)?;
+    acc = hash2(acc, orig_fr)?;
+    acc = hash2(acc, Fr::from(signed_at_unix as u64))?;
     Ok(acc)
 }
 
@@ -201,7 +253,10 @@ pub fn build_snapshot_path(
 /// `content_hash` and `original_root` are included in the signing
 /// payload so a future verifier reading the bundle in isolation can
 /// confirm "this snapshot is the one Olympus issued for THIS document"
-/// without trusting any DB.
+/// without trusting any DB. `signed_at_unix` (the authority's wall-clock
+/// signing time, unix seconds) is folded into the V2 digest so a relying
+/// party can later evaluate the signing key's trust window at an
+/// *authenticated* point in time — see `docs/key-rotation.md`.
 pub fn snapshot_new_record(
     bjj_priv: &[u8; 32],
     existing_leaves: &[Fr],
@@ -209,6 +264,7 @@ pub fn snapshot_new_record(
     new_leaf_index: u64,
     content_hash: &str,
     original_root: &str,
+    signed_at_unix: i64,
 ) -> Result<LedgerSnapshot, SnapshotError> {
     let (snapshot_root, path_elements, path_indices, tree_size) =
         build_snapshot_path(existing_leaves, new_leaf, new_leaf_index)?;
@@ -217,13 +273,14 @@ pub fn snapshot_new_record(
     let leaf_hex = fr_to_hex(new_leaf);
     let path_elements_hex: Vec<String> = path_elements.iter().copied().map(fr_to_hex).collect();
 
-    let digest = signing_digest(
+    let digest = signing_digest_v2(
         &snapshot_root_hex,
         &leaf_hex,
         new_leaf_index,
         tree_size,
         content_hash,
         original_root,
+        signed_at_unix,
     )?;
     let sig: BabyJubJubSignature = baby_jubjub::sign(bjj_priv, digest)?;
 
@@ -236,6 +293,7 @@ pub fn snapshot_new_record(
         signature_r8x: fr_to_hex(sig.r8x),
         signature_r8y: fr_to_hex(sig.r8y),
         signature_s: fr_to_hex(sig.s),
+        signed_at_unix,
     })
 }
 
@@ -263,6 +321,7 @@ mod tests {
             0,
             "00".repeat(32).as_str(),
             &fr_to_hex(tree.original_root),
+            1_780_000_000,
         )
         .unwrap();
         assert_eq!(snap.snapshot_index, 0);
@@ -282,6 +341,7 @@ mod tests {
             5,
             "11".repeat(32).as_str(),
             &fr_to_hex(tree.original_root),
+            1_780_000_000,
         )
         .unwrap();
         let mut reconstructed = 0u64;
@@ -303,6 +363,7 @@ mod tests {
             3,
             "aa".repeat(32).as_str(),
             &fr_to_hex(tree.original_root),
+            1_780_000_000,
         )
         .unwrap();
         let path_elems: Vec<Fr> = snap
@@ -323,6 +384,7 @@ mod tests {
     #[test]
     fn bjj_signature_verifies_against_authority_pubkey() {
         let content_hash = "bb".repeat(32);
+        let signed_at: i64 = 1_780_000_000;
         let tree = chunk_tree_from_bytes(b"doc_sig").unwrap();
         let original_root_hex = fr_to_hex(tree.original_root);
         let snap = snapshot_new_record(
@@ -332,8 +394,10 @@ mod tests {
             0,
             &content_hash,
             &original_root_hex,
+            signed_at,
         )
         .unwrap();
+        assert_eq!(snap.signed_at_unix, signed_at);
 
         let pk = BabyJubJubPubKey::from_private(&TEST_BJJ_PRIV).unwrap();
         let sig = BabyJubJubSignature {
@@ -341,7 +405,21 @@ mod tests {
             r8y: hex_to_fr(&snap.signature_r8y).unwrap(),
             s: hex_to_fr(&snap.signature_s).unwrap(),
         };
-        let digest = signing_digest(
+        let digest = signing_digest_v2(
+            &snap.snapshot_root,
+            &fr_to_hex(tree.original_root),
+            snap.snapshot_index,
+            snap.snapshot_size,
+            &content_hash,
+            &original_root_hex,
+            signed_at,
+        )
+        .unwrap();
+        assert!(verify_signature(&pk, &sig, digest));
+
+        // The signature is over the V2 digest only — the legacy V1 digest for
+        // the same fields must NOT verify (disjoint signing domains).
+        let v1_digest = signing_digest(
             &snap.snapshot_root,
             &fr_to_hex(tree.original_root),
             snap.snapshot_index,
@@ -350,6 +428,35 @@ mod tests {
             &original_root_hex,
         )
         .unwrap();
-        assert!(verify_signature(&pk, &sig, digest));
+        assert!(!verify_signature(&pk, &sig, v1_digest));
+    }
+
+    #[test]
+    fn negative_signed_at_is_rejected_with_named_reason() {
+        let tree = chunk_tree_from_bytes(b"doc_neg").unwrap();
+        let err = snapshot_new_record(
+            &TEST_BJJ_PRIV,
+            &[],
+            tree.original_root,
+            0,
+            "cc".repeat(32).as_str(),
+            &fr_to_hex(tree.original_root),
+            -5,
+        )
+        .expect_err("negative signing time must be refused");
+        assert!(matches!(err, SnapshotError::NegativeSignedAt(-5)));
+
+        // Boundary: exactly 0 is valid (only strictly-negative rejected) —
+        // kills the `< 0` → `<= 0` mutant on the signer-side guard.
+        assert!(snapshot_new_record(
+            &TEST_BJJ_PRIV,
+            &[],
+            tree.original_root,
+            0,
+            "cc".repeat(32).as_str(),
+            &fr_to_hex(tree.original_root),
+            0,
+        )
+        .is_ok());
     }
 }
