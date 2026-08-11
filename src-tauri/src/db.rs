@@ -341,15 +341,19 @@ const EXTERNAL_PG_ENUM_TYPES: &[&str] = &[
 /// `external_pg_semantic_inventory_digest`. This is populated from the
 /// reviewed v0.10.0 migration result and pins executable write semantics.
 ///
-/// Regenerated for migration `0055_ots_verification_stage_index`, which adds
-/// the partial index backing the OTS verification stage — 670 inventory rows
-/// before, 671 after. The previous value was
-/// `00e6953d2c0743c9b6011a22981317fa328e1556210dd787f12acef97236f9fd` (itself
-/// set by `0054_immutable_ots_evidence`, 667 -> 670). Each regeneration is
+/// Regenerated for migration `0056_peer_checkpoints_v3_indexes`, which drops the
+/// three `wire_version = 2` partial indexes on `peer_checkpoints`
+/// (`peer_checkpoints_v2_statement_unique`, `_v2_equivocation_height`,
+/// `_v2_equivocation_timestamp`) and recreates them under new names predicated
+/// on `wire_version IN (2, 3)`. The object count is unchanged (671 -> 671):
+/// three index *definitions* change, not the number of inventory objects. The
+/// previous value was
+/// `c0ed2338da1dfafaca148d46406f464e420f05a55cc805c6a1c1af05a391f1ce` (itself
+/// set by `0055_ots_verification_stage_index`, 670 -> 671). Each regeneration is
 /// validated by re-applying the migration set *without* the new migration and
 /// confirming it still reproduces the prior constant exactly.
 const EXTERNAL_PG_SEMANTIC_INVENTORY_BLAKE3: &str =
-    "c0ed2338da1dfafaca148d46406f464e420f05a55cc805c6a1c1af05a391f1ce";
+    "f1ceb9b6d2c65a46903365a7a4caad9d2ac471912484c2041f3eece027329668";
 const INSTANCE_LOCK_FILE: &str = "embedded-postgres.lock";
 
 static EMBEDDED_POSTGRES_REAPER: OnceLock<Mutex<Vec<ArmedPostgres>>> = OnceLock::new();
