@@ -12,10 +12,14 @@
 -- bjj_pubkey_x/y columns because a single Fr-pair doesn't fit `public_key`'s
 -- historical dataset-key convention).
 --
--- One row per distinct ingest signing pubkey ever loaded by this instance
+-- One row per activation interval, not per distinct pubkey
 -- (`bootstrap::ensure_ingest_signing_key`): unbounded (`valid_from` NULL) for
 -- the first-ever key, superseded (this table's existing lifecycle stamps) on
--- every subsequent `OLYMPUS_INGEST_SIGNING_KEY` change. `GET
+-- every subsequent `OLYMPUS_INGEST_SIGNING_KEY` change. A key that is
+-- superseded and later reactivated (e.g. an operator reverting a rotation)
+-- gets a second row for the new interval rather than reusing its original
+-- row — the lookup that decides "is this pubkey already active" only
+-- inspects the single currently-active row, not row history. `GET
 -- /redaction/issuer-key` serves the full history so a verifier who only has
 -- the live endpoint (not an out-of-band archive) can still resolve which key
 -- signed an older bundle.

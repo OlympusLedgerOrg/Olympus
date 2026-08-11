@@ -32,6 +32,7 @@
 use crate::common;
 
 use axum::extract::State;
+use ed25519_dalek::SigningKey;
 use olympus_tauri_lib::api::redaction::issuer_key::get_issuer_key;
 use olympus_tauri_lib::bootstrap::ensure_ingest_signing_key;
 use olympus_tauri_lib::state::AppState;
@@ -60,7 +61,17 @@ async fn ensure_ingest_signing_key_registers_supersedes_and_reports_history() {
     // meaningful despite running against the shared cluster.
     let key_a = "a".repeat(64);
     let key_b = "b".repeat(64);
-    let key_c = "c".repeat(64);
+    // Key C is derived from a real Ed25519 seed (not an arbitrary hex string
+    // like A/B) so the assertions below can prove the end-to-end invariant
+    // CodeRabbit flagged as untested: the response's live `ed25519PubkeyHex`
+    // (derived from `state.ingest_signing_key`, set from this same seed)
+    // must equal the registry's currently-active history entry.
+    let live_seed = [9u8; 32];
+    let key_c = hex::encode(
+        SigningKey::from_bytes(&live_seed)
+            .verifying_key()
+            .to_bytes(),
+    );
 
     ensure_ingest_signing_key(&pool, &key_a)
         .await
@@ -129,7 +140,7 @@ async fn ensure_ingest_signing_key_registers_supersedes_and_reports_history() {
     // query + response shape are checked end-to-end against the exact three
     // rows this test just created.
     let mut state = AppState::new(Some(pool));
-    state.ingest_signing_key = Some(std::sync::Arc::new(zeroize::Zeroizing::new([9u8; 32])));
+    state.ingest_signing_key = Some(std::sync::Arc::new(zeroize::Zeroizing::new(live_seed)));
 
     let body = get_issuer_key(State(state))
         .await
@@ -137,7 +148,7 @@ async fn ensure_ingest_signing_key_registers_supersedes_and_reports_history() {
         .0;
 
     // Existing field is unchanged — back-compat with the audit UI's auto-fill.
-    assert_eq!(body.ed25519_pubkey_hex.len(), 64);
+    assert_eq!(body.ed25519_pubkey_hex, key_c);
 
     assert_eq!(
         body.history.len(),
@@ -156,11 +167,15 @@ async fn ensure_ingest_signing_key_registers_supersedes_and_reports_history() {
         "superseded key A must have a non-null validUntil"
     );
 
+    // The live key (from `state.ingest_signing_key`) and the active history
+    // entry must agree — this is the invariant a caller actually relies on
+    // when cross-checking `ed25519PubkeyHex` against `history`.
     let c_entry = body
         .history
         .iter()
-        .find(|e| e.ed25519_pubkey_hex == key_c)
-        .expect("key C present in history");
+        .find(|e| e.ed25519_pubkey_hex == body.ed25519_pubkey_hex)
+        .expect("the live key must appear in history when its own registration succeeded");
+    assert_eq!(c_entry.ed25519_pubkey_hex, key_c);
     assert!(
         c_entry.valid_until.is_none(),
         "the currently active key C must have a null validUntil"

@@ -55,12 +55,17 @@ pub struct IssuerKeyResponse {
     /// existing consumers (the Redaction-audit UI's auto-fill) need no
     /// changes.
     pub ed25519_pubkey_hex: String,
-    /// Every distinct ingest signing pubkey this instance has ever loaded,
-    /// oldest first, including the current one (whose `validUntil` is
-    /// `null`). Empty if the registry is unavailable (no DB pool) or has no
-    /// rows yet (pre-registry installs that haven't restarted since
-    /// upgrading) — callers should treat an empty history as "unknown", not
-    /// as "no prior keys existed".
+    /// Every distinct ingest signing pubkey this instance has successfully
+    /// *registered*, oldest first. The entry for the currently active key
+    /// (`validUntil: null`) normally has the same value as
+    /// `ed25519_pubkey_hex` above, since both come from the same startup
+    /// resolution — but `bootstrap::ensure_ingest_signing_key`'s startup
+    /// call is logged-and-non-fatal on failure (e.g. a transient DB error
+    /// during that one call), so a caller MUST NOT assume
+    /// `ed25519_pubkey_hex` is always present in `history`: treat a missing
+    /// or absent-entirely-empty `history` as "unknown / registration may
+    /// have failed", never as "no prior keys existed" or "this cannot be
+    /// the active key".
     pub history: Vec<IssuerKeyHistoryEntry>,
 }
 

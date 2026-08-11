@@ -7,18 +7,22 @@ All notable changes to the Olympus protocol are documented in this file.
 ### Added
 
 - **Historical redaction/ingest issuer keys (key-rotation series, part 4.5).**
-  `GET /redaction/issuer-key` now serves every distinct Ed25519 signing key
-  this instance has ever loaded, not just the live one. Every resolved
-  ingest signing key is recorded in `account_signing_keys` (`purpose =
-'ingest_signing'`, migration 0057) by the new
+  `GET /redaction/issuer-key` now serves every Ed25519 signing key this
+  instance has successfully _registered_, not just the live one. Every
+  resolved ingest signing key is recorded in `account_signing_keys`
+  (`purpose = 'ingest_signing'`, migration 0057) by the new
   `bootstrap::ensure_ingest_signing_key`, called automatically at startup —
   no operator confirmation step, since the ingest key was never protected
   against accidental swap. The response's new `history` array (additive;
-  existing `ed25519PubkeyHex` field unchanged) lists each key with its
-  active window, closing the gap `docs/key-rotation.md` previously
-  documented as unresolved. Each bundle's own embedded `signer_pubkey`
-  remains the actual trust anchor `bundle_v3::verify` checks — the registry
-  is a discovery aid for verifiers who only have the live endpoint.
+  existing `ed25519PubkeyHex` field unchanged) lists each registered key
+  with its active window, closing the gap `docs/key-rotation.md` previously
+  documented as unresolved. Registration is logged-and-non-fatal on
+  failure, so `history` is not a guaranteed-complete record — even the
+  current key can be absent if its own startup registration hit a
+  transient error; callers must treat a gap as "unknown," never as proof a
+  key wasn't active. Each bundle's own embedded `signer_pubkey` remains the
+  actual trust anchor `bundle_v3::verify` checks — the registry is a
+  discovery aid for verifiers who only have the live endpoint.
 - **ADR-0043: local secret storage and recovery (research/design).**
   Records the survey and proposed posture for where node-local key material
   physically lives: OS-keychain-first (keyring v4 binary entries) with an

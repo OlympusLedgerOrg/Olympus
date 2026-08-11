@@ -65,8 +65,10 @@ single-operator risk + external review**.
   evaluate at the authenticated signing time — making coordinator and
   checkpoint keys retirable — and a registry of historical redaction/ingest
   issuer keys (`GET /redaction/issuer-key` now serves every key this
-  instance has ever loaded, not just the live one). Remaining: in-band
-  revocation notices for retired keys (still out-of-band only).
+  instance has successfully registered, not just the live one; registration
+  is best-effort at startup, so this is a discovery aid, not a completeness
+  guarantee). Remaining: in-band revocation notices for retired keys (still
+  out-of-band only).
 - ☐ **Hardened, portable proof-bundle format** with stronger offline verifier
   tooling and sample packages for non-technical reviewers.
 - ☐ **Pilot deployment** alongside a real public-records / clerk workflow

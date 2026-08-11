@@ -551,10 +551,13 @@ export interface RedactionIssuerKeyResponse {
   /** Ed25519 verifying key (32-byte lowercase hex) that signs this instance's
    *  V3 redaction bundles. */
   ed25519PubkeyHex: string;
-  /** Every distinct ingest signing pubkey this instance has ever loaded,
-   *  oldest first, including the current one. Empty if the server has no DB
-   *  pool or no registry rows yet — an empty array means "unknown history",
-   *  not "no prior keys existed". Not yet surfaced in the audit UI. */
+  /** Every ingest signing pubkey this instance has successfully
+   *  *registered*, oldest first — not a guaranteed-complete record.
+   *  Registration is best-effort at server startup, so even the current key
+   *  (`ed25519PubkeyHex` above) can be absent here if its own registration
+   *  hit a transient error. Treat a missing entry or an empty array as
+   *  "unknown", never as "no prior keys existed" or "this cannot be the
+   *  active key". Not yet surfaced in the audit UI. */
   history: RedactionIssuerKeyHistoryEntry[];
 }
 
