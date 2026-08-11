@@ -123,6 +123,7 @@ A: See [../SECURITY.md](../SECURITY.md) for coordinated disclosure.
 | [court-evidence.md](court-evidence.md) | Lawyers, judges, experts | 30 min | Verification for litigation |
 | [federation.md](federation.md) | Operators | 20 min | Multi-node setup on Tor |
 | [sbt-deployment.md](sbt-deployment.md) | Operators | 15 min | Credential issuance |
+| [key-rotation.md](key-rotation.md) | Operators | 15 min | Rotating signing keys and secrets |
 | [coverage.md](coverage.md) | Developers | 10 min | Test coverage gates |
 | [supply-chain-vetting.md](supply-chain-vetting.md) | Maintainers, auditors | 10 min | Dependency review baseline |
 | [landing-page.md](landing-page.md) | Maintainers | 5 min | What the public landing page claims, and how Pages serves it |
