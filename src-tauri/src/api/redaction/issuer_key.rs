@@ -14,15 +14,18 @@
 //! auditor verifying a bundle from an untrusted source must still obtain the
 //! issuer key out-of-band; the UI keeps the field editable for exactly that.
 //!
-//! Historical keys (docs/key-rotation.md): every distinct ingest signing
-//! pubkey this instance has ever loaded is recorded in `account_signing_keys`
+//! Historical keys (docs/key-rotation.md): every ingest signing pubkey this
+//! instance successfully *registers* is recorded in `account_signing_keys`
 //! (`purpose = 'ingest_signing'`, migration 0057) by
 //! `bootstrap::ensure_ingest_signing_key`. `history` below surfaces that
 //! registry so a verifier who only has this live endpoint — not an
 //! out-of-band archive of retired keys — can still resolve which key signed
 //! an older bundle, closing the gap `docs/key-rotation.md` previously
 //! documented as unresolved ("Redaction bundles: `GET /redaction/issuer-key`
-//! serves only the current key").
+//! serves only the current key"). Registration is logged-and-non-fatal on
+//! failure, so `history` is not a guaranteed-complete record — even the
+//! live key returned above can be absent from it; see the doc comment on
+//! `IssuerKeyResponse::history` for the exact caller-facing contract.
 
 use axum::{extract::State, http::StatusCode, Json};
 use ed25519_dalek::SigningKey;
