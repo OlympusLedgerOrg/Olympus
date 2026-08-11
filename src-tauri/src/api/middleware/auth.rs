@@ -755,6 +755,21 @@ fn check_general_rate_limit(
 /// Pre-auth router guard. On the local listener it charges any request that
 /// presents authentication material, including legacy handlers that perform
 /// their own DB lookup. On the Tor listener it charges every anonymous request.
+///
+/// Bucketing note (audit L-4): every onion request reaches Axum from loopback
+/// (the Tor listener proxies to `127.0.0.1`), so all Tor callers share a single
+/// `{origin: Tor, ip: 127.0.0.1}` bucket. This is deliberate and correct for its
+/// primary purpose — bounding *total* anonymous pre-auth CPU (the canonicalize +
+/// Poseidon + BJJ-verify done before a checkpoint is authorized) and, because the
+/// `origin` dimension separates it from `{origin: Local, ...}`, it cannot starve
+/// the local listener. What it does NOT provide is per-peer fairness among Tor
+/// callers: a noisy peer can consume the shared Tor budget. That fairness cannot
+/// be enforced here, because a peer's identity lives inside the *signed checkpoint
+/// body* and is not known until `federation::verify::verify_and_store` runs, well
+/// after this pre-auth guard. The correct way to get per-peer accountability is to
+/// restrict who can connect at all — Tor v3 onion **client authorization** limited
+/// to registered `peer_nodes` — rather than to key this bucket on an identity we
+/// do not yet have. Tracked as a design item, not a keying bug.
 pub(crate) async fn rate_limit_auth_attempts(
     State(state): State<AppState>,
     req: Request<Body>,

@@ -254,15 +254,63 @@ pub async fn verify_and_store(
         .await
         .map_err(|e| format!("advisory lock: {e}"))?;
 
+    // 3a. Append-chain linkage (fresh-height splice defence). The append witness
+    //     proves `current_root = previous_root + one leaf`, but `previous_root`
+    //     is chosen by the (potentially Byzantine) signer and was previously
+    //     compared only against itself, never against a root we had accepted. A
+    //     signer holding its own authority key could therefore fork its OWN
+    //     history: after we accept `(R_n, size n)` it gossips `(previous = R_n',
+    //     current = R_{n+1}', size n+1)` with a fresh timestamp, and — sharing
+    //     neither our tree_size nor our timestamp — slips past equivocation
+    //     detection un-flagged. That is the gap ADR-0031 §3's anti-rollback
+    //     guarantee assumed was closed. Under the per-identity advisory lock held
+    //     above (so this read is consistent), a CONTIGUOUS checkpoint
+    //     (`tree_size == latest + 1`) must append onto the exact root we last
+    //     accepted at that height; a mismatch is a history splice and is flagged
+    //     as equivocation. Non-contiguous jumps (`> latest + 1`, e.g. legitimate
+    //     catch-up after downtime) carry no intermediate root we could check, so
+    //     they are accepted un-chained rather than rejected — the residual is
+    //     documented in docs/federation.md.
+    let latest_verified: Option<(i64, String)> = sqlx::query_as(
+        "SELECT tree_size, ledger_root
+           FROM peer_checkpoints
+          WHERE signer_pubkey_x = $1 AND signer_pubkey_y = $2
+            AND checkpoint_scope = $3 AND shard_id = $4
+            AND verified = TRUE
+          ORDER BY tree_size DESC
+          LIMIT 1",
+    )
+    .bind(&signer.x_dec)
+    .bind(&signer.y_dec)
+    .bind(&cp.checkpoint_scope)
+    .bind(&cp.shard_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|e| format!("latest-checkpoint lookup: {e}"))?;
+    let chain_broken = match (&latest_verified, cp.append_transition.as_ref()) {
+        (Some((latest_size, latest_root_dec)), Some(transition))
+            if cp.tree_size == latest_size + 1 =>
+        {
+            // Compare the witness's previous_root (hex) to the root we accepted
+            // at the previous height, via the canonical Fr hex encoding.
+            let expected_prev_hex = crate::zk::proof::parse_fr(latest_root_dec)
+                .map(crate::zk::chunk::fr_to_hex)
+                .map_err(|e| format!("stored ledger_root is not canonical Fr: {e}"))?;
+            expected_prev_hex != transition.previous_root_hex
+        }
+        _ => false,
+    };
+
     // 3. Equivocation detection (only on verified checkpoints). Runs BEFORE
     //    the store INSERT so it sees prior rows, not itself; broadened to
     //    flag conflicts at the same timestamp OR the same tree_size (audit
-    //    A1-03(b)).
+    //    A1-03(b)). A broken append chain (3a) is folded in as equivocation.
     // `&mut *tx` reborrows the transaction as the `&mut PgConnection` these
     // helpers take, leaving `tx` usable for the later `commit()`.
     let equivocated = equivocation::check_and_flag(&mut tx, &signer.x_dec, &signer.y_dec, cp)
         .await
-        .map_err(|e| format!("equivocation check: {e}"))?;
+        .map_err(|e| format!("equivocation check: {e}"))?
+        || chain_broken;
 
     // 4. Auto-block — only when BOTH the sig was valid AND equivocation
     //    was detected AND the operator opted in. In-tx so it's atomic with
