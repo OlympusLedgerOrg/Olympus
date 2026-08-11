@@ -148,7 +148,7 @@ pub(super) async fn admin_reload_keys(
         "reloaded": true,
         "key_count": count,
         "note": "DB-backed auth has no in-memory key store to reload; this endpoint \
-                 verifies admin auth and reports the live key count. It does not \
-                 re-read OLYMPUS_ADMIN_KEY or any signing key (see docs/key-rotation.md).",
+                 verifies admin auth and reports the live key count. It reloads no \
+                 cache and no signing key (see docs/key-rotation.md).",
     })))
 }

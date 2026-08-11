@@ -82,6 +82,19 @@ Malformed entries are dropped with a warning, not a startup failure — check th
 
 ### 3. Update the persisted authority row
 
+The **intended** procedure is append-only supersession, matching how user signing keys already
+rotate (`POST /key/signing` then `DELETE /key/signing/{key_id}?replaced_by_key_id=…`): insert
+the replacement authority row, stamp `revoked_at` + `replaced_by_key_id` on the old row, and
+never modify the historical record. **That flow is not yet possible for the authority key**:
+the unique index on `account_signing_keys.public_key` (the authority row uses the empty
+string) admits only one such row, and bootstrap reads a single non-revoked authority row. The
+registry work on the roadmap removes both constraints; until it lands, the update-in-place
+below is the documented v0.10 stopgap — record the old key's coordinates and rotation time in
+your own rotation log first, because the database will not retain them. (The insert-only
+ledger invariant of ADR-0031 governs ledger commits — `smt_*`, `ingest_records` — and is not
+touched by this procedure; the deficiency here is the lost audit record, not a ledger
+mutation.)
+
 Bootstrap behaviour (`src-tauri/src/bootstrap.rs::ensure_bjj_authority`) makes this step
 mandatory, not optional:
 
@@ -111,10 +124,8 @@ Proceed only if exactly one `key_id` is returned; on zero rows, stop and inspect
 (more than one is impossible under the unique index, but zero happens when the row was
 already revoked or the predicate is wrong).
 
-This update-in-place loses the old row as an audit record — a known deficiency of the v0.10
-scheme (the schema has `revoked_at` / `replaced_by_key_id`, but the singular authority row and
-the unique index on `public_key` prevent a supersession chain today). Keep your own rotation log
-until the registry work on the roadmap lands.
+As stated above, this update-in-place is the stopgap, not the design — it loses the old row as
+an audit record, which is exactly what the planned supersession registry fixes.
 
 On **dev installs**, also update or clear the OS keychain entry (service `olympus-desktop`,
 account `bjj_authority_key`): a stale keychain entry deriving to the old pubkey will hard-fail
