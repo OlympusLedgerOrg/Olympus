@@ -61,6 +61,7 @@ async fn insert_snapshot(
         0,
         &content_hash,
         &original_root_hex,
+        1_780_000_000,
     )
     .expect("build canonical snapshot");
     let path = serde_json::json!({
@@ -72,6 +73,9 @@ async fn insert_snapshot(
         "r8x": snapshot.signature_r8x.clone(),
         "r8y": snapshot.signature_r8y.clone(),
         "s": snapshot.signature_s.clone(),
+        // The producer signs the V2 (timestamped) digest; the stored
+        // signed_at is what routes validate_canonical_snapshot to it.
+        "signed_at": snapshot.signed_at_unix,
     })
     .to_string();
     sqlx::query(

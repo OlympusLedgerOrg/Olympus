@@ -837,15 +837,36 @@ async fn validate_canonical_snapshot(
         r8y: component("r8y")?,
         s: component("s")?,
     };
-    let message = crate::zk::snapshot::signing_digest(
-        &snap.snapshot_root,
-        &snap.original_root,
-        snap.snapshot_index as u64,
-        snap.snapshot_size as u64,
-        &snap.content_hash,
-        &snap.original_root,
-    )
-    .map_err(|e| format!("recompute snapshot signing digest: {e}"))?;
+    // V1/V2 dispatch mirrors `olympus_crypto::ledger_snapshot::verify_snapshot`:
+    // a stored `signed_at` selects the V2 (timestamped) signing digest; its
+    // absence selects the legacy V1 digest. A present-but-non-integer value is
+    // corruption and must fail, not silently fall back to V1.
+    let message = match sig_json.get("signed_at") {
+        None => crate::zk::snapshot::signing_digest(
+            &snap.snapshot_root,
+            &snap.original_root,
+            snap.snapshot_index as u64,
+            snap.snapshot_size as u64,
+            &snap.content_hash,
+            &snap.original_root,
+        )
+        .map_err(|e| format!("recompute snapshot signing digest: {e}"))?,
+        Some(value) => {
+            let signed_at = value
+                .as_i64()
+                .ok_or_else(|| "snapshot_sig.signed_at is not an integer".to_owned())?;
+            crate::zk::snapshot::signing_digest_v2(
+                &snap.snapshot_root,
+                &snap.original_root,
+                snap.snapshot_index as u64,
+                snap.snapshot_size as u64,
+                &snap.content_hash,
+                &snap.original_root,
+                signed_at,
+            )
+            .map_err(|e| format!("recompute snapshot signing digest (v2): {e}"))?
+        }
+    };
     if !crate::zk::witness::baby_jubjub::verify_signature(authority, &signature, message) {
         return Err(
             "ingest snapshot signature does not verify under the checkpoint authority".to_owned(),

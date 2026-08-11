@@ -101,14 +101,27 @@ suspected compromise to bound the old key _earlier_ than its rotation time:
 consider the old key's signatures trustworthy. Malformed entries are dropped with a warning,
 not a startup failure — check the logs for `trusted_issuers:` warnings after restart.
 
-> **Ceremony-manifest exception:** if any ceremony manifest was coordinator-signed by the old
-> authority key (the dev fallback when `OLYMPUS_CEREMONY_COORDINATOR_KEY` is unset), the old
-> key must stay valid at the **current wall-clock time** — manifest verification checks
-> issuer validity at now, not at issuance (see the coordinator trap below) — so add an env
-> override for it **without** `valid_until`. Production deployments are protected from this
-> coupling by the startup gate that refuses a coordinator key equal to the runtime authority
-> key (`src-tauri/src/startup.rs`, audit A-3), so this exception normally applies to dev/test
-> databases only.
+Retired-key windows are effective for **record snapshots** because the snapshot signature
+authenticates its own signing time: every snapshot signed since the V2 digest landed folds a
+`signed_at` timestamp into the BJJ-signed message, and `POST /ingest/proofs/verify` accepts a
+`checkpoint_authority` issuer only if its window `covers(signed_at)` — so an old snapshot
+keeps verifying under the retired key exactly as long as the window you configured says it
+should, and editing the stored timestamp breaks the signature rather than the window check.
+Historical snapshots without a `signed_at` (pre-V2 rows) carry no signature-covered signing
+time, so no window is evaluated for them — they verify under any `checkpoint_authority` key
+regardless of windows, which is the pre-rotation behavior they were written under.
+
+> **Ceremony-manifest exception (legacy manifests only):** if any **schema-version ≤ 2**
+> ceremony manifest was coordinator-signed by the old authority key (the dev fallback when
+> `OLYMPUS_CEREMONY_COORDINATOR_KEY` is unset), the old key must stay valid at the **current
+> wall-clock time** — legacy manifest verification checks issuer validity at now, because
+> their `created_unix` is not signature-covered (see the coordinator trap below) — so add an
+> env override for it **without** `valid_until`. Version-3 manifests (what `generate_manifest`
+> emits today) sign `created_unix`, are window-checked at that authenticated creation time,
+> and need no such exception — regenerating the manifests is the clean way out. Production
+> deployments are protected from this coupling by the startup gate that refuses a coordinator
+> key equal to the runtime authority key (`src-tauri/src/startup.rs`, audit A-3), so this
+> exception normally applies to dev/test databases only.
 
 On **dev installs**, also update or clear the OS keychain entry (service `olympus-desktop`,
 account `bjj_authority_key`): a stale keychain entry deriving to the old pubkey will hard-fail
@@ -179,26 +192,39 @@ reproduce byte-identically across restarts and re-ingests. Changing it makes pre
 committed object roots unreproducible. It has no compromise-rotation story in v0.10 — if it is
 explicitly set, protect it like the BJJ key it defaults to being derived from.
 
-## The ceremony-coordinator trap
+## The ceremony-coordinator trap (resolved for v3 manifests)
 
-`CeremonyManifest::verify_coordinator_signature` (`src-tauri/src/zk/manifest.rs`) checks the
-coordinator's trusted-issuer validity window against the **current wall-clock time**, not the
-manifest's `created_unix`. This is deliberate: `created_unix` is not covered by the coordinator
-signature, so trusting it would let an attacker slide a manifest into a retired issuer's window.
+Manifest **schema version 3** (the current `generate_manifest` output) folds `created_unix`
+into the coordinator-signed message, and
+`CeremonyManifest::verify_coordinator_signature` (`src-tauri/src/zk/manifest.rs`) window-checks
+the coordinator's trusted-issuer entry at that **authenticated creation time**. A coordinator
+key can therefore be retired the same way the authority key is: give its issuer entry a
+`valid_until` after the last manifest it signed, and those manifests keep verifying while
+anything signed later is refused. Editing `created_unix` to slide a manifest into a different
+window breaks the signature; a manifest forward-dated more than a day past the verifier's
+clock is rejected outright (`CreatedInFuture`), so a not-yet-open window cannot be reached by
+forward-dating.
 
-The operational consequence: **you cannot retire a ceremony-coordinator key by giving its
-trusted-issuer entry a bounded `valid_until`** while manifests signed by it are still deployed.
-The moment `valid_until` passes, every such manifest fails verification — which in production is
-a startup refusal (`exit(2)`). Until the manifest format signs its timestamp (roadmap; noted in
-ADR-0041), the only safe options are:
+**Legacy manifests (schema version ≤ 2) are still trapped.** Their `created_unix` is not
+covered by the coordinator signature, so trusting it would let an attacker slide a manifest
+into a retired issuer's window; verification therefore checks the window at the **current
+wall-clock time**. The consequence: you cannot retire a coordinator key by bounding its
+trusted-issuer entry while v1/v2 manifests signed by it are still deployed — the moment
+`valid_until` passes, every such manifest fails verification, which in production is a startup
+refusal (`exit(2)`). For deployed legacy manifests the options are:
 
-1. Keep the retired coordinator key's issuer entry **unbounded** (no `valid_until`), or
-2. Re-run manifest generation with the new coordinator key for **every** circuit
-   (`generate_manifest`, see [proofs/CEREMONY_INTEGRITY.md](../proofs/CEREMONY_INTEGRITY.md))
-   and ship the re-signed manifests before bounding the old entry.
+1. **Regenerate the manifests** with `generate_manifest` (they come out as v3, coordinator
+   window anchored to the new signed creation time — see
+   [proofs/CEREMONY_INTEGRITY.md](../proofs/CEREMONY_INTEGRITY.md)), then bound the old
+   entry, or
+2. Keep the retired coordinator key's issuer entry **unbounded** (no `valid_until`) for as
+   long as the legacy manifests stay deployed.
 
-On coordinator-key **compromise**, option 2 is the only one available: re-sign all manifests,
-deploy, then bound (or remove) the compromised entry in the same maintenance window.
+On coordinator-key **compromise**, option 1 is the only one available — and note that
+compromise-response is stricter than retirement even for v3 manifests: a compromised key
+inside its historical window could still sign back-dated manifests, so bound the entry at the
+last moment you trust its signatures and re-sign everything it vouched for, exactly as with
+the authority key.
 
 ### Role-scoped coordinator entries (ADR-0041 subset)
 
@@ -227,8 +253,10 @@ ceremony-manifest exception above. That entry names the retired _authority_ key,
 win over the key's registry row, and a coordinator-only grant would strip the credential trust
 its historical SBTs still need — leave that entry's `roles` absent.
 
-The role restriction does not change the wall-clock trap itself: a role-scoped coordinator
-entry still verifies at **now**, so bounding its `valid_until` still breaks deployed manifests.
+The role restriction composes with the window semantics above: a role-scoped coordinator
+entry anchoring v3 manifests is window-checked at each manifest's signed `created_unix` (so it
+can be bounded once its manifests are all v3), while one anchoring legacy v1/v2 manifests
+still verifies at **now** and must stay unbounded until those manifests are regenerated.
 
 ## External PostgreSQL credentials
 

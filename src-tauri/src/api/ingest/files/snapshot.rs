@@ -182,6 +182,14 @@ pub(super) async fn build_snapshot_in_tx(
     }
     let new_leaf_index = existing_leaves.len() as u64;
 
+    // The signing time is folded into the V2 signing digest, so the stored
+    // timestamp is authenticated by the snapshot signature itself. Relying
+    // parties use it to evaluate the authority key's trust window at signing
+    // time (retired-key verification — docs/key-rotation.md).
+    let signed_at_unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
     let snap: LedgerSnapshot = snapshot_new_record(
         bjj_priv,
         &existing_leaves,
@@ -189,6 +197,7 @@ pub(super) async fn build_snapshot_in_tx(
         new_leaf_index,
         content_hash,
         &original_root_hex,
+        signed_at_unix,
     )
     .map_err(|e| {
         err(
@@ -205,12 +214,15 @@ pub(super) async fn build_snapshot_in_tx(
     // BJJ signature is three field-element hex strings; serialise as a
     // self-describing JSON object so the existing TEXT `snapshot_sig`
     // column carries the triple without a schema change. Verifier parses
-    // the same shape.
+    // the same shape. `signed_at` selects the V2 signing digest on the
+    // verifier side — historical rows without it verify via the legacy V1
+    // digest, so no migration of existing rows is needed.
     let snapshot_sig_json = serde_json::json!({
         "alg": SNAPSHOT_SIG_ALG,
         "r8x": snap.signature_r8x,
         "r8y": snap.signature_r8y,
         "s":   snap.signature_s,
+        "signed_at": snap.signed_at_unix,
     })
     .to_string();
 

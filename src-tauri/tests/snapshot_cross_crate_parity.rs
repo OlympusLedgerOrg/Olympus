@@ -34,6 +34,7 @@ fn to_verifier_shape(snap: &olympus_tauri_lib::zk::snapshot::LedgerSnapshot) -> 
         signature_r8x: snap.signature_r8x.clone(),
         signature_r8y: snap.signature_r8y.clone(),
         signature_s: snap.signature_s.clone(),
+        signed_at_unix: Some(snap.signed_at_unix),
     }
 }
 
@@ -54,6 +55,7 @@ fn desktop_signer_verifies_in_olympus_crypto() {
     let content_hash = "5a".repeat(32);
     let original_root_hex = fr_to_hex(tree.original_root);
 
+    let signed_at_unix: i64 = 1_780_000_000;
     let snap = snapshot_new_record(
         &bjj_priv,
         &prior,
@@ -61,6 +63,7 @@ fn desktop_signer_verifies_in_olympus_crypto() {
         prior.len() as u64,
         &content_hash,
         &original_root_hex,
+        signed_at_unix,
     )
     .expect("sign snapshot");
 
@@ -108,6 +111,32 @@ fn desktop_signer_verifies_in_olympus_crypto() {
         pubkey.x,
         pubkey.y,
     ));
+
+    // Negative: the signer folds the signing time into the V2 digest, so a
+    // shifted or stripped `signed_at_unix` must reject on the verifier side —
+    // this pins the *cross-crate* V2 domain/fold parity, not just the local
+    // verifier's (which crates/olympus-crypto's own tests already cover).
+    let mut shifted = v_snap.clone();
+    shifted.signed_at_unix = Some(signed_at_unix + 1);
+    assert!(!verify_snapshot(
+        &shifted,
+        &content_hash,
+        &original_root_hex,
+        pubkey.x,
+        pubkey.y,
+    ));
+    let mut stripped = v_snap.clone();
+    stripped.signed_at_unix = None;
+    assert!(
+        !verify_snapshot(
+            &stripped,
+            &content_hash,
+            &original_root_hex,
+            pubkey.x,
+            pubkey.y,
+        ),
+        "a V2 signature must not verify via the legacy V1 digest"
+    );
 
     // Sanity: the path the desktop produces is exactly SNAPSHOT_DEPTH long —
     // catches a future refactor that accidentally truncates or pads it.

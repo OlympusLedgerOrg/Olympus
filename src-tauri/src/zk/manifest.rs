@@ -14,6 +14,10 @@
 //!      coordinator's signature covers the exact bytes the runtime loads —
 //!      not merely the contribution-chain hash (the V1 gap that let a
 //!      manifest-editing attacker swap the verification key undetected).
+//!      Version-3 manifests additionally bind `created_unix` into the
+//!      signed message, so issuer validity windows are evaluated at the
+//!      authenticated creation time — making coordinator keys retirable
+//!      (`docs/key-rotation.md`).
 //!   4. Production: under `OLYMPUS_ENV=production`, any failure above
 //!      hard-exits with code 2.
 //!
@@ -30,17 +34,27 @@ use thiserror::Error;
 use crate::api::trusted_issuers::TrustedIssuer;
 use crate::zk::witness::baby_jubjub::{self, BabyJubJubPubKey, BabyJubJubSignature};
 
-/// Schema version that this Rust deserializer accepts. Bump only with a
+/// Schema versions this Rust deserializer accepts. Bump only with a
 /// migration plan that handles older manifests on consumer machines.
 ///
-/// Note: the JSON *schema* is unchanged across the V1→V2 coordinator-signing
-/// recipe change (no fields added/removed), so this stays `1`. The recipe
-/// change is carried by the domain tag [`MANIFEST_SIG_DOMAIN_V2`] inside the
-/// signed message — manifests ship embedded (`include_str!`) alongside the
-/// code that verifies them. Version 1 remains parseable as explicit legacy
-/// unsigned-contribution history; version 2 authenticates every contribution.
+/// The JSON *schema* is unchanged across all three versions (no fields
+/// added/removed); the version number selects the verification recipe:
+///
+/// - **1** — legacy: contributions are unsigned history; the coordinator
+///   signature uses the V2 recipe ([`MANIFEST_SIG_DOMAIN_V2`], artifacts +
+///   circuit + ceremony id + chain, `created_unix` NOT covered).
+/// - **2** — every contribution carries an authenticated signature; the
+///   coordinator recipe is unchanged from version 1.
+/// - **3** (current) — the coordinator signature additionally binds
+///   `created_unix` ([`MANIFEST_SIG_DOMAIN_V3`]), so validity windows are
+///   evaluated at the *authenticated* creation time instead of wall-clock
+///   now — which is what makes a ceremony-coordinator key retirable (see
+///   `docs/key-rotation.md`). Contributor signatures are required as in
+///   version 2.
 pub const LEGACY_MANIFEST_VERSION: u32 = 1;
-pub const MANIFEST_VERSION: u32 = 2;
+pub const SIGNED_CONTRIBUTIONS_MANIFEST_VERSION: u32 = 2;
+pub const TIMESTAMPED_MANIFEST_VERSION: u32 = 3;
+pub const MANIFEST_VERSION: u32 = TIMESTAMPED_MANIFEST_VERSION;
 
 /// Release-preflight policy containing the independently approved ceremony
 /// contributor keys and optional authorization windows.
@@ -54,6 +68,27 @@ pub const TRUSTED_CONTRIBUTORS_ENV: &str = "OLYMPUS_CEREMONY_TRUSTED_CONTRIBUTOR
 /// signed message; see [`CeremonyManifest::coordinator_signing_digest`].
 const MANIFEST_SIG_DOMAIN_V2: &[u8] = b"OLY:CEREMONY:MANIFEST:V2";
 
+/// Domain tag for the version-3 coordinator-signature message.
+///
+/// V3 extends V2 by folding `created_unix` into the signed message. Under
+/// V2 that field is attacker-editable (any one validly-signed manifest could
+/// have its `created_unix` rewritten to slide inside a retired issuer's
+/// window), which forced [`CeremonyManifest::verify_coordinator_signature`]
+/// to window-check against wall-clock *now* — meaning a coordinator key
+/// could never be retired without invalidating every manifest it ever
+/// signed. With `created_unix` signature-covered, the window check moves to
+/// the authenticated creation time and retirement becomes possible.
+const MANIFEST_SIG_DOMAIN_V3: &[u8] = b"OLY:CEREMONY:MANIFEST:V3";
+
+/// Maximum tolerated forward clock skew for a V3 manifest's `created_unix`,
+/// in seconds. A manifest "created in the future" beyond this is rejected:
+/// without the bound, a (malicious or misconfigured) coordinator could
+/// forward-date a manifest into a key window that has not opened yet, and
+/// the sanity property "the manifest existed no later than its creation
+/// time" would be unenforceable. One day absorbs any realistic cross-machine
+/// clock drift between the ceremony host and consumers.
+const MAX_CREATED_UNIX_FUTURE_SKEW_SECS: i64 = 86_400;
+
 /// Domain tag for each contributor's signature. Unlike the coordinator's
 /// manifest signature, this statement binds the contributor identity and the
 /// exact chain position so a coordinator cannot manufacture unsigned rows to
@@ -66,9 +101,16 @@ pub enum ManifestError {
     Parse(#[from] serde_json::Error),
 
     #[error(
-        "manifest schema version {got} not supported (this build accepts legacy version 1 and authenticated version {MANIFEST_VERSION})"
+        "manifest schema version {got} not supported (this build accepts versions 1 through {MANIFEST_VERSION})"
     )]
     UnsupportedVersion { got: u32 },
+
+    #[error(
+        "manifest created_unix {created_unix} is more than {MAX_CREATED_UNIX_FUTURE_SKEW_SECS}s \
+         in the future (now: {now_unix}) — a forward-dated manifest could claim a trust window \
+         that has not opened yet; refusing"
+    )]
+    CreatedInFuture { created_unix: i64, now_unix: i64 },
 
     #[error(
         "manifest circuit name mismatch: manifest claims {claimed}, expected {expected} \
@@ -262,13 +304,13 @@ impl CeremonyManifest {
     /// schema versions we don't understand.
     pub fn parse(json: &str) -> Result<Self, ManifestError> {
         let m: Self = serde_json::from_str(json)?;
-        if m.version != LEGACY_MANIFEST_VERSION && m.version != MANIFEST_VERSION {
+        if !(LEGACY_MANIFEST_VERSION..=MANIFEST_VERSION).contains(&m.version) {
             return Err(ManifestError::UnsupportedVersion { got: m.version });
         }
         if m.contributions.is_empty() {
             return Err(ManifestError::NoContributions);
         }
-        if m.version == MANIFEST_VERSION {
+        if m.version >= SIGNED_CONTRIBUTIONS_MANIFEST_VERSION {
             for (index, contribution) in m.contributions.iter().enumerate() {
                 if contribution.signature.is_none() {
                     return Err(ManifestError::MissingContributorSignature { index });
@@ -280,6 +322,13 @@ impl CeremonyManifest {
 
     pub fn is_legacy_v1(&self) -> bool {
         self.version == LEGACY_MANIFEST_VERSION
+    }
+
+    /// True iff this manifest's coordinator signature covers `created_unix`
+    /// (version ≥ 3), i.e. validity windows may be evaluated at the
+    /// authenticated creation time rather than wall-clock now.
+    pub fn binds_created_unix(&self) -> bool {
+        self.version >= TIMESTAMPED_MANIFEST_VERSION
     }
 
     /// True iff `json` is the `{"placeholder": true, ...}` stub that
@@ -430,6 +479,32 @@ impl CeremonyManifest {
         use std::collections::HashSet;
 
         self.verify_contribution_chain()?;
+        // Contributor windows use the same version-dependent time base as the
+        // coordinator window in `verify_coordinator_signature`: for v3+
+        // manifests `created_unix` is covered by the coordinator signature and
+        // is a sound evaluation point; for v1/v2 it is attacker-editable
+        // (sliding it could re-admit a retired contributor), so wall-clock now
+        // is used instead. The per-contribution `timestamp_unix` is signer
+        // supplied and is never used for the trust decision.
+        let now_unix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let window_unix = if self.binds_created_unix() {
+            // Same forward-dating bound as the coordinator path: this check
+            // must hold on its own (release preflight may run it without the
+            // trusted-issuer coordinator gate), so a future-dated manifest
+            // cannot reach a contributor window that hasn't opened yet.
+            if self.created_unix > now_unix + MAX_CREATED_UNIX_FUTURE_SKEW_SECS {
+                return Err(ManifestError::CreatedInFuture {
+                    created_unix: self.created_unix,
+                    now_unix,
+                });
+            }
+            self.created_unix
+        } else {
+            now_unix
+        };
         let mut distinct = HashSet::new();
         for (position, contribution) in self.contributions.iter().enumerate() {
             let digest = self.contribution_signing_digest(position)?;
@@ -444,9 +519,7 @@ impl CeremonyManifest {
             let trusted = trusted_contributors.iter().find(|candidate| {
                 candidate.x_dec == contribution.bjj_pubkey.x
                     && candidate.y_dec == contribution.bjj_pubkey.y
-                    // `created_unix` is covered by the coordinator's manifest
-                    // signature; the contribution timestamp is signer supplied.
-                    && candidate.covers(self.created_unix)
+                    && candidate.covers(window_unix)
             });
             if trusted.is_none() {
                 return Err(ManifestError::UntrustedContributor { index: position });
@@ -498,25 +571,42 @@ impl CeremonyManifest {
     /// bytes the runtime loads. The contribution chain is still included
     /// (it transitively binds every `contribution_hash`).
     ///
-    /// Layout (`blake3`):
+    /// Layout (`blake3`), for manifest versions 1–2:
     /// ```text
     /// "OLY:CEREMONY:MANIFEST:V2"
     ///   || lp(circuit) || lp(ceremony_id)
     ///   || vkey.blake3(32) || ark_zkey.blake3(32) || r1cs.blake3(32) || wasm.blake3(32)
     ///   || final_contribution_chain_hash(32)
     /// ```
+    /// and for version 3 (current):
+    /// ```text
+    /// "OLY:CEREMONY:MANIFEST:V3"
+    ///   || lp(circuit) || lp(ceremony_id) || created_unix(i64 LE)
+    ///   || vkey.blake3(32) || ark_zkey.blake3(32) || r1cs.blake3(32) || wasm.blake3(32)
+    ///   || final_contribution_chain_hash(32)
+    /// ```
     /// where `lp(x) = u64_le(x.len()) || x` (unambiguous framing for the
     /// two variable-length strings) and each `*.blake3(32)` is the strict
-    /// 32-byte decode of the recorded lowercase-hex digest.
+    /// 32-byte decode of the recorded lowercase-hex digest. The distinct
+    /// domain tags make cross-version relabelling fail closed: rewriting a
+    /// v3 manifest's `version` to 2 (or vice versa) selects the other
+    /// recipe, whose digest the signature was never taken over.
     pub fn coordinator_signing_digest(&self) -> Result<[u8; 32], ManifestError> {
         // Recompute (and validate) the contribution chain first — this also
         // asserts every recorded intermediate `running_chain_hash`.
         let final_chain = self.verify_contribution_chain()?;
 
         let mut h = blake3::Hasher::new();
-        h.update(MANIFEST_SIG_DOMAIN_V2);
+        if self.binds_created_unix() {
+            h.update(MANIFEST_SIG_DOMAIN_V3);
+        } else {
+            h.update(MANIFEST_SIG_DOMAIN_V2);
+        }
         write_length_prefixed(&mut h, self.circuit.as_bytes());
         write_length_prefixed(&mut h, self.ceremony_id.as_bytes());
+        if self.binds_created_unix() {
+            h.update(&self.created_unix.to_le_bytes());
+        }
         for (kind, art) in [
             (ArtifactKind::Vkey, &self.artifacts.vkey),
             (ArtifactKind::ArkZkey, &self.artifacts.ark_zkey),
@@ -547,35 +637,57 @@ impl CeremonyManifest {
         trusted_issuers: &'a [TrustedIssuer],
     ) -> Result<&'a TrustedIssuer, ManifestError> {
         // 1. Coordinator pubkey must be in the trusted set with the
-        //    CeremonyCoordinator role, AND authorised
-        //    *now*. We window-check against the current wall-clock time, NOT
-        //    `self.created_unix`: that field is not covered by the coordinator
-        //    signature (the V2 digest binds the artifacts + circuit +
-        //    ceremony id + contribution chain, but not `created_unix`), so an
-        //    attacker holding any one validly-signed manifest could edit
-        //    `created_unix` to slide it inside a retired-but-still-listed
-        //    issuer's window.
-        //    Checking `now` removes the field from the trust decision entirely.
-        //    (For the common single-issuer / unbounded-window case this is a
-        //    no-op — `covers` returns true regardless of the timestamp.)
+        //    CeremonyCoordinator role, AND authorised at the window-check
+        //    time, which depends on the manifest version:
+        //
+        //    - v3+: `created_unix` is covered by the coordinator signature
+        //      (the V3 digest folds it in), so the window is evaluated at the
+        //      authenticated creation time. A retired coordinator key — one
+        //      whose `valid_until` has passed — keeps vouching for the
+        //      manifests it signed while valid, and editing `created_unix`
+        //      to slide into any window breaks the signature. A manifest
+        //      forward-dated beyond clock-skew tolerance is rejected
+        //      outright: it claims to have been created at a time that
+        //      hasn't happened, which could reach into a not-yet-open
+        //      window.
+        //
+        //    - v1/v2: `created_unix` is NOT signature-covered, so an
+        //      attacker holding any one validly-signed manifest could edit
+        //      it to slide inside a retired-but-still-listed issuer's
+        //      window. Checking wall-clock *now* removes the field from the
+        //      trust decision entirely (the pre-v3 behavior, unchanged).
+        //      Consequence: legacy manifests cannot outlive their
+        //      coordinator key — regenerate under v3 to retire a key.
         let now_unix = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
+        let window_unix = if self.binds_created_unix() {
+            if self.created_unix > now_unix + MAX_CREATED_UNIX_FUTURE_SKEW_SECS {
+                return Err(ManifestError::CreatedInFuture {
+                    created_unix: self.created_unix,
+                    now_unix,
+                });
+            }
+            self.created_unix
+        } else {
+            now_unix
+        };
         let issuer = trusted_issuers
             .iter()
             .find(|t| {
                 t.has_role(TrustRole::CeremonyCoordinator)
                     && t.x_dec == self.coordinator.bjj_pubkey.x
                     && t.y_dec == self.coordinator.bjj_pubkey.y
-                    && t.covers(now_unix)
+                    && t.covers(window_unix)
             })
             .ok_or(ManifestError::UntrustedCoordinator)?;
 
-        // 2. Recompute the V2 signing digest — binds the artifact set
-        //    (vkey/zkey/r1cs/wasm), circuit, ceremony id, AND the full
-        //    contribution chain (which `coordinator_signing_digest` validates
-        //    internally, asserting every intermediate `running_chain_hash`).
+        // 2. Recompute the version-appropriate signing digest — binds the
+        //    artifact set (vkey/zkey/r1cs/wasm), circuit, ceremony id, the
+        //    full contribution chain (which `coordinator_signing_digest`
+        //    validates internally, asserting every intermediate
+        //    `running_chain_hash`), and — for v3+ — `created_unix`.
         let digest = self.coordinator_signing_digest()?;
 
         // 3. Reduce the digest into Fr (little-endian, same recipe as
@@ -881,6 +993,29 @@ mod tests {
         wasm: &'a [u8],
     }
 
+    /// Re-label `manifest` as `version` and re-sign the coordinator
+    /// signature over the version-appropriate digest. Contribution
+    /// signatures are version-independent, so they are left as built.
+    fn resign_as_version(manifest: &mut CeremonyManifest, version: u32, bjj_priv: &[u8; 32]) {
+        manifest.version = version;
+        let digest = manifest
+            .coordinator_signing_digest()
+            .expect("signing digest");
+        let sig = bjj_sign(bjj_priv, digest_to_fr(&digest)).expect("sign");
+        manifest.coordinator.signature = BjjSignatureJson {
+            r8x: fr_to_decimal(&sig.r8x),
+            r8y: fr_to_decimal(&sig.r8y),
+            s: fr_to_decimal(&sig.s),
+        };
+    }
+
+    fn now_unix() -> i64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0)
+    }
+
     fn trusted_issuer_for(bjj_priv: &[u8; 32]) -> TrustedIssuer {
         let pk = BabyJubJubPubKey::from_private(bjj_priv).expect("pubkey");
         TrustedIssuer {
@@ -1094,6 +1229,214 @@ mod tests {
         right_role.roles = vec![TrustRole::CeremonyCoordinator];
         m.verify_coordinator_signature(std::slice::from_ref(&right_role))
             .expect("coordinator-role issuer must pass");
+    }
+
+    #[test]
+    fn v3_manifest_binds_created_unix_and_rejects_tamper() {
+        let priv_key = [0x42u8; 32];
+        let mut m = build_test_manifest(
+            "document_existence",
+            &priv_key,
+            ArtifactBytes {
+                vkey: b"v",
+                ark_zkey: b"z",
+                r1cs: b"r",
+                wasm: b"w",
+            },
+        );
+        resign_as_version(&mut m, TIMESTAMPED_MANIFEST_VERSION, &priv_key);
+        let issuers = vec![trusted_issuer_for(&priv_key)];
+        m.verify_coordinator_signature(&issuers)
+            .expect("freshly signed v3 manifest must verify");
+
+        // The v3 signature covers created_unix: shifting it by one second
+        // must invalidate the signature (the exact edit that was undetectable
+        // under v2 and forced the covers(now) workaround).
+        let mut shifted = m.clone();
+        shifted.created_unix += 1;
+        assert!(matches!(
+            shifted.verify_coordinator_signature(&issuers),
+            Err(ManifestError::BadCoordinatorSignature)
+        ));
+
+        // Downgrade: relabelling the v3 manifest as version 2 selects the V2
+        // recipe, whose digest this signature was never taken over.
+        let mut downgraded = m.clone();
+        downgraded.version = SIGNED_CONTRIBUTIONS_MANIFEST_VERSION;
+        assert!(matches!(
+            downgraded.verify_coordinator_signature(&issuers),
+            Err(ManifestError::BadCoordinatorSignature)
+        ));
+
+        // Upgrade of a legacy manifest: relabelling a v1-signed manifest as
+        // version 3 selects the V3 recipe and must equally fail.
+        let mut upgraded = build_test_manifest(
+            "document_existence",
+            &priv_key,
+            ArtifactBytes {
+                vkey: b"v",
+                ark_zkey: b"z",
+                r1cs: b"r",
+                wasm: b"w",
+            },
+        );
+        upgraded.version = TIMESTAMPED_MANIFEST_VERSION;
+        assert!(matches!(
+            upgraded.verify_coordinator_signature(&issuers),
+            Err(ManifestError::BadCoordinatorSignature)
+        ));
+    }
+
+    #[test]
+    fn v3_manifest_verifies_under_retired_coordinator_key() {
+        // The point of v3: a coordinator key whose window has CLOSED keeps
+        // vouching for manifests it signed while valid. build_test_manifest
+        // pins created_unix = 1_748_000_000; retire the key shortly after.
+        let priv_key = [0x42u8; 32];
+        let mut m = build_test_manifest(
+            "document_existence",
+            &priv_key,
+            ArtifactBytes {
+                vkey: b"v",
+                ark_zkey: b"z",
+                r1cs: b"r",
+                wasm: b"w",
+            },
+        );
+        resign_as_version(&mut m, TIMESTAMPED_MANIFEST_VERSION, &priv_key);
+
+        let mut retired = trusted_issuer_for(&priv_key);
+        retired.valid_from = Some(m.created_unix - 1_000);
+        retired.valid_until = Some(m.created_unix + 1_000); // long past by now
+        assert!(retired.valid_until.expect("set") < now_unix());
+        m.verify_coordinator_signature(std::slice::from_ref(&retired))
+            .expect("retired key must still vouch for a v3 manifest created inside its window");
+
+        // Window NOT covering created_unix → rejected as untrusted, pinning
+        // that the check really evaluates at the authenticated creation time.
+        let mut never_valid_then = trusted_issuer_for(&priv_key);
+        never_valid_then.valid_from = Some(m.created_unix + 10_000);
+        assert!(matches!(
+            m.verify_coordinator_signature(std::slice::from_ref(&never_valid_then)),
+            Err(ManifestError::UntrustedCoordinator)
+        ));
+
+        // Legacy contrast: the same retired window on a v1 manifest fails,
+        // because pre-v3 manifests window-check at wall-clock now.
+        let legacy = build_test_manifest(
+            "document_existence",
+            &priv_key,
+            ArtifactBytes {
+                vkey: b"v",
+                ark_zkey: b"z",
+                r1cs: b"r",
+                wasm: b"w",
+            },
+        );
+        assert!(matches!(
+            legacy.verify_coordinator_signature(std::slice::from_ref(&retired)),
+            Err(ManifestError::UntrustedCoordinator)
+        ));
+    }
+
+    #[test]
+    fn v3_manifest_created_in_future_is_rejected() {
+        let priv_key = [0x42u8; 32];
+        let mut m = build_test_manifest(
+            "document_existence",
+            &priv_key,
+            ArtifactBytes {
+                vkey: b"v",
+                ark_zkey: b"z",
+                r1cs: b"r",
+                wasm: b"w",
+            },
+        );
+        m.created_unix = now_unix() + 200_000; // > 1-day skew allowance
+        resign_as_version(&mut m, TIMESTAMPED_MANIFEST_VERSION, &priv_key);
+        let issuers = vec![trusted_issuer_for(&priv_key)];
+        assert!(
+            matches!(
+                m.verify_coordinator_signature(&issuers),
+                Err(ManifestError::CreatedInFuture { .. })
+            ),
+            "a forward-dated v3 manifest must be rejected even though its signature is genuine"
+        );
+    }
+
+    #[test]
+    fn contributor_windows_follow_the_version_time_base() {
+        // v3: contributor windows are evaluated at the signature-covered
+        // created_unix; v1/v2: at wall-clock now (created_unix is editable).
+        let key = [0x77; 32];
+        let mut manifest = build_test_manifest(
+            "document_existence",
+            &key,
+            ArtifactBytes {
+                vkey: b"v",
+                ark_zkey: b"z",
+                r1cs: b"r",
+                wasm: b"w",
+            },
+        );
+        replace_with_signed_contributions(&mut manifest, &[key]);
+        resign_as_version(&mut manifest, TIMESTAMPED_MANIFEST_VERSION, &key);
+
+        // Contributor retired after the ceremony: window covers created_unix
+        // but ended long before now.
+        let mut retired = trusted_issuer_for(&key);
+        retired.valid_from = Some(manifest.created_unix - 1_000);
+        retired.valid_until = Some(manifest.created_unix + 1_000);
+        assert_eq!(
+            manifest
+                .verify_authenticated_contributors(std::slice::from_ref(&retired), 1)
+                .expect("v3: retired contributor covering created_unix must count"),
+            1
+        );
+
+        // The same retired contributor on a legacy (v1) manifest is refused:
+        // the unauthenticated created_unix cannot anchor the window there.
+        let mut legacy = build_test_manifest(
+            "document_existence",
+            &key,
+            ArtifactBytes {
+                vkey: b"v",
+                ark_zkey: b"z",
+                r1cs: b"r",
+                wasm: b"w",
+            },
+        );
+        replace_with_signed_contributions(&mut legacy, &[key]);
+        assert!(matches!(
+            legacy.verify_authenticated_contributors(std::slice::from_ref(&retired), 1),
+            Err(ManifestError::UntrustedContributor { index: 0 })
+        ));
+    }
+
+    #[test]
+    fn parse_requires_contributor_signatures_from_version_two_up() {
+        // A version-3 manifest with a missing contribution signature must be
+        // refused at parse time, exactly like version 2.
+        let json = r#"{
+            "version": 3,
+            "ceremony_id": "x",
+            "circuit": "document_existence",
+            "created_unix": 0,
+            "ptau": {"file":"f","power":20,"blake2b":"0"},
+            "artifacts": {
+                "vkey":{"name":"","size":0,"blake3":""},
+                "ark_zkey":{"name":"","size":0,"blake3":""},
+                "r1cs":{"name":"","size":0,"blake3":""},
+                "wasm":{"name":"","size":0,"blake3":""}
+            },
+            "contributions": [{"index":0,"contributor_id":"x","contribution_hash":"00","running_chain_hash":"00","timestamp_unix":0,"bjj_pubkey":{"x":"1","y":"1"}}],
+            "coordinator": {"id":"x","bjj_pubkey":{"x":"1","y":"1"},"signature":{"r8x":"1","r8y":"1","s":"1"}}
+        }"#;
+        let err = CeremonyManifest::parse(json).expect_err("must reject");
+        assert!(matches!(
+            err,
+            ManifestError::MissingContributorSignature { index: 0 }
+        ));
     }
 
     #[test]
