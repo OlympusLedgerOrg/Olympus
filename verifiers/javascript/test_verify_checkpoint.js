@@ -238,7 +238,12 @@ async function buildSyntheticBundle() {
       circuit: "document_existence",
       vkey_ref: "proofs/keys/verification_keys/document_existence_vkey.json",
       proof: { pi_a: [], pi_b: [], pi_c: [] },
-      public_signals: [],
+      // document_existence public signals are [root, leafIndex, treeSize]. verify.js
+      // now BINDS signals[0]==ledger_root and signals[2]==tree_size to the signed
+      // checkpoint before the Rust pairing hand-off, so the fixture must carry the
+      // matching root and size (the proof itself stays a placeholder — the pairing
+      // is the Rust verifier's job, not exercised here).
+      public_signals: [ledgerRoot, "0", checkpoint.tree_size],
     },
   };
 }
@@ -404,6 +409,34 @@ async function main() {
   fs.writeFileSync(tLowOrderPath, JSON.stringify(tLowOrder));
   runVerifier(tLowOrderPath, 1);
   console.log("PASS  low-order BJJ pubkey → reject");
+
+  // 13. Groth16 public_signals[0] (root) attesting a DIFFERENT tree than the
+  // signed checkpoint → the binding gate rejects (exit 1). Without it, a valid
+  // proof for an unrelated tree would sail through the Rust pairing hand-off.
+  const tSignalRoot = JSON.parse(JSON.stringify(bundle));
+  tSignalRoot.groth16.public_signals[0] = "12345";
+  const tSignalRootPath = path.join(tmp, "t-signal-root.json");
+  fs.writeFileSync(tSignalRootPath, JSON.stringify(tSignalRoot));
+  runVerifier(tSignalRootPath, 1);
+  console.log("PASS  Groth16 signal root != checkpoint ledger_root → reject");
+
+  // 14. Groth16 public_signals[2] (treeSize) disagreeing with the checkpoint
+  // tree_size → binding gate rejects (exit 1).
+  const tSignalSize = JSON.parse(JSON.stringify(bundle));
+  tSignalSize.groth16.public_signals[2] = "2";
+  const tSignalSizePath = path.join(tmp, "t-signal-size.json");
+  fs.writeFileSync(tSignalSizePath, JSON.stringify(tSignalSize));
+  runVerifier(tSignalSizePath, 1);
+  console.log("PASS  Groth16 signal treeSize != checkpoint tree_size → reject");
+
+  // 15. A structurally malformed public_signals array (wrong length, e.g. the
+  // old empty placeholder) is a parse error, not a verification failure (exit 2).
+  const tSignalShape = JSON.parse(JSON.stringify(bundle));
+  tSignalShape.groth16.public_signals = [];
+  const tSignalShapePath = path.join(tmp, "t-signal-shape.json");
+  fs.writeFileSync(tSignalShapePath, JSON.stringify(tSignalShape));
+  runVerifier(tSignalShapePath, 2);
+  console.log("PASS  malformed Groth16 public_signals length → reject");
 
   console.log("\nAll verify.js smoke tests passed.");
 }
