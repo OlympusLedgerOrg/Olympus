@@ -443,9 +443,15 @@ impl CeremonyManifest {
             let trusted = trusted_contributors.iter().find(|candidate| {
                 candidate.x_dec == contribution.bjj_pubkey.x
                     && candidate.y_dec == contribution.bjj_pubkey.y
-                    // `created_unix` is covered by the coordinator's manifest
-                    // signature; the contribution timestamp is signer supplied.
-                    && candidate.covers(self.created_unix)
+                    // Gate on the per-contribution timestamp the contributor
+                    // actually signs (`contribution_signing_digest` folds in
+                    // `timestamp_unix`), NOT `created_unix`. `created_unix` is
+                    // bound by no signature — the coordinator V2 digest omits it
+                    // (see `verify_coordinator_signature`, which deliberately
+                    // window-checks `now` for exactly this reason) — so gating on
+                    // it would let a forged `created_unix` slide a contribution
+                    // inside a retired key's trust window.
+                    && candidate.covers(contribution.timestamp_unix)
             });
             if trusted.is_none() {
                 return Err(ManifestError::UntrustedContributor { index: position });
