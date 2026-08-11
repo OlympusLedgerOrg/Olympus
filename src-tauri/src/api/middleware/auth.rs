@@ -197,6 +197,22 @@ pub(crate) async fn resolve_sbt_scopes(
 
         // (c) Recompute commit_id, parse signature, verify.
         let details = r.details.unwrap_or_else(|| serde_json::json!({}));
+
+        // (c′) Signed expiry: `details.expires_at` (unix seconds) lives inside
+        // the JCS-canonicalized details, so it is covered by the commit_id
+        // recomputed below — a database write cannot extend it without
+        // breaking the signature. Expired (or malformed — fail closed) grants
+        // nothing. Credentials without the key never expire (every pre-expiry
+        // credential has that shape).
+        if crate::api::credentials::details_expired(&details, chrono::Utc::now().timestamp())
+            == Some(true)
+        {
+            tracing::debug!(
+                "resolve_sbt_scopes: skipping expired credential ({})",
+                r.credential_type
+            );
+            continue;
+        }
         let recomputed = match crate::api::credentials::compute_commit_id(
             &holder_key,
             &r.credential_type,

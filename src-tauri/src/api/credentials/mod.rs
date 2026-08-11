@@ -130,6 +130,7 @@ mod verify;
 // trusted-issuers).
 pub(crate) use crypto::parse_fr_decimal;
 pub use crypto::{compute_commit_id, compute_commit_id_for_commitment};
+pub(crate) use types::details_expired;
 
 use issue::issue_credential;
 use read::{get_credential, list_credentials};

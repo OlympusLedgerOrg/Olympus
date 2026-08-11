@@ -391,3 +391,154 @@ async fn admin_scope_without_admin_role_cannot_issue() {
         "admin-scope key on a role='user' account must be refused (M-3)"
     );
 }
+
+#[tokio::test]
+async fn issue_with_expiry_validates_and_enforces() {
+    let h = common::boot().await;
+    let now = chrono::Utc::now().timestamp();
+
+    // (1) Past expiry is rejected at issuance — a credential must never be
+    //     minted already-expired.
+    let past = common::post_json_with_key(
+        &h.client,
+        &common::url(h, "/credentials"),
+        &h.api_key,
+        &json!({
+            "holder_key": holder("exp-past"),
+            "credential_type": "press",
+            "expires_at": now - 3600,
+        }),
+    )
+    .await;
+    assert_eq!(past.status(), 422, "past expires_at must be 422");
+    let body: Value = past.json().await.expect("JSON");
+    assert!(
+        body["detail"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("strictly in the future"),
+        "422 must name the future requirement: {body}"
+    );
+
+    // (2) Pedersen-commit + expiry is rejected: committed details are opaque
+    //     to the server, so the expiry would be unenforceable.
+    let committed = common::post_json_with_key(
+        &h.client,
+        &common::url(h, "/credentials"),
+        &h.api_key,
+        &json!({
+            "holder_key": holder("exp-commit"),
+            "credential_type": "press",
+            "commit": true,
+            "expires_at": now + 3600,
+        }),
+    )
+    .await;
+    assert_eq!(committed.status(), 422, "commit+expires_at must be 422");
+    let body: Value = committed.json().await.expect("JSON");
+    assert!(
+        body["detail"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("unenforceable"),
+        "422 must name the enforceability rationale: {body}"
+    );
+
+    // (3) A param conflicting with a hand-set details.expires_at is rejected.
+    let conflict = common::post_json_with_key(
+        &h.client,
+        &common::url(h, "/credentials"),
+        &h.api_key,
+        &json!({
+            "holder_key": holder("exp-conflict"),
+            "credential_type": "press",
+            "details": { "expires_at": now + 60 },
+            "expires_at": now + 3600,
+        }),
+    )
+    .await;
+    assert_eq!(conflict.status(), 422, "conflicting expiry must be 422");
+    let body: Value = conflict.json().await.expect("JSON");
+    assert!(
+        body["detail"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("conflicts"),
+        "422 must name the conflict: {body}"
+    );
+
+    // (4) A malformed hand-set details.expires_at (non-integer) is rejected
+    //     even without the param — otherwise the credential would be dead on
+    //     arrival (enforcement fails closed on malformed values).
+    let malformed = common::post_json_with_key(
+        &h.client,
+        &common::url(h, "/credentials"),
+        &h.api_key,
+        &json!({
+            "holder_key": holder("exp-malformed"),
+            "credential_type": "press",
+            "details": { "expires_at": "2027-01-01" },
+        }),
+    )
+    .await;
+    assert_eq!(
+        malformed.status(),
+        422,
+        "non-integer expires_at must be 422"
+    );
+    let body: Value = malformed.json().await.expect("JSON");
+    assert!(
+        body["detail"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("integer unix timestamp"),
+        "422 must name the expected shape: {body}"
+    );
+
+    // (5) Future expiry issues, echoes the signed details.expires_at, and
+    //     verify couples it into the verdict (`expired: false`, valid).
+    //     True expiry-passing is covered by the pure-fn unit tests
+    //     (`details_expired`) — no sleeping here.
+    let h_key = holder("exp-live");
+    let exp = now + 3600;
+    let issue = common::post_json_with_key(
+        &h.client,
+        &common::url(h, "/credentials"),
+        &h.api_key,
+        &json!({
+            "holder_key": h_key,
+            "credential_type": "press",
+            "details": { "role": "journalist" },
+            "expires_at": exp,
+        }),
+    )
+    .await;
+    assert_eq!(issue.status(), 201, "future expiry must issue");
+    let issued: Value = issue.json().await.expect("JSON");
+    let id = issued["id"].as_str().expect("id").to_owned();
+    assert_eq!(
+        issued["details"]["expires_at"].as_i64(),
+        Some(exp),
+        "expires_at must be embedded into the signed details"
+    );
+
+    let verify = common::post_json_with_key(
+        &h.client,
+        &common::url(h, &format!("/credentials/{id}/verify")),
+        &h.api_key,
+        &json!({}),
+    )
+    .await;
+    assert_eq!(verify.status(), 200);
+    let verdict: Value = verify.json().await.expect("JSON");
+    assert_eq!(
+        verdict["expired"].as_bool(),
+        Some(false),
+        "in-window expiry must report expired: false: {verdict}"
+    );
+    assert_eq!(
+        verdict["valid"].as_bool(),
+        Some(true),
+        "in-window credential must stay valid: {verdict}"
+    );
+}

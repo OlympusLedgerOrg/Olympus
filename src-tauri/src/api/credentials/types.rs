@@ -5,6 +5,46 @@ use serde::Serialize;
 
 use crate::quorum::{self, QuorumSigner};
 
+/// Reserved key inside a credential's `details` object carrying the signed
+/// expiry as unix seconds. Because `details` is JCS-canonicalized into the
+/// commit-ID preimage, the expiry is covered by the issuer's BJJ signature —
+/// a database write cannot extend it without breaking `commit_id`.
+pub(crate) const DETAILS_EXPIRES_AT_KEY: &str = "expires_at";
+
+/// The signed expiry state read from a credential's `details`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DetailsExpiry {
+    /// No `expires_at` key — the credential never expires (the v0.10 default,
+    /// and the shape of every credential issued before expiry support).
+    Absent,
+    /// Well-formed `expires_at` — expired iff `now >= at`.
+    At(i64),
+    /// `expires_at` present but not an i64 (string, float, bool, overflow…).
+    /// Treated as expired by `details_expired` — fail closed.
+    Malformed,
+}
+
+pub(crate) fn details_expiry(details: &serde_json::Value) -> DetailsExpiry {
+    match details.get(DETAILS_EXPIRES_AT_KEY) {
+        None => DetailsExpiry::Absent,
+        Some(v) => match v.as_i64() {
+            Some(at) => DetailsExpiry::At(at),
+            None => DetailsExpiry::Malformed,
+        },
+    }
+}
+
+/// Expiry verdict against an injected clock (injected so tests never sleep):
+/// `None` = the credential carries no expiry; `Some(true)` = expired (or
+/// malformed — fail closed); `Some(false)` = present and still in the future.
+pub(crate) fn details_expired(details: &serde_json::Value, now_unix: i64) -> Option<bool> {
+    match details_expiry(details) {
+        DetailsExpiry::Absent => None,
+        DetailsExpiry::At(at) => Some(now_unix >= at),
+        DetailsExpiry::Malformed => Some(true),
+    }
+}
+
 #[derive(Debug, sqlx::FromRow)]
 pub(super) struct CredentialRow {
     pub(super) id: String,
@@ -233,6 +273,66 @@ mod tests {
 
         let c = view.commitment.expect("commitment assembled");
         assert_eq!((c.x.as_str(), c.y.as_str(), c.version), ("66", "77", 1));
+    }
+
+    #[test]
+    fn details_expiry_absent_key_never_expires() {
+        let d = serde_json::json!({"role": "journalist"});
+        assert_eq!(details_expiry(&d), DetailsExpiry::Absent);
+        assert_eq!(details_expired(&d, i64::MAX), None);
+        // Non-object details (committed rows store `{}`, but be explicit).
+        assert_eq!(details_expired(&serde_json::json!({}), 0), None);
+        assert_eq!(details_expired(&serde_json::json!(null), 0), None);
+    }
+
+    #[test]
+    fn details_expiry_integer_compares_against_now() {
+        let d = serde_json::json!({"expires_at": 1_000});
+        assert_eq!(details_expiry(&d), DetailsExpiry::At(1_000));
+        assert_eq!(
+            details_expired(&d, 999),
+            Some(false),
+            "future expiry is live"
+        );
+        assert_eq!(
+            details_expired(&d, 1_000),
+            Some(true),
+            "boundary is expired"
+        );
+        assert_eq!(
+            details_expired(&d, 1_001),
+            Some(true),
+            "past expiry is expired"
+        );
+        // Negative timestamps are well-formed i64s and simply always-expired
+        // for any modern clock.
+        assert_eq!(
+            details_expired(&serde_json::json!({"expires_at": -5}), 0),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn details_expiry_malformed_values_fail_closed() {
+        for bad in [
+            serde_json::json!({"expires_at": "2027-01-01"}),
+            serde_json::json!({"expires_at": 1.5}),
+            serde_json::json!({"expires_at": true}),
+            serde_json::json!({"expires_at": null}),
+            serde_json::json!({"expires_at": u64::MAX}),
+            serde_json::json!({"expires_at": [1]}),
+        ] {
+            assert_eq!(
+                details_expiry(&bad),
+                DetailsExpiry::Malformed,
+                "value {bad} must be malformed"
+            );
+            assert_eq!(
+                details_expired(&bad, 0),
+                Some(true),
+                "malformed expiry must fail closed as expired: {bad}"
+            );
+        }
     }
 
     #[test]
