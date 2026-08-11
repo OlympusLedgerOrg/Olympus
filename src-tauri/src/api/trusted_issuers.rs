@@ -15,21 +15,39 @@
 //!    key) with no validity window — the bootstrap key is *always* trusted
 //!    for the lifetime of this process unless explicitly revoked offline.
 //! 2. Reads `OLYMPUS_BJJ_TRUSTED_ISSUERS_JSON` (a JSON array of entries,
-//!    `[{"x":"...","y":"...","valid_from":<unix?>,"valid_until":<unix?>}]`)
-//!    and appends each parsed entry whose coordinates parse and whose
-//!    window (if set) is non-degenerate.
+//!    `[{"x":"...","y":"...","valid_from":<unix?>,"valid_until":<unix?>,
+//!    "roles":[<tag>...]?}]`) and appends each parsed entry whose
+//!    coordinates parse, whose window (if set) is non-degenerate, and
+//!    whose optional `roles` tags all parse.
 //! 3. De-duplicates by `(x, y)` keeping the first occurrence — so the
 //!    primary entry always wins over an env-loaded duplicate.
+//!
+//! ## Roles (ADR-0041 subset)
+//!
+//! Every entry carries a set of [`TrustRole`] grants. An env entry may
+//! restrict itself with a `"roles"` array of ADR-0041 wire tags
+//! (`"credential_authority"`, `"ceremony_coordinator"`, …, exactly
+//! `TrustRole::wire_tag`), so e.g. a ceremony-coordinator key can be listed
+//! without implicitly becoming a trusted SBT issuer. An **absent or empty**
+//! `roles` array grants ALL roles — the pre-role-separation status quo, so
+//! every existing deployment keeps working unchanged. An entry naming an
+//! unknown role tag is dropped with a warning (fail closed, like any other
+//! malformed entry). The bootstrap primary and authority-registry rows
+//! always carry all roles (the single-key deployment status quo).
+//! Role-scoped consumers filter the shared set with [`issuers_for_role`] /
+//! [`TrustedIssuer::has_role`].
 //!
 //! ## Scope-resolver use
 //!
 //! `auth.rs::resolve_sbt_scopes` walks the resolved set, and for each row
-//! accepts the *first* issuer pubkey whose `(x, y)` matches the row's
+//! accepts the *first* issuer pubkey that grants
+//! `TrustRole::CredentialAuthority`, whose `(x, y)` matches the row's
 //! `issuer_pubkey_{x,y}` AND whose validity window (if set) covers the
 //! row's `issued_at`. A signature check still runs against that issuer's
 //! pubkey — i.e. presence in the trusted set is necessary but not
 //! sufficient.
 
+use olympus_crypto::trust_list::TrustRole;
 use serde::Deserialize;
 
 use crate::zk::witness::baby_jubjub::BabyJubJubPubKey;
@@ -49,9 +67,21 @@ pub struct TrustedIssuer {
     /// Latest `issued_at` (Unix seconds) this issuer was authorised to
     /// sign. `None` = always-valid upper bound.
     pub valid_until: Option<i64>,
+    /// [`TrustRole`] grants (ADR-0041 subset). An **empty** vector means
+    /// ALL roles — the pre-role-separation default carried by the bootstrap
+    /// primary, authority-registry rows, and env entries without a
+    /// `"roles"` array. A non-empty vector restricts this issuer to exactly
+    /// the listed roles.
+    pub roles: Vec<TrustRole>,
 }
 
 impl TrustedIssuer {
+    /// True iff this issuer is granted `role`. An empty [`Self::roles`]
+    /// vector grants every role (see the field docs).
+    pub fn has_role(&self, role: TrustRole) -> bool {
+        self.roles.is_empty() || self.roles.contains(&role)
+    }
+
     /// True iff this issuer was authorised at `issued_at_unix`.
     pub fn covers(&self, issued_at_unix: i64) -> bool {
         if let Some(lo) = self.valid_from {
@@ -68,6 +98,18 @@ impl TrustedIssuer {
     }
 }
 
+/// Issuers in `issuers` granting `role`, in set order.
+///
+/// The shared `AppState` set stays role-unsplit; each verification site
+/// narrows it through this filter (or [`TrustedIssuer::has_role`] inline)
+/// so a coordinator-only entry never doubles as, say, a credential issuer.
+pub fn issuers_for_role(
+    issuers: &[TrustedIssuer],
+    role: TrustRole,
+) -> impl Iterator<Item = &TrustedIssuer> {
+    issuers.iter().filter(move |i| i.has_role(role))
+}
+
 #[derive(Debug, Deserialize)]
 struct RawEntry {
     x: String,
@@ -76,6 +118,10 @@ struct RawEntry {
     valid_from: Option<i64>,
     #[serde(default)]
     valid_until: Option<i64>,
+    /// Optional ADR-0041 role tags ([`TrustRole::wire_tag`] strings).
+    /// Absent (or empty) = all roles.
+    #[serde(default)]
+    roles: Option<Vec<String>>,
 }
 
 /// Env var name carrying additional trusted-issuer entries (JSON array).
@@ -93,38 +139,67 @@ pub fn load_trusted_issuers(primary: Option<&BabyJubJubPubKey>) -> Vec<TrustedIs
             y_dec: fr_to_decimal(&p.y),
             valid_from: None,
             valid_until: None,
+            // Bootstrap primary: ALL roles (the single-key deployment
+            // status quo — empty = all, see the field docs).
+            roles: Vec::new(),
         });
     }
 
     if let Ok(raw) = std::env::var(TRUSTED_ISSUERS_ENV) {
-        match serde_json::from_str::<Vec<RawEntry>>(&raw) {
-            Ok(entries) => {
-                for e in entries {
-                    let Some(issuer) = parse_entry(&e) else {
-                        tracing::warn!(
-                            "trusted_issuers: dropping malformed entry (x={}, y={}) from {TRUSTED_ISSUERS_ENV}",
-                            e.x, e.y
-                        );
-                        continue;
-                    };
-                    if out
-                        .iter()
-                        .any(|i| i.x_dec == issuer.x_dec && i.y_dec == issuer.y_dec)
-                    {
-                        continue;
-                    }
-                    out.push(issuer);
-                }
+        for issuer in entries_from_env_json(&raw) {
+            if out
+                .iter()
+                .any(|i| i.x_dec == issuer.x_dec && i.y_dec == issuer.y_dec)
+            {
+                continue;
             }
-            Err(e) => {
-                tracing::warn!(
-                    "trusted_issuers: failed to parse {TRUSTED_ISSUERS_ENV} as JSON array: {e}"
-                );
-            }
+            out.push(issuer);
         }
     }
 
     out
+}
+
+/// Parse the `OLYMPUS_BJJ_TRUSTED_ISSUERS_JSON` payload into issuer entries.
+///
+/// Malformed JSON, and individually malformed entries (bad coordinates,
+/// degenerate windows, unknown role tags), are dropped with a
+/// `tracing::warn!` — fail closed, never a startup failure. Factored out of
+/// [`load_trusted_issuers`] so entry parsing is testable without mutating
+/// process-global env vars.
+fn entries_from_env_json(raw: &str) -> Vec<TrustedIssuer> {
+    // Deserialize as raw JSON values first, then each entry independently:
+    // a single field-type error (e.g. `"roles": "credential_authority"`
+    // instead of an array) must drop only that entry, never the valid
+    // siblings — an all-or-nothing Vec<RawEntry> parse would silently empty
+    // the whole operator-configured set.
+    match serde_json::from_str::<Vec<serde_json::Value>>(raw) {
+        Ok(values) => values
+            .iter()
+            .filter_map(|v| {
+                let Ok(e) = serde_json::from_value::<RawEntry>(v.clone()) else {
+                    tracing::warn!(
+                        "trusted_issuers: dropping undeserializable entry from {TRUSTED_ISSUERS_ENV}: {v}"
+                    );
+                    return None;
+                };
+                let issuer = parse_entry(&e);
+                if issuer.is_none() {
+                    tracing::warn!(
+                        "trusted_issuers: dropping malformed entry (x={}, y={}) from {TRUSTED_ISSUERS_ENV}",
+                        e.x, e.y
+                    );
+                }
+                issuer
+            })
+            .collect(),
+        Err(e) => {
+            tracing::warn!(
+                "trusted_issuers: failed to parse {TRUSTED_ISSUERS_ENV} as JSON array: {e}"
+            );
+            Vec::new()
+        }
+    }
 }
 
 /// Load the full trusted-issuer set: bootstrap primary (entry 0, unbounded)
@@ -185,6 +260,10 @@ pub async fn load_trusted_issuers_with_registry(
             y,
             valid_from: valid_from.map(|t| t.timestamp()),
             valid_until: valid_until.or(revoked_at).map(|t| t.timestamp()),
+            // Registry rows: ALL roles (the single-key deployment status
+            // quo — the registry records authority supersession, not
+            // role-scoped grants).
+            roles: None,
         };
         let Some(issuer) = parse_entry(&entry) else {
             tracing::warn!(
@@ -237,12 +316,31 @@ fn parse_entry(e: &RawEntry) -> Option<TrustedIssuer> {
             return None;
         }
     }
+    // ADR-0041 role tags. Absent/empty = all roles (empty Vec, see the
+    // `TrustedIssuer::roles` docs). Any unknown tag drops the whole entry
+    // (fail closed): silently ignoring it could either widen (tag meant to
+    // restrict) or lose (typo of the intended grant) the operator's intent.
+    let mut roles: Vec<TrustRole> = Vec::new();
+    for tag in e.roles.as_deref().unwrap_or_default() {
+        let Some(role) = TrustRole::from_wire_tag(tag) else {
+            tracing::warn!(
+                "trusted_issuers: unknown role tag {tag:?} on entry (x={}, y={})",
+                e.x,
+                e.y
+            );
+            return None;
+        };
+        if !roles.contains(&role) {
+            roles.push(role);
+        }
+    }
     Some(TrustedIssuer {
         pubkey: BabyJubJubPubKey { x, y },
         x_dec: fr_to_decimal(&x),
         y_dec: fr_to_decimal(&y),
         valid_from: e.valid_from,
         valid_until: e.valid_until,
+        roles,
     })
 }
 
@@ -250,6 +348,31 @@ use crate::zk::proof::fr_to_decimal;
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn malformed_entry_drops_independently_not_the_whole_set() {
+        // One valid entry beside an entry whose `roles` is a string, not an
+        // array: the type error must drop only the bad entry — an
+        // all-or-nothing parse would empty the operator's whole set.
+        let (x, y) = real_key_dec(0x42);
+        let raw = format!(
+            r#"[
+            {{"x":"3","y":"4","roles":"credential_authority"}},
+            {{"x":"{x}","y":"{y}"}}
+        ]"#
+        );
+        let entries = entries_from_env_json(&raw);
+        assert_eq!(
+            entries.len(),
+            1,
+            "only the type-broken entry may be dropped"
+        );
+        assert_eq!(
+            (entries[0].x_dec.as_str(), entries[0].y_dec.as_str()),
+            (x.as_str(), y.as_str()),
+            "the valid sibling must survive"
+        );
+    }
+
     use super::*;
     use ark_bn254::Fr;
 
@@ -277,6 +400,135 @@ mod tests {
         assert_eq!(v[0].y_dec, "11");
         assert!(v[0].valid_from.is_none());
         assert!(v[0].valid_until.is_none());
+        // The bootstrap primary carries ALL roles (single-key status quo).
+        for role in TrustRole::ALL {
+            assert!(v[0].has_role(role), "primary must grant {role:?}");
+        }
+    }
+
+    /// Deterministic real Baby Jubjub key (subgroup-valid, unlike the raw
+    /// `pubkey()` coordinates) so entries survive `parse_entry`'s
+    /// `validate_pubkey_subgroup` gate. Returns `(x_dec, y_dec)`.
+    fn real_key_dec(seed: u8) -> (String, String) {
+        let pk = BabyJubJubPubKey::from_private(&[seed; 32]).expect("pubkey derive");
+        (fr_to_decimal(&pk.x), fr_to_decimal(&pk.y))
+    }
+
+    #[test]
+    fn env_entry_with_coordinator_role_grants_only_that_role() {
+        let (x, y) = real_key_dec(0x41);
+        let raw = format!(r#"[{{"x":"{x}","y":"{y}","roles":["ceremony_coordinator"]}}]"#);
+        let v = entries_from_env_json(&raw);
+        assert_eq!(v.len(), 1);
+        assert!(v[0].has_role(TrustRole::CeremonyCoordinator));
+        // The point of role separation: a coordinator-only key is NOT a
+        // credential issuer (or anything else).
+        assert!(!v[0].has_role(TrustRole::CredentialAuthority));
+        assert!(!v[0].has_role(TrustRole::RevocationAuthority));
+        assert!(!v[0].has_role(TrustRole::CheckpointAuthority));
+        assert!(!v[0].has_role(TrustRole::FederationAuthority));
+        assert!(!v[0].has_role(TrustRole::RealmAuthority));
+    }
+
+    #[test]
+    fn env_entry_without_roles_grants_all_roles() {
+        let (x, y) = real_key_dec(0x42);
+        // Absent `roles` key…
+        let absent = entries_from_env_json(&format!(r#"[{{"x":"{x}","y":"{y}"}}]"#));
+        // …and an explicit empty array both mean ALL roles (back-compat).
+        let empty = entries_from_env_json(&format!(r#"[{{"x":"{x}","y":"{y}","roles":[]}}]"#));
+        for v in [absent, empty] {
+            assert_eq!(v.len(), 1);
+            for role in TrustRole::ALL {
+                assert!(
+                    v[0].has_role(role),
+                    "unrestricted entry must grant {role:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn env_entry_with_unknown_role_tag_is_dropped() {
+        let (good_x, good_y) = real_key_dec(0x43);
+        let (bad_x, bad_y) = real_key_dec(0x44);
+        // "coordinator" is NOT a wire tag ("ceremony_coordinator" is): the
+        // entry must be dropped entirely — fail closed — not granted all
+        // roles, and not silently granted the tags that did parse.
+        let raw = format!(
+            r#"[{{"x":"{good_x}","y":"{good_y}","roles":["ceremony_coordinator"]}},
+                {{"x":"{bad_x}","y":"{bad_y}","roles":["ceremony_coordinator","coordinator"]}}]"#
+        );
+        let v = entries_from_env_json(&raw);
+        // The sibling valid entry survives, proving the drop is per-entry
+        // (an unknown tag, not a whole-payload parse failure).
+        assert_eq!(v.len(), 1);
+        assert_eq!(
+            (v[0].x_dec.as_str(), v[0].y_dec.as_str()),
+            (good_x.as_str(), good_y.as_str())
+        );
+        assert!(
+            !v.iter().any(|i| i.x_dec == bad_x && i.y_dec == bad_y),
+            "entry with an unknown role tag must be absent from the set"
+        );
+    }
+
+    #[test]
+    fn registry_shaped_entry_carries_all_roles() {
+        // `load_trusted_issuers_with_registry` builds each registry row as a
+        // `RawEntry { roles: None, .. }` and feeds it through `parse_entry` —
+        // this pins that `roles: None` shape to the all-roles grant.
+        let (x, y) = real_key_dec(0x45);
+        let issuer = parse_entry(&RawEntry {
+            x,
+            y,
+            valid_from: Some(100),
+            valid_until: Some(200),
+            roles: None,
+        })
+        .expect("registry-shaped entry must parse");
+        for role in TrustRole::ALL {
+            assert!(issuer.has_role(role), "registry row must grant {role:?}");
+        }
+    }
+
+    #[test]
+    fn issuers_for_role_separates_coordinator_from_credential_authority() {
+        let all_roles = TrustedIssuer {
+            pubkey: pubkey(1, 2),
+            x_dec: "1".into(),
+            y_dec: "2".into(),
+            valid_from: None,
+            valid_until: None,
+            roles: Vec::new(),
+        };
+        let coordinator_only = TrustedIssuer {
+            pubkey: pubkey(3, 4),
+            x_dec: "3".into(),
+            y_dec: "4".into(),
+            valid_from: None,
+            valid_until: None,
+            roles: vec![TrustRole::CeremonyCoordinator],
+        };
+        let set = vec![all_roles, coordinator_only];
+
+        let credential: Vec<&str> = issuers_for_role(&set, TrustRole::CredentialAuthority)
+            .map(|i| i.x_dec.as_str())
+            .collect();
+        assert_eq!(
+            credential,
+            vec!["1"],
+            "coordinator-only entry must be excluded from CredentialAuthority"
+        );
+
+        let coordinator: Vec<&str> = issuers_for_role(&set, TrustRole::CeremonyCoordinator)
+            .map(|i| i.x_dec.as_str())
+            .collect();
+        assert_eq!(
+            coordinator,
+            vec!["1", "3"],
+            "both the all-roles and the coordinator-only entry serve CeremonyCoordinator"
+        );
     }
 
     #[test]
@@ -287,6 +539,7 @@ mod tests {
             y_dec: "2".into(),
             valid_from: Some(100),
             valid_until: Some(200),
+            roles: Vec::new(),
         };
         assert!(!i.covers(99));
         assert!(i.covers(100));
@@ -303,6 +556,7 @@ mod tests {
             y_dec: "2".into(),
             valid_from: None,
             valid_until: None,
+            roles: Vec::new(),
         };
         assert!(i.covers(i64::MIN));
         assert!(i.covers(0));

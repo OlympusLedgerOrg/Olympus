@@ -23,6 +23,7 @@
 //! blake3 check at startup would have produced an immediate
 //! `ManifestMismatch{kind: "ark_zkey", ...}` error instead.
 
+use olympus_crypto::trust_list::TrustRole;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -535,14 +536,18 @@ impl CeremonyManifest {
 
     /// Full coordinator-signature check. Requires `trusted_issuers` so
     /// the coordinator pubkey is anchored to the federation's trust
-    /// set (audit M-3) rather than self-attesting. Returns the matched
+    /// set (audit M-3) rather than self-attesting. Only entries granting
+    /// [`TrustRole::CeremonyCoordinator`] are considered (ADR-0041 role
+    /// separation) — an issuer listed solely as e.g. a credential authority
+    /// cannot vouch for a ceremony manifest. Returns the matched
     /// `TrustedIssuer` reference on success so the caller can log
     /// "manifest accepted under issuer X".
     pub fn verify_coordinator_signature<'a>(
         &self,
         trusted_issuers: &'a [TrustedIssuer],
     ) -> Result<&'a TrustedIssuer, ManifestError> {
-        // 1. Coordinator pubkey must be in the trusted set, AND authorised
+        // 1. Coordinator pubkey must be in the trusted set with the
+        //    CeremonyCoordinator role, AND authorised
         //    *now*. We window-check against the current wall-clock time, NOT
         //    `self.created_unix`: that field is not covered by the coordinator
         //    signature (the V2 digest binds the artifacts + circuit +
@@ -560,7 +565,8 @@ impl CeremonyManifest {
         let issuer = trusted_issuers
             .iter()
             .find(|t| {
-                t.x_dec == self.coordinator.bjj_pubkey.x
+                t.has_role(TrustRole::CeremonyCoordinator)
+                    && t.x_dec == self.coordinator.bjj_pubkey.x
                     && t.y_dec == self.coordinator.bjj_pubkey.y
                     && t.covers(now_unix)
             })
@@ -612,6 +618,10 @@ impl CeremonyManifest {
             y_dec: self.coordinator.bjj_pubkey.y.clone(),
             valid_from: None,
             valid_until: None,
+            // Exactly the role `verify_coordinator_signature` filters on —
+            // this synthetic entry exists only for that call and must not
+            // read as a broader grant.
+            roles: vec![TrustRole::CeremonyCoordinator],
         };
         self.verify_coordinator_signature(std::slice::from_ref(&declared))?;
         Ok(())
@@ -699,6 +709,10 @@ pub fn parse_trusted_contributors_json(json: &str) -> Result<Vec<TrustedIssuer>,
             y_dec: entry.y,
             valid_from: entry.valid_from,
             valid_until: entry.valid_until,
+            // The contributor allowlist is a separate set consumed only by
+            // `verify_authenticated_contributors`, which does not consult
+            // roles — the unrestricted default keeps that behaviour.
+            roles: Vec::new(),
         });
     }
     Ok(trusted)
@@ -875,6 +889,7 @@ mod tests {
             y_dec: fr_to_decimal(&pk.y),
             valid_from: None,
             valid_until: None,
+            roles: Vec::new(),
         }
     }
 
@@ -1047,6 +1062,38 @@ mod tests {
             .verify_coordinator_signature(&[])
             .expect_err("must reject");
         assert!(matches!(err, ManifestError::UntrustedCoordinator));
+    }
+
+    #[test]
+    fn verify_coordinator_signature_requires_ceremony_coordinator_role() {
+        // ADR-0041 role separation: the signature is genuine and the key IS
+        // in the trusted set, but listed for a different role — it must be
+        // rejected as an untrusted *coordinator* (role gate, not sig gate).
+        let priv_key = [0x42u8; 32];
+        let m = build_test_manifest(
+            "document_existence",
+            &priv_key,
+            ArtifactBytes {
+                vkey: b"",
+                ark_zkey: b"",
+                r1cs: b"",
+                wasm: b"",
+            },
+        );
+        let mut wrong_role = trusted_issuer_for(&priv_key);
+        wrong_role.roles = vec![TrustRole::CredentialAuthority];
+        let err = m
+            .verify_coordinator_signature(std::slice::from_ref(&wrong_role))
+            .expect_err("credential-authority-only issuer must not anchor a manifest");
+        assert!(matches!(err, ManifestError::UntrustedCoordinator));
+
+        // The same entry with an explicit CeremonyCoordinator grant passes,
+        // pinning that the rejection above was the role filter and nothing
+        // else about the entry.
+        let mut right_role = trusted_issuer_for(&priv_key);
+        right_role.roles = vec![TrustRole::CeremonyCoordinator];
+        m.verify_coordinator_signature(std::slice::from_ref(&right_role))
+            .expect("coordinator-role issuer must pass");
     }
 
     #[test]

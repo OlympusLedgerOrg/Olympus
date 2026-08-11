@@ -57,10 +57,12 @@ single-operator risk + external review**.
   registry in `account_signing_keys` (migration 0056 — validity windows + identity-immutable
   supersession via `OLYMPUS_AUTHORITY_ROTATION=confirm`), trusted
   issuers loaded from that registry, per-row-pinned checkpoint-bundle export,
-  and rotation integration tests. Remaining, in order: historical redaction
-  issuer keys (the ingest Ed25519 key still rotates by env change with no
-  served history); role-separated trust resolution wiring `olympus-crypto`'s
-  ADR-0041 trust-list module into the runtime; a signed manifest timestamp so
+  rotation integration tests, and role-separated trust resolution (an
+  ADR-0041 subset: `olympus-crypto` `TrustRole` grants per issuer entry,
+  role-filtered at each verification site — full trust-list snapshots and
+  quorum rotation remain ADR-0041 future work). Remaining, in order:
+  historical redaction issuer keys (the ingest Ed25519 key still rotates by
+  env change with no served history); a signed manifest timestamp so
   ceremony-coordinator keys become retirable; and in-band revocation notices
   for retired keys (still out-of-band only).
 - ☐ **Hardened, portable proof-bundle format** with stronger offline verifier

@@ -5,7 +5,9 @@
 //!
 //! Scope: steps 1–2 of the ADR's implementation plan — the protocol data
 //! model, its machine-checkable invariants, and the normative deterministic
-//! encoders. **Nothing here is wired into runtime trust decisions yet**; the
+//! encoders. The desktop runtime consumes [`TrustRole`] for role-scoped
+//! trusted-issuer resolution (`src-tauri`'s `api::trusted_issuers`); the
+//! snapshot machinery is **not** wired into runtime trust decisions yet — the
 //! `TrustResolver` API, persistence, quorum verification, activation
 //! scheduling, and genesis CLI are later steps.
 //!

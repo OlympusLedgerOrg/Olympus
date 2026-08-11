@@ -401,7 +401,8 @@ pub(crate) struct ManifestCheck {
 ///     checkout pre-setup; the placeholder gate above already handles
 ///     this case);
 ///   - parse, recompute the contribution chain, verify the coordinator
-///     BJJ-EdDSA signature against `trusted_issuers`;
+///     BJJ-EdDSA signature against `trusted_issuers` (only entries granting
+///     `TrustRole::CeremonyCoordinator` count — ADR-0041 role separation);
 ///   - re-read the `.ark.zkey` from `proofs_dir` and assert
 ///     `blake3(file_bytes)` matches the manifest.
 ///
@@ -844,6 +845,7 @@ mod tests {
                 y_dec: fr_decimal(&pubkey.y),
                 valid_from: None,
                 valid_until: None,
+                roles: Vec::new(),
             });
         }
         trusted

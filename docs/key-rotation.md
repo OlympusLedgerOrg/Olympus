@@ -4,10 +4,11 @@ This is the operational procedure for rotating each long-lived Olympus secret in
 the code works today**. It documents what is currently possible, what each rotation breaks, and
 the exact order of operations that avoids the known traps. The BJJ authority key now rotates
 in-band through the authority-key registry (migration `0056`: identity-immutable supersession
-with validity windows, loaded into the trusted-issuer set at startup). Role-separated trust and
-signed trust-list snapshots per
-[ADR-0041](adr/ADR-0041-role-separated-trust-list-rotation.md) remain roadmap work — see
-[ROADMAP.md](../ROADMAP.md).
+with validity windows, loaded into the trusted-issuer set at startup), and trusted-issuer
+entries carry role-scoped grants (an
+[ADR-0041](adr/ADR-0041-role-separated-trust-list-rotation.md) subset — see the
+role-scoped coordinator section below). Signed trust-list snapshots and quorum rotation per
+ADR-0041 remain roadmap work — see [ROADMAP.md](../ROADMAP.md).
 
 Security assumptions behind every procedure here are the ones stated in
 [threat-model.md](threat-model.md), in particular its non-protections: key compromise itself is
@@ -198,6 +199,36 @@ ADR-0041), the only safe options are:
 
 On coordinator-key **compromise**, option 2 is the only one available: re-sign all manifests,
 deploy, then bound (or remove) the compromised entry in the same maintenance window.
+
+### Role-scoped coordinator entries (ADR-0041 subset)
+
+Option 1's unbounded entry no longer has to carry blanket trust. A dedicated coordinator key
+(`OLYMPUS_CEREMONY_COORDINATOR_KEY`) can be listed with an explicit role restriction:
+
+```json
+[
+  {
+    "x": "<coordinator_x_decimal>",
+    "y": "<coordinator_y_decimal>",
+    "roles": ["ceremony_coordinator"]
+  }
+]
+```
+
+Manifest verification only accepts issuer entries granting the `ceremony_coordinator` role, and
+such an entry grants **nothing else** — no SBT/credential trust
+(`credential_authority`) and no snapshot trust (`checkpoint_authority`) — so keeping it
+unbounded anchors ceremony manifests and nothing more. An absent or empty `"roles"` array
+keeps the historical all-roles behaviour; an entry naming an unknown role tag is dropped with
+a warning (fail closed).
+
+One caveat: do **not** add a restrictive `"roles"` array to the dev-fallback override from the
+ceremony-manifest exception above. That entry names the retired _authority_ key, env entries
+win over the key's registry row, and a coordinator-only grant would strip the credential trust
+its historical SBTs still need — leave that entry's `roles` absent.
+
+The role restriction does not change the wall-clock trap itself: a role-scoped coordinator
+entry still verifies at **now**, so bounding its `valid_until` still breaks deployed manifests.
 
 ## External PostgreSQL credentials
 
