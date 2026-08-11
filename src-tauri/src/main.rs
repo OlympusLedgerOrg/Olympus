@@ -213,13 +213,17 @@ fn main() {
                                 ));
                             // Audit M-3: resolve the full trusted-issuer set
                             // (primary bootstrap pubkey + any rotation entries
-                            // in OLYMPUS_BJJ_TRUSTED_ISSUERS_JSON) once at
+                            // in OLYMPUS_BJJ_TRUSTED_ISSUERS_JSON + the
+                            // authority-registry supersession chain from
+                            // account_signing_keys, migration 0056) once at
                             // startup so the scope resolver doesn't re-parse
                             // per request.
                             app_state.bjj_trusted_issuers =
-                                crate::api::trusted_issuers::load_trusted_issuers(
+                                crate::api::trusted_issuers::load_trusted_issuers_with_registry(
                                     app_state.bjj_authority_pubkey.as_ref(),
-                                );
+                                    app_state.pool.as_ref(),
+                                )
+                                .await;
                             // Audit CEREMONY_INTEGRITY.md #3 + #4:
                             // verify each circuit's embedded ceremony
                             // manifest against the trusted-issuer set

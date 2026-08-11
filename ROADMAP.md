@@ -52,19 +52,17 @@ single-operator risk + external review**.
 - ☐ **Independent security audit.** Third-party cryptographic/implementation
   review of `crates/olympus-crypto`, `src-tauri/`, `proofs/`, and `verifiers/`,
   with remediations tracked as public PRs (see `SECURITY.md`).
-- ☐ **In-band key rotation and revocation.** Today only the manual procedures
-  in [docs/key-rotation.md](docs/key-rotation.md) exist; the BJJ authority
-  key, ingest signing key, admin key, and ceremony coordinator key all rotate
-  by env-var change plus hand-run steps, and retired-key revocation is
-  out-of-band only. Planned, in order: an authority-key registry in
-  `account_signing_keys` with validity windows and supersession records
-  (replacing the bootstrap hard-refusal and the update-in-place row edit);
-  trusted issuers loaded from that registry instead of env-only; registry-aware
-  checkpoint-bundle export (removing the post-rotation 409) and historical
-  redaction issuer keys; role-separated trust resolution wiring
-  `olympus-crypto`'s ADR-0041 trust-list module into the runtime; and a signed
-  manifest timestamp so ceremony-coordinator keys become retirable. Each step
-  lands with rotation end-to-end tests (none exist today).
+- ☐ **In-band key rotation and revocation.** Procedures live in
+  [docs/key-rotation.md](docs/key-rotation.md). Landed: the authority-key
+  registry in `account_signing_keys` (migration 0056 — validity windows + identity-immutable
+  supersession via `OLYMPUS_AUTHORITY_ROTATION=confirm`), trusted
+  issuers loaded from that registry, per-row-pinned checkpoint-bundle export,
+  and rotation integration tests. Remaining, in order: historical redaction
+  issuer keys (the ingest Ed25519 key still rotates by env change with no
+  served history); role-separated trust resolution wiring `olympus-crypto`'s
+  ADR-0041 trust-list module into the runtime; a signed manifest timestamp so
+  ceremony-coordinator keys become retirable; and in-band revocation notices
+  for retired keys (still out-of-band only).
 - ☐ **Hardened, portable proof-bundle format** with stronger offline verifier
   tooling and sample packages for non-technical reviewers.
 - ☐ **Pilot deployment** alongside a real public-records / clerk workflow

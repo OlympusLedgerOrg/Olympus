@@ -30,6 +30,8 @@ mod common;
 mod admin_users;
 #[path = "api_db/anchors.rs"]
 mod anchors;
+#[path = "api_db/authority_rotation.rs"]
+mod authority_rotation;
 #[path = "api_db/credentials.rs"]
 mod credentials;
 #[path = "api_db/external_pg_roles.rs"]

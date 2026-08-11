@@ -2,10 +2,12 @@
 
 This is the operational procedure for rotating each long-lived Olympus secret in **v0.10.x, as
 the code works today**. It documents what is currently possible, what each rotation breaks, and
-the exact order of operations that avoids the known traps. In-band rotation (a key registry with
-validity windows, role-separated trust, and signed trust-list snapshots per
-[ADR-0041](adr/ADR-0041-role-separated-trust-list-rotation.md)) is roadmap work, not a v0.10
-capability — see [ROADMAP.md](../ROADMAP.md).
+the exact order of operations that avoids the known traps. The BJJ authority key now rotates
+in-band through the authority-key registry (migration `0056`: identity-immutable supersession
+with validity windows, loaded into the trusted-issuer set at startup). Role-separated trust and
+signed trust-list snapshots per
+[ADR-0041](adr/ADR-0041-role-separated-trust-list-rotation.md) remain roadmap work — see
+[ROADMAP.md](../ROADMAP.md).
 
 Security assumptions behind every procedure here are the ones stated in
 [threat-model.md](threat-model.md), in particular its non-protections: key compromise itself is
@@ -15,14 +17,14 @@ windows and on out-of-band notice to relying parties. Rotation limits future exp
 not retroactively distrust anything a compromised key already signed within its window.
 
 Read [court-evidence.md §6.1](court-evidence.md#61-bundle-byte-identity-and-bjj-key-rotation)
-first if you export checkpoint bundles for legal use: rotation has consequences for historical
-bundle export that you must handle **before** rotating, not after.
+if you export checkpoint bundles for legal use — it explains why historical export survives
+rotation (per-row pinned keys) and what escrow still buys you.
 
 ## Key inventory
 
 | Key                              | Purpose                                                                 | Persistence                                                                                                | Rotation today                                                                    |
 | -------------------------------- | ----------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| `OLYMPUS_BJJ_AUTHORITY_KEY`      | SBT/credential signing, checkpoint attestations, trusted-issuer entry 0 | Env var (production's sole surface); OS keychain and DB column (dev only)                                  | Manual procedure below                                                            |
+| `OLYMPUS_BJJ_AUTHORITY_KEY`      | SBT/credential signing, checkpoint attestations, trusted-issuer entry 0 | Env var (production's sole surface); OS keychain and DB column (dev only)                                  | Supported: registry supersession via `OLYMPUS_AUTHORITY_ROTATION=confirm` (below) |
 | `OLYMPUS_INGEST_SIGNING_KEY`     | Ed25519 shard/redaction/snapshot signing                                | Env var only; Olympus never persists it — operator escrow in a secret manager is the required durable copy | Manual procedure below                                                            |
 | `OLYMPUS_ANCHOR_SIGN_KEY`        | Ed25519 anchoring/receipt signing                                       | Env var; **falls back to the ingest key when unset**                                                       | Same as ingest key                                                                |
 | `OLYMPUS_ADMIN_KEY`              | `x-admin-key` break-glass admin header                                  | Env var                                                                                                    | Restart with new value                                                            |
@@ -38,94 +40,74 @@ this document covers the keys that do **not**.
 ## Rotating the BJJ authority key
 
 The BJJ authority key is the trust root: it signs SBT credentials, anchors the trusted-issuer
-set (it is always entry 0, with an unbounded validity window), signs checkpoint transition
-attestations, and binds checkpoint bundles. There is no in-band rotation endpoint. The manual
-procedure is:
+set (entry 0; its validity window is tightened to the active registry row's), signs checkpoint transition
+attestations, and binds checkpoint bundles. Rotation is a restart-time supersession driven by
+bootstrap — there is no HTTP endpoint (a network-reachable trust-root rotation would be a
+bigger attack surface than the key change it performs). The procedure is:
 
-### 1. Before rotating — export and escrow
+### 1. Before rotating — escrow and record
 
-- **Export every checkpoint bundle you may need later.** After rotation, the bundle producer
-  refuses (`409 Conflict`) to export checkpoints emitted under the old key, because the live
-  key's Poseidon hash no longer matches the row's stored `authority_pubkey_hash`
-  (`src-tauri/src/api/checkpoint_bundle.rs`). Historical bundles already exported remain
-  verifiable — the verifying material is pinned inside them.
-- **Escrow the old private key** (offline, access-controlled). It is the only way to export
-  old checkpoint bundles after rotation, and the only recovery path if the rotation is aborted.
-- Record the old public key coordinates. If you don't have them, they are the decimal strings
-  `bjj_pubkey_x` / `bjj_pubkey_y` on the non-revoked `purpose = 'authority'` row in
+- **Escrow the old private key** (offline, access-controlled). It is the only way to ever
+  re-sign historical material, and the only recovery path if the rotation is aborted.
+- Record the old public key coordinates for your own rotation log. The registry retains them
+  too: they are `bjj_pubkey_x` / `bjj_pubkey_y` on the active `purpose = 'authority'` row in
   `account_signing_keys`.
+- Checkpoint-bundle export does **not** depend on the live key: every checkpoint row pins its
+  issuing pubkey, and the producer validates against the row's own pinned material
+  (`src-tauri/src/api/checkpoint_bundle.rs`). Pre-exporting bundles is good hygiene, not a
+  rotation prerequisite.
 
-### 2. Keep the old key trusted for historical verification
+### 2. Rotate: new env key + explicit confirmation
 
-Add the **old** public key to `OLYMPUS_BJJ_TRUSTED_ISSUERS_JSON` with a `valid_until` at the
-rotation time, so credentials issued under it keep resolving scopes (validity is checked
-against each credential's `issued_at`):
+Stop the node, then restart with **both**:
+
+```bash
+OLYMPUS_BJJ_AUTHORITY_KEY=<new 64-char hex>
+OLYMPUS_AUTHORITY_ROTATION=confirm
+```
+
+Bootstrap (`src-tauri/src/bootstrap.rs::ensure_bjj_authority`) compares the env key against
+the active authority row and, with the confirmation flag set, performs a **registry
+supersession** (migration `0056`): the old row is revoked and windowed (`revoked_at` +
+`valid_until` = rotation time, `replaced_by_key_id` = successor) and the new key is inserted
+with `valid_from` = rotation time — matching how user signing keys already rotate. Identity
+columns of historical rows are never rewritten; rotation stamps the predecessor's one-shot
+lifecycle columns (`revoked_at`, `valid_until`, `replaced_by_key_id`) — exactly the
+`account_signing_keys` columns the external-PostgreSQL DML contract whitelists for UPDATE —
+so the registry keeps the full audit chain, and a partial unique index guarantees at most one
+active authority at any time. (ADR-0031's insert-only invariant governs ledger tables, not
+the key registry.)
+
+Without the flag, a mismatched env key **refuses to start** with instructions — a pasted wrong
+key cannot silently become the signing authority. **Unset `OLYMPUS_AUTHORITY_ROTATION` after
+the rotation restart**: leaving it set would authorise a future accidental swap (bootstrap
+logs a warning if it sees the flag with no rotation pending).
+
+### 3. Historical trust is automatic (env override still available)
+
+The trusted-issuer set is loaded from the registry at startup
+(`trusted_issuers::load_trusted_issuers_with_registry`): the retired key stays trusted for
+exactly its recorded window, so credentials issued under it keep resolving scopes and
+verifying — no hand-crafted JSON required. `OLYMPUS_BJJ_TRUSTED_ISSUERS_JSON` remains as an
+operator **override** (entries win over registry rows for the same pubkey): use it on
+suspected compromise to bound the old key _earlier_ than its rotation time:
 
 ```json
-[{ "x": "<old_x_decimal>", "y": "<old_y_decimal>", "valid_until": ROTATION_UNIX_SECONDS }]
+[{ "x": "<old_x_decimal>", "y": "<old_y_decimal>", "valid_until": LAST_TRUSTED_UNIX_SECONDS }]
 ```
 
-`ROTATION_UNIX_SECONDS` is a placeholder — substitute the Unix timestamp of the rotation moment
-(`date +%s` at the time you rotate), as a bare JSON number. Do not copy a fixed value: a
-timestamp earlier than a credential's `issued_at` rejects that credential.
-
-Malformed entries are dropped with a warning, not a startup failure — check the logs for
-`trusted_issuers:` warnings after restart to confirm the entry parsed.
+`LAST_TRUSTED_UNIX_SECONDS` is a placeholder — the Unix timestamp of the last moment you
+consider the old key's signatures trustworthy. Malformed entries are dropped with a warning,
+not a startup failure — check the logs for `trusted_issuers:` warnings after restart.
 
 > **Ceremony-manifest exception:** if any ceremony manifest was coordinator-signed by the old
-> authority key (the dev fallback when `OLYMPUS_CEREMONY_COORDINATOR_KEY` is unset), the entry
-> for the old key must **omit `valid_until`** — manifest verification checks issuer validity at
-> the current wall-clock time, not at issuance time (see the coordinator trap below). Production
-> deployments are protected from this coupling by the startup gate that refuses a coordinator
-> key equal to the runtime authority key (`src-tauri/src/startup.rs`, audit A-3), so this
-> exception normally applies to dev/test databases only.
-
-### 3. Update the persisted authority row
-
-The **intended** procedure is append-only supersession, matching how user signing keys already
-rotate (`POST /key/signing` then `DELETE /key/signing/{key_id}?replaced_by_key_id=…`): insert
-the replacement authority row, stamp `revoked_at` + `replaced_by_key_id` on the old row, and
-never modify the historical record. **That flow is not yet possible for the authority key**:
-the unique index on `account_signing_keys.public_key` (the authority row uses the empty
-string) admits only one such row, and bootstrap reads a single non-revoked authority row. The
-registry work on the roadmap removes both constraints; until it lands, the update-in-place
-below is the documented v0.10 stopgap — record the old key's coordinates and rotation time in
-your own rotation log first, because the database will not retain them. (The insert-only
-ledger invariant of ADR-0031 governs ledger commits — `smt_*`, `ingest_records` — and is not
-touched by this procedure; the deficiency here is the lost audit record, not a ledger
-mutation.)
-
-Bootstrap behaviour (`src-tauri/src/bootstrap.rs::ensure_bjj_authority`) makes this step
-mandatory, not optional:
-
-- The env-var tier does **not** compare the supplied key against the persisted pubkey. Starting
-  with a new `OLYMPUS_BJJ_AUTHORITY_KEY` succeeds, but `persist_bjj_pubkey` only fills NULL
-  columns — the authority row would silently keep the **old** pubkey.
-- The keychain and dev-column tiers **do** compare, and refuse to start on a mismatch.
-
-So, with the node stopped:
-
-```sql
--- One non-revoked authority row exists (unique index on public_key = '').
--- RETURNING makes the update fail closed: it must print exactly one row.
--- Zero rows means the predicate matched nothing, and restarting anyway
--- would leave the registry holding a pubkey the runtime no longer signs
--- under — abort, do not restart.
-UPDATE account_signing_keys
-SET bjj_pubkey_x = '<new_x_decimal>',
-    bjj_pubkey_y = '<new_y_decimal>',
-    bjj_private_dev = NULL
-WHERE user_id = '00000000-0000-0000-0000-000000000001'
-  AND purpose = 'authority' AND revoked_at IS NULL
-RETURNING key_id;
-```
-
-Proceed only if exactly one `key_id` is returned; on zero rows, stop and inspect the table
-(more than one is impossible under the unique index, but zero happens when the row was
-already revoked or the predicate is wrong).
-
-As stated above, this update-in-place is the stopgap, not the design — it loses the old row as
-an audit record, which is exactly what the planned supersession registry fixes.
+> authority key (the dev fallback when `OLYMPUS_CEREMONY_COORDINATOR_KEY` is unset), the old
+> key must stay valid at the **current wall-clock time** — manifest verification checks
+> issuer validity at now, not at issuance (see the coordinator trap below) — so add an env
+> override for it **without** `valid_until`. Production deployments are protected from this
+> coupling by the startup gate that refuses a coordinator key equal to the runtime authority
+> key (`src-tauri/src/startup.rs`, audit A-3), so this exception normally applies to dev/test
+> databases only.
 
 On **dev installs**, also update or clear the OS keychain entry (service `olympus-desktop`,
 account `bjj_authority_key`): a stale keychain entry deriving to the old pubkey will hard-fail

@@ -104,6 +104,23 @@ blake3_mod_p("OLY:REDACTION:OBJ:V1" || lp(obj_id) || obj_bytes)), 0)`) instead
 
 ### Added
 
+- **BJJ authority-key registry + in-band rotation (migration 0056).** The
+  authority row in `account_signing_keys` becomes a supersession
+  chain (identity columns immutable; one-shot lifecycle stamps on the
+  predecessor, the user signing-key pattern): `valid_from`/`valid_until`
+  windows, a partial unique index enforcing
+  at most one active authority, and `bootstrap::rotate_authority` performing
+  the revoke-and-insert supersession when the operator restarts with a new
+  `OLYMPUS_BJJ_AUTHORITY_KEY` plus the explicit
+  `OLYMPUS_AUTHORITY_ROTATION=confirm` opt-in (a mismatched env key without
+  the flag refuses startup, preserving the anti-accidental-swap guard). The
+  trusted-issuer set now unions the registry
+  (`load_trusted_issuers_with_registry`): retired keys stay trusted for
+  exactly their recorded window, so historical credentials keep verifying
+  with no hand-crafted `OLYMPUS_BJJ_TRUSTED_ISSUERS_JSON` entries — the env
+  var remains as an operator override (e.g. bounding a compromised key
+  earlier). An env-supplied key with no registry row now also creates one at
+  first boot. See `docs/key-rotation.md`.
 - **SBT credential expiry (signed, optional).** `POST /credentials` accepts
   `expires_at` (unix seconds, strictly future); the value is embedded into the
   JCS-canonicalized `details` object before `commit_id` is computed, so it is

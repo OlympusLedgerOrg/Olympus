@@ -236,6 +236,9 @@ const EXTERNAL_PG_COLUMN_GRANTS: &[ExternalPgColumnGrant] = &[
             "revoked_at",
             "replaced_by_key_id",
             "revoked_by_key_id",
+            // Authority-registry lifecycle stamp (migration 0056):
+            // rotate_authority windows the retired key at revocation time.
+            "valid_until",
         ],
     },
     ExternalPgColumnGrant {
@@ -341,15 +344,17 @@ const EXTERNAL_PG_ENUM_TYPES: &[&str] = &[
 /// `external_pg_semantic_inventory_digest`. This is populated from the
 /// reviewed v0.10.0 migration result and pins executable write semantics.
 ///
-/// Regenerated for migration `0055_ots_verification_stage_index`, which adds
-/// the partial index backing the OTS verification stage — 670 inventory rows
-/// before, 671 after. The previous value was
-/// `00e6953d2c0743c9b6011a22981317fa328e1556210dd787f12acef97236f9fd` (itself
-/// set by `0054_immutable_ots_evidence`, 667 -> 670). Each regeneration is
-/// validated by re-applying the migration set *without* the new migration and
-/// confirming it still reproduces the prior constant exactly.
+/// Regenerated for migration `0056_authority_key_registry`, which adds the
+/// `valid_from` / `valid_until` authority-window columns and the
+/// single-active-authority partial index — 671 inventory rows before, 674
+/// after. The previous value was
+/// `c0ed2338da1dfafaca148d46406f464e420f05a55cc805c6a1c1af05a391f1ce` (itself
+/// set by `0055_ots_verification_stage_index`, 670 -> 671). Each regeneration
+/// is validated by re-applying the migration set *without* the new migration
+/// and confirming it still reproduces the prior constant exactly — see the
+/// `regen_semantic_inventory_digest` ignored maintenance test below.
 const EXTERNAL_PG_SEMANTIC_INVENTORY_BLAKE3: &str =
-    "c0ed2338da1dfafaca148d46406f464e420f05a55cc805c6a1c1af05a391f1ce";
+    "3acd13debe1ec1ee801f782027e210e84142191958c7f1a90760533a6d46860e";
 const INSTANCE_LOCK_FILE: &str = "embedded-postgres.lock";
 
 static EMBEDDED_POSTGRES_REAPER: OnceLock<Mutex<Vec<ArmedPostgres>>> = OnceLock::new();
@@ -5949,6 +5954,42 @@ mod tests {
             external_pg_maintenance_lock_key(41),
             external_pg_maintenance_lock_key(42),
         );
+    }
+
+    /// Maintenance helper, not a gate: recomputes the semantic-inventory
+    /// digest against an operator-supplied database so the pinned
+    /// `EXTERNAL_PG_SEMANTIC_INVENTORY_BLAKE3` constant can be regenerated
+    /// after a reviewed migration. Follow the constant's doc comment
+    /// protocol: run once against the migration set *without* the new
+    /// migration (must reproduce the prior constant exactly), then against
+    /// the full set to obtain the new value.
+    ///
+    /// ```text
+    /// OLYMPUS_INVENTORY_REGEN_URL=postgres://user:pass@host/db \
+    ///   cargo test -p olympus-desktop --lib \
+    ///   regen_semantic_inventory_digest -- --ignored --nocapture
+    /// ```
+    #[tokio::test]
+    #[ignore = "maintenance helper — needs OLYMPUS_INVENTORY_REGEN_URL"]
+    async fn regen_semantic_inventory_digest() {
+        let url = std::env::var("OLYMPUS_INVENTORY_REGEN_URL")
+            .expect("set OLYMPUS_INVENTORY_REGEN_URL to the migrated database");
+        let pool = sqlx::PgPool::connect(&url).await.expect("connect");
+        // Apply the embedded migration set with the same migrator the app
+        // uses, so the inventory includes `_sqlx_migrations` exactly as a
+        // real deployment's catalog does (psql-applied migrations would come
+        // up 9 rows short: that table, its columns, and its pkey objects).
+        sqlx::migrate!("../migrations")
+            .run(&pool)
+            .await
+            .expect("apply migrations");
+        let rows =
+            sqlx::query_as::<_, ExternalPgSemanticInventoryRow>(EXTERNAL_PG_SEMANTIC_INVENTORY_SQL)
+                .fetch_all(&pool)
+                .await
+                .expect("inventory query");
+        println!("inventory rows: {}", rows.len());
+        println!("digest: {}", external_pg_semantic_inventory_digest(&rows));
     }
 
     #[test]
