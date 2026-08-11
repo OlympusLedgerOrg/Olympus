@@ -141,7 +141,7 @@ async fn rotate_authority_supersedes_append_only_and_windows_history() {
         "the now-covering bounded entry must be a successor, not the original"
     );
 
-    // Key reuse (A→B→A shape): rotate back to B — the registry then holds
+    // Key reuse (A→B→C→B shape): rotate back to B — the registry then holds
     // two disjoint intervals for B's coordinates. Every consumer scans the
     // whole set with `covers`, so both must surface, and the loader called
     // the way startup calls it (with the active primary) must tighten the

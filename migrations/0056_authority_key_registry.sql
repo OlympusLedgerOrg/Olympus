@@ -21,8 +21,8 @@
 -- same ones the external-PG DML contract whitelists for UPDATE; the
 -- ADR-0031 insert-only invariant governs ledger tables, not this registry.)
 
-ALTER TABLE account_signing_keys ADD COLUMN valid_from TIMESTAMPTZ;
-ALTER TABLE account_signing_keys ADD COLUMN valid_until TIMESTAMPTZ;
+ALTER TABLE account_signing_keys ADD COLUMN IF NOT EXISTS valid_from TIMESTAMPTZ;
+ALTER TABLE account_signing_keys ADD COLUMN IF NOT EXISTS valid_until TIMESTAMPTZ;
 
 DROP INDEX IF EXISTS ix_account_signing_keys_public_key;
 CREATE UNIQUE INDEX IF NOT EXISTS ix_account_signing_keys_public_key
