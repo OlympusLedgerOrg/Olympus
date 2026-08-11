@@ -6,6 +6,15 @@ All notable changes to the Olympus protocol are documented in this file.
 
 ### Added
 
+- **ADR-0043: local secret storage and recovery (research/design).**
+  Records the survey and proposed posture for where node-local key material
+  physically lives: OS-keychain-first (keyring v4 binary entries) with an
+  Argon2id + XChaCha20-Poly1305 encrypted-blob fallback that doubles as the
+  escrow/recovery artifact, TPM 2.0 / Secure Enclave / WebAuthn-PRF as an
+  explicit future hardening tier, and a complete migration inventory of every
+  call site touching raw secret bytes (the V6-audit zeroize gaps). Design
+  note only — no storage code or `AppState`/signing-path changes.
+
 - **Signed timestamps make validity windows evaluate at signing time
   (key-rotation series, part 6).** Two artifacts previously carried
   timestamps their signatures did not cover, forcing trust-window checks to
