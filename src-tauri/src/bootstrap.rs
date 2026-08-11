@@ -229,8 +229,47 @@ async fn ensure_bjj_authority(pool: &PgPool) -> Result<BootstrapResult, String> 
         key.copy_from_slice(&bytes);
         let pubkey =
             BabyJubJubPubKey::from_private(&key).map_err(|e| format!("BJJ key derivation: {e}"))?;
-        persist_bjj_pubkey(pool, &pubkey).await;
-        tracing::info!("bootstrap: BJJ authority loaded from env");
+        // Reconcile the env-supplied key against the authority registry
+        // (migration 0056). Three cases:
+        //   * no active registry row → first boot with an env key: insert the
+        //     row so the registry (and the registry-driven trusted-issuer
+        //     set) knows the authority from day one;
+        //   * active row matches → normal restart, nothing to do;
+        //   * active row differs → a key CHANGE. Refused unless the operator
+        //     explicitly opted in with OLYMPUS_AUTHORITY_ROTATION=confirm, in
+        //     which case the registry records an append-only supersession
+        //     (old row revoked + windowed + replaced_by_key_id → new row).
+        //     The refusal keeps the pre-registry anti-accidental-swap
+        //     property: a pasted wrong key must not silently become the
+        //     signing authority.
+        match stored_authority_pubkey(pool).await? {
+            None => {
+                insert_authority_row(pool, &pubkey, None).await?;
+                tracing::info!("bootstrap: BJJ authority loaded from env (registry row created)");
+            }
+            Some((sx, sy)) if sx == fr_to_decimal(&pubkey.x) && sy == fr_to_decimal(&pubkey.y) => {
+                if authority_rotation_confirmed() {
+                    tracing::warn!(
+                        "bootstrap: OLYMPUS_AUTHORITY_ROTATION=confirm is set but the env key \
+                         already matches the active authority — unset the flag; leaving it set \
+                         would silently authorise a future accidental key swap"
+                    );
+                }
+                tracing::info!("bootstrap: BJJ authority loaded from env");
+            }
+            Some(_) => {
+                if !authority_rotation_confirmed() {
+                    return Err(
+                        "OLYMPUS_BJJ_AUTHORITY_KEY derives to a different pubkey than the \
+                         active authority in account_signing_keys. If this is a deliberate \
+                         rotation, follow docs/key-rotation.md and restart with \
+                         OLYMPUS_AUTHORITY_ROTATION=confirm; otherwise the env var is wrong."
+                            .into(),
+                    );
+                }
+                rotate_authority(pool, &pubkey).await?;
+            }
+        }
         return Ok(BootstrapResult {
             bjj_authority_key: key,
             bjj_authority_pubkey: pubkey,
@@ -399,21 +438,8 @@ async fn ensure_bjj_authority(pool: &PgPool) -> Result<BootstrapResult, String> 
 
     // Insert authority row. In dev, store the secret so subsequent runs
     // self-bootstrap; in production, leave bjj_private_dev NULL.
-    let key_id = Uuid::new_v4().to_string();
     let secret_for_insert: Option<&[u8]> = if is_production { None } else { Some(&key) };
-    sqlx::query(
-        "INSERT INTO account_signing_keys
-             (key_id, user_id, public_key, label, purpose, created_at, bjj_pubkey_x, bjj_pubkey_y, bjj_private_dev)
-         VALUES ($1, $2, '', 'bjj-authority', 'authority', NOW(), $3, $4, $5)",
-    )
-    .bind(&key_id)
-    .bind(SYSTEM_USER_ID)
-    .bind(fr_to_decimal(&pubkey.x))
-    .bind(fr_to_decimal(&pubkey.y))
-    .bind(secret_for_insert)
-    .execute(pool)
-    .await
-    .map_err(|e| format!("insert signing key: {e}"))?;
+    insert_authority_row(pool, &pubkey, secret_for_insert).await?;
 
     persist_bjj_pubkey(pool, &pubkey).await;
 
@@ -460,6 +486,109 @@ async fn stored_authority_pubkey(pool: &PgPool) -> Result<Option<(String, String
     .fetch_optional(pool)
     .await
     .map_err(|e| format!("DB error checking BJJ pubkey: {e}"))
+}
+
+/// `OLYMPUS_AUTHORITY_ROTATION=confirm` is the one-shot operator opt-in for
+/// an authority-key change (docs/key-rotation.md). Anything else — unset,
+/// empty, other values — refuses a mismatched env key, preserving the
+/// anti-accidental-swap property.
+fn authority_rotation_confirmed() -> bool {
+    std::env::var("OLYMPUS_AUTHORITY_ROTATION")
+        .is_ok_and(|v| v.trim().eq_ignore_ascii_case("confirm"))
+}
+
+/// Insert a fresh (non-superseding) authority registry row. `valid_from` is
+/// left NULL — unbounded past — matching every pre-registry row, so
+/// credentials issued before the row existed still fall inside its window.
+async fn insert_authority_row(
+    pool: &PgPool,
+    pubkey: &BabyJubJubPubKey,
+    secret: Option<&[u8]>,
+) -> Result<String, String> {
+    let key_id = Uuid::new_v4().to_string();
+    sqlx::query(
+        "INSERT INTO account_signing_keys
+             (key_id, user_id, public_key, label, purpose, created_at, bjj_pubkey_x, bjj_pubkey_y, bjj_private_dev)
+         VALUES ($1, $2, '', 'bjj-authority', 'authority', NOW(), $3, $4, $5)",
+    )
+    .bind(&key_id)
+    .bind(SYSTEM_USER_ID)
+    .bind(fr_to_decimal(&pubkey.x))
+    .bind(fr_to_decimal(&pubkey.y))
+    .bind(secret)
+    .execute(pool)
+    .await
+    .map_err(|e| format!("insert authority row: {e}"))?;
+    Ok(key_id)
+}
+
+/// Append-only authority supersession (docs/key-rotation.md, migration 0056):
+/// in one transaction, revoke the active authority row (`revoked_at` +
+/// `valid_until` = NOW(), `replaced_by_key_id` = successor) and insert the
+/// successor with `valid_from` = NOW(). Historical rows are never updated in
+/// place, so the registry keeps the full audit chain, and the
+/// registry-driven trusted-issuer loader
+/// (`trusted_issuers::load_trusted_issuers_with_registry`) automatically
+/// windows the retired key for historical credential verification.
+///
+/// `pub` because it is the sanctioned rotation entry point: reached from the
+/// env tier under `OLYMPUS_AUTHORITY_ROTATION=confirm`, and exercised
+/// directly by the rotation integration tests.
+pub async fn rotate_authority(
+    pool: &PgPool,
+    new_pubkey: &BabyJubJubPubKey,
+) -> Result<String, String> {
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| format!("rotate_authority: begin: {e}"))?;
+    let new_key_id = Uuid::new_v4().to_string();
+    // Revoke the active row first — the single-active-authority partial
+    // unique index (migration 0056) would otherwise reject the successor.
+    let revoked: Option<(String, Option<String>, Option<String>)> = sqlx::query_as(
+        "UPDATE account_signing_keys
+            SET revoked_at = NOW(), valid_until = NOW(), replaced_by_key_id = $1
+          WHERE purpose = 'authority' AND revoked_at IS NULL
+        RETURNING key_id, bjj_pubkey_x, bjj_pubkey_y",
+    )
+    .bind(&new_key_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|e| format!("rotate_authority: revoke active row: {e}"))?;
+    let Some((old_key_id, old_x, old_y)) = revoked else {
+        return Err(
+            "rotate_authority: no active authority row to supersede — use the normal \
+             bootstrap path for a first key"
+                .into(),
+        );
+    };
+    sqlx::query(
+        "INSERT INTO account_signing_keys
+             (key_id, user_id, public_key, label, purpose, created_at, valid_from, bjj_pubkey_x, bjj_pubkey_y)
+         VALUES ($1, $2, '', 'bjj-authority', 'authority', NOW(), NOW(), $3, $4)",
+    )
+    .bind(&new_key_id)
+    .bind(SYSTEM_USER_ID)
+    .bind(fr_to_decimal(&new_pubkey.x))
+    .bind(fr_to_decimal(&new_pubkey.y))
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| format!("rotate_authority: insert successor: {e}"))?;
+    tx.commit()
+        .await
+        .map_err(|e| format!("rotate_authority: commit: {e}"))?;
+    tracing::warn!(
+        old_key_id = %old_key_id,
+        new_key_id = %new_key_id,
+        old_pubkey_x = old_x.as_deref().unwrap_or("<none>"),
+        old_pubkey_y = old_y.as_deref().unwrap_or("<none>"),
+        "bootstrap: BJJ AUTHORITY ROTATED — predecessor revoked and windowed \
+         (valid_until = now); unset OLYMPUS_AUTHORITY_ROTATION after this \
+         restart. Historical credentials verify via the registry window; see \
+         docs/key-rotation.md for the remaining manual steps (escrow, \
+         keychain on dev installs)."
+    );
+    Ok(new_key_id)
 }
 
 async fn persist_bjj_pubkey(pool: &PgPool, pubkey: &BabyJubJubPubKey) {

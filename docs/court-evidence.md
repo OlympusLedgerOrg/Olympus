@@ -75,21 +75,21 @@ re-verify the cryptography on the opposing party's own hardware.
 > **Anchoring is conditional on operator configuration.** Each of the
 > three backends fires only when its env var is set:
 >
-> | Backend | Enable via |
-> |---|---|
-> | RFC 3161 | `OLYMPUS_ANCHOR_RFC3161_URL` |
-> | Sigstore Rekor | `OLYMPUS_ANCHOR_REKOR_URL` |
+> | Backend        | Enable via                                                                                                                     |
+> | -------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+> | RFC 3161       | `OLYMPUS_ANCHOR_RFC3161_URL`                                                                                                   |
+> | Sigstore Rekor | `OLYMPUS_ANCHOR_REKOR_URL`                                                                                                     |
 > | OpenTimestamps | `OLYMPUS_ANCHOR_OTS_CALENDARS` **and** an operator-reviewed Bitcoin Core header export in `OLYMPUS_ANCHOR_OTS_BITCOIN_HEADERS` |
 >
 > If none are set, the anchor cron logs `anchor cron: no
-> OLYMPUS_ANCHOR_* URLs configured; starting producer-only mode` and
+OLYMPUS_ANCHOR_* URLs configured; starting producer-only mode` and
 > the `anchor_receipts` table stays empty. Confirm against your
 > operator's deployment config before relying on the §3 receipts.
 
 > **Version scope — read first.** The in-node checks in the left column
 > land with PRs **#1058**, **#1061**, **#1160**, and **#1165** (the
 > `own_checkpoints` unification that made the anchor cron actually run
-> for the first time). A binary built *before* those merge performs
+> for the first time). A binary built _before_ those merge performs
 > **none** of the online checks: it submits each receipt and stores it
 > verbatim — no nonce-echo comparison, no Rekor SET verification, no OTS
 > upgrade cron — and on a pre-#1165 build the anchor cron is silently
@@ -99,14 +99,15 @@ re-verify the cryptography on the opposing party's own hardware.
 > rows on such a build, and `anchor_receipts` itself will be empty. On
 > such a build the entire evidentiary weight rests on the **offline**
 > tools in the right column. Confirm your node includes #1058 + #1061
-> + #1165 before relying on the online column or the `metadata.*`
-> checklist at the end of this section.
+>
+> - #1165 before relying on the online column or the `metadata.*`
+>   checklist at the end of this section.
 
-| Anchor | Online (in-node) check | Offline tool — required for full proof |
-|---|---|---|
-| **RFC 3161 TSA** | Submission, strict message-imprint + nonce checks, CMS signature and ESS signer-certificate verification, and X.509 chain validation with the timestamp-signing certificate purpose at token `genTime`. Windows requires operator-reviewed PEM/DER roots listed in `OLYMPUS_ANCHOR_RFC3161_TRUST_ROOTS` and does not use the current-user ROOT store; Unix retains system roots and can add the same pinned roots. Invalid receipts are not stored. | `openssl ts -verify` against the TSA cert chain remains the independent expert-witness cross-check on a separate verification host; the Windows application verifier itself has no OpenSSL dependency. |
-| **Sigstore Rekor** | Submission, response shape parse, **signedEntryTimestamp ECDSA-P-256 verification** (audit M-A2 — refuses unsigned-by-log receipts). The log key is resolved from the vendored Sigstore trust root (`src-tauri/vendor/sigstore/trusted_root.json`) by the entry's own `logID`, checked against that key's validity window at the entry's `integratedTime`; `OLYMPUS_ANCHOR_REKOR_PUBKEY_PEM` overrides it and remains the way to point at a private Rekor. If neither resolves, production refuses to store the receipt and dev stores it with `metadata.set_verified=false` plus a warning. Receipt responses are capped at 10 MiB and error diagnostics at 8 KiB. | `rekor-cli get --uuid <UUID>` to confirm the entry is still in the log + verifiable inclusion proof |
-| **OpenTimestamps** | Submission (pending receipt) + **periodic upgrade cron** (default 6h). Durable leases deduplicate submissions by kind/hash/target and rotate pending upgrades through bounded backoff instead of retrying the same oldest rows. The cron parses and merges the exact commitment-rooted receipt tree, then looks up the terminal height in the operator-pinned mainnet header manifest. It recomputes the 80-byte header hash, enforces the mainnet proof-of-work target bound, verifies the header's own proof of work, and requires the OTS terminal message to equal the header's raw Merkle-root field. Only then does it insert an immutable successor with `bitcoin_attestation_verified=true` and a non-NULL `verified_at`; absent, stale, malformed, or mismatching header data leaves the receipt pending. Receipt responses are capped at 10 MiB and error diagnostics at 8 KiB. | `ots verify <receipt>` against an independently maintained Bitcoin Core node remains the recommended independent reproduction. |
+| Anchor             | Online (in-node) check                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | Offline tool — required for full proof                                                                                                                                                                 |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **RFC 3161 TSA**   | Submission, strict message-imprint + nonce checks, CMS signature and ESS signer-certificate verification, and X.509 chain validation with the timestamp-signing certificate purpose at token `genTime`. Windows requires operator-reviewed PEM/DER roots listed in `OLYMPUS_ANCHOR_RFC3161_TRUST_ROOTS` and does not use the current-user ROOT store; Unix retains system roots and can add the same pinned roots. Invalid receipts are not stored.                                                                                                                                                                                                                                                                                                                                                                                                                                       | `openssl ts -verify` against the TSA cert chain remains the independent expert-witness cross-check on a separate verification host; the Windows application verifier itself has no OpenSSL dependency. |
+| **Sigstore Rekor** | Submission, response shape parse, **signedEntryTimestamp ECDSA-P-256 verification** (audit M-A2 — refuses unsigned-by-log receipts). The log key is resolved from the vendored Sigstore trust root (`src-tauri/vendor/sigstore/trusted_root.json`) by the entry's own `logID`, checked against that key's validity window at the entry's `integratedTime`; `OLYMPUS_ANCHOR_REKOR_PUBKEY_PEM` overrides it and remains the way to point at a private Rekor. If neither resolves, production refuses to store the receipt and dev stores it with `metadata.set_verified=false` plus a warning. Receipt responses are capped at 10 MiB and error diagnostics at 8 KiB.                                                                                                                                                                                                                       | `rekor-cli get --uuid <UUID>` to confirm the entry is still in the log + verifiable inclusion proof                                                                                                    |
+| **OpenTimestamps** | Submission (pending receipt) + **periodic upgrade cron** (default 6h). Durable leases deduplicate submissions by kind/hash/target and rotate pending upgrades through bounded backoff instead of retrying the same oldest rows. The cron parses and merges the exact commitment-rooted receipt tree, then looks up the terminal height in the operator-pinned mainnet header manifest. It recomputes the 80-byte header hash, enforces the mainnet proof-of-work target bound, verifies the header's own proof of work, and requires the OTS terminal message to equal the header's raw Merkle-root field. Only then does it insert an immutable successor with `bitcoin_attestation_verified=true` and a non-NULL `verified_at`; absent, stale, malformed, or mismatching header data leaves the receipt pending. Receipt responses are capped at 10 MiB and error diagnostics at 8 KiB. | `ots verify <receipt>` against an independently maintained Bitcoin Core node remains the recommended independent reproduction.                                                                         |
 
 The trusted-header manifest is bounded to 16 MiB, reloaded on each upgrade tick,
 and has this strict schema:
@@ -144,13 +145,13 @@ available; Olympus reloads and revalidates it before leasing pending receipts.
 
 ## 2. The five claims, layered
 
-| # | Claim | What proves it |
-|---|---|---|
-| 1 | **The hash is well-formed** | BLAKE3 digest of a canonical (JCS/RFC 8785) representation of the source data. Same bytes on every machine. |
-| 2 | **The hash is included in a Merkle tree at a specific index** | Groth16 zero-knowledge inclusion proof produced by the `document_existence` circuit (`proofs/circuits/document_existence.circom`). Verifiable against the published verification key in `proofs/keys/verification_keys/document_existence_vkey.json`. |
-| 3 | **The scoped Merkle statement was signed by the Olympus node** | Two-layer signature: (a) **Baby Jubjub EdDSA-Poseidon** over the v2 statement digest binding format version, scope=`shard`, `shard_id`, root, tree size, timestamp, and authority hash; (b) **Ed25519** (RFC 8032) over `anchor_hash = BLAKE3(OLY:CHECKPOINT_ANCHOR:V2 \|\| version \|\| lp(scope) \|\| lp(shard) \|\| lp(root) \|\| size \|\| timestamp \|\| lp(authority) \|\| lp(sig_r8x_dec) \|\| lp(sig_r8y_dec) \|\| lp(sig_s_dec))`, pinned at emission time. Verifiable with the node's published Ed25519 key and BJJ authority pubkey (`(Ax, Ay)`). |
-| 4 | **The signed checkpoint existed by the timestamp** | Three independent anchors, see §1.1 for which checks fire online vs. offline and the env-var preconditions for each: <ul><li>**RFC 3161 TSA** — accredited authority signs `SHA-256(checkpoint)` at time `T`. Olympus enforces nonce-echo at submission; full cert-chain verification with `openssl ts -verify -in <receipt> -queryfile <hash> -CAfile <tsa-cert-chain>`.</li><li>**Sigstore Rekor** — append-only public transparency log. SET ECDSA verification at submission, against the log key resolved from the vendored Sigstore trust root by the entry's own `logID` (`OLYMPUS_ANCHOR_REKOR_PUBKEY_PEM` overrides it, for a private Rekor); independently verifiable via `rekor-cli get --uuid <UUID>`.</li><li>**OpenTimestamps** — the background cron (default 6h cadence) upgrades pending receipts only after finding a Bitcoin attestation on the expected branch. `metadata.phase == "upgraded"` records that structural claim; the operator must still run `ots verify <receipt> -f <file>` against Bitcoin before relying on it. No trust in the calendar is required after that independent verification succeeds.</li></ul> |
-| 5 | **The redaction was correct** _(when applicable)_ | ADR-0030 V3 signed-Merkle replay: the verifier parses the redacted artifact, derives segment spans from the artifact rather than trusting bundle offsets, recomputes every revealed leaf, checks deterministic destruction of redacted spans, folds the leaves to the signed `original_root`, and verifies the issuer Ed25519 signature over the segment table. |
+| #   | Claim                                                          | What proves it                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| --- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | **The hash is well-formed**                                    | BLAKE3 digest of a canonical (JCS/RFC 8785) representation of the source data. Same bytes on every machine.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| 2   | **The hash is included in a Merkle tree at a specific index**  | Groth16 zero-knowledge inclusion proof produced by the `document_existence` circuit (`proofs/circuits/document_existence.circom`). Verifiable against the published verification key in `proofs/keys/verification_keys/document_existence_vkey.json`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| 3   | **The scoped Merkle statement was signed by the Olympus node** | Two-layer signature: (a) **Baby Jubjub EdDSA-Poseidon** over the v2 statement digest binding format version, scope=`shard`, `shard_id`, root, tree size, timestamp, and authority hash; (b) **Ed25519** (RFC 8032) over `anchor_hash = BLAKE3(OLY:CHECKPOINT_ANCHOR:V2 \|\| version \|\| lp(scope) \|\| lp(shard) \|\| lp(root) \|\| size \|\| timestamp \|\| lp(authority) \|\| lp(sig_r8x_dec) \|\| lp(sig_r8y_dec) \|\| lp(sig_s_dec))`, pinned at emission time. Verifiable with the node's published Ed25519 key and BJJ authority pubkey (`(Ax, Ay)`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| 4   | **The signed checkpoint existed by the timestamp**             | Three independent anchors, see §1.1 for which checks fire online vs. offline and the env-var preconditions for each: <ul><li>**RFC 3161 TSA** — accredited authority signs `SHA-256(checkpoint)` at time `T`. Olympus enforces nonce-echo at submission; full cert-chain verification with `openssl ts -verify -in <receipt> -queryfile <hash> -CAfile <tsa-cert-chain>`.</li><li>**Sigstore Rekor** — append-only public transparency log. SET ECDSA verification at submission, against the log key resolved from the vendored Sigstore trust root by the entry's own `logID` (`OLYMPUS_ANCHOR_REKOR_PUBKEY_PEM` overrides it, for a private Rekor); independently verifiable via `rekor-cli get --uuid <UUID>`.</li><li>**OpenTimestamps** — the background cron (default 6h cadence) upgrades pending receipts only after finding a Bitcoin attestation on the expected branch. `metadata.phase == "upgraded"` records that structural claim; the operator must still run `ots verify <receipt> -f <file>` against Bitcoin before relying on it. No trust in the calendar is required after that independent verification succeeds.</li></ul> |
+| 5   | **The redaction was correct** _(when applicable)_              | ADR-0030 V3 signed-Merkle replay: the verifier parses the redacted artifact, derives segment spans from the artifact rather than trusting bundle offsets, recomputes every revealed leaf, checks deterministic destruction of redacted spans, folds the leaves to the signed `original_root`, and verifies the issuer Ed25519 signature over the segment table.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 
 Each row is independently verifiable. Any single row holding makes
 the corresponding claim true; **the full chain together is robust to
@@ -170,7 +171,7 @@ primitives so the math is checkable without trusting any Olympus code.
 
 > **Order of operations matters.** The JavaScript verifier in step 3
 > runs three checks itself (anchor-hash reconstruction, Ed25519,
-> BJJ-EdDSA-Poseidon) and *prints* the cargo invocation for the
+> BJJ-EdDSA-Poseidon) and _prints_ the cargo invocation for the
 > Groth16 step (step 2 / step 4 in `verify.js` output) without
 > running it. The line "All JS-side checks passed" means **checks
 > 1–3 of the JS verifier completed** — it does **not** mean the
@@ -255,17 +256,17 @@ TSA, the Rekor log, the OTS calendar / Bitcoin chain).
 
 ## 4. Cryptographic primitives and why they are admissible
 
-| Primitive | Standard | Peer review |
-|---|---|---|
-| BLAKE3 | BLAKE3 specification (O'Connor et al., 2020) | Wide adoption (cargo, GnuTLS, Wireguard tooling). No published attacks. |
-| Ed25519 | RFC 8032 | Used by SSH, TLS 1.3, signal, GPG modern, US government in NIST FIPS-186-5. |
+| Primitive                  | Standard                                                                                                                                                 | Peer review                                                                                                                                                                                                                                  |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| BLAKE3                     | BLAKE3 specification (O'Connor et al., 2020)                                                                                                             | Wide adoption (cargo, GnuTLS, Wireguard tooling). No published attacks.                                                                                                                                                                      |
+| Ed25519                    | RFC 8032                                                                                                                                                 | Used by SSH, TLS 1.3, signal, GPG modern, US government in NIST FIPS-186-5.                                                                                                                                                                  |
 | Baby Jubjub EdDSA-Poseidon | iden3 reference impl (Belles-Muñoz, Whitehat et al.); permissive re-implementation at [`crates/babyjubjub-permissive`](../crates/babyjubjub-permissive). | Used by Polygon Hermez, Iden3, Privacy & Scaling Explorations zkSNARK stack. The permissive crate is byte-for-byte compatible with the iden3 reference (parity tests in [`crates/babyjubjub-permissive/`](../crates/babyjubjub-permissive)). |
-| Poseidon (BN254) | Grassi, Khovratovich, Rechberger et al. 2019 (eprint 2019/458) | Standard ZK-friendly hash; deployed in Zcash, Polygon Hermez, Mina, dozens of zkSNARK projects. |
-| Groth16 | Groth 2016 (eprint 2016/260) | The de-facto SNARK system since 2016; used in Zcash Sapling, Tornado Cash, every major Circom-based deployment. |
-| RISC Zero zkVM | RISC-V execution proved with a STARK-based zkVM and recursive receipt compression | Open-source implementation and proof format; Olympus pins the guest program, toolchain version, builder image digest, and accepted receipt kind. |
-| RFC 3161 | IETF RFC 3161 (2001), updated by RFC 5816 | Accepted as evidence in US federal cases; **eIDAS-recognised in the EU** (Regulation 910/2014). |
-| Sigstore Rekor | Sigstore project (Linux Foundation / OpenSSF) | Used by PyPI, npm, RubyGems, Kubernetes for package signing. Public, auditable. |
-| OpenTimestamps | Todd 2016, currently maintained by the OTS project | Anchors via Bitcoin; Bitcoin transactions have themselves been admitted as evidence (e.g. *United States v. Costanzo*, 9th Cir. 2020). |
+| Poseidon (BN254)           | Grassi, Khovratovich, Rechberger et al. 2019 (eprint 2019/458)                                                                                           | Standard ZK-friendly hash; deployed in Zcash, Polygon Hermez, Mina, dozens of zkSNARK projects.                                                                                                                                              |
+| Groth16                    | Groth 2016 (eprint 2016/260)                                                                                                                             | The de-facto SNARK system since 2016; used in Zcash Sapling, Tornado Cash, every major Circom-based deployment.                                                                                                                              |
+| RISC Zero zkVM             | RISC-V execution proved with a STARK-based zkVM and recursive receipt compression                                                                        | Open-source implementation and proof format; Olympus pins the guest program, toolchain version, builder image digest, and accepted receipt kind.                                                                                             |
+| RFC 3161                   | IETF RFC 3161 (2001), updated by RFC 5816                                                                                                                | Accepted as evidence in US federal cases; **eIDAS-recognised in the EU** (Regulation 910/2014).                                                                                                                                              |
+| Sigstore Rekor             | Sigstore project (Linux Foundation / OpenSSF)                                                                                                            | Used by PyPI, npm, RubyGems, Kubernetes for package signing. Public, auditable.                                                                                                                                                              |
+| OpenTimestamps             | Todd 2016, currently maintained by the OTS project                                                                                                       | Anchors via Bitcoin; Bitcoin transactions have themselves been admitted as evidence (e.g. _United States v. Costanzo_, 9th Cir. 2020).                                                                                                       |
 
 All primitives are open standards with public peer review. None rely
 on novel or proprietary cryptography. Under the **Daubert** factors
@@ -299,7 +300,7 @@ circuit. Olympus uses a two-phase setup:
 **Why this matters to a court:** even a malicious contributor cannot
 forge proofs unless they collude with **every** other contributor.
 Standard Groth16 security: an adversary needs to know the
-trapdoor τ, which only exists if every Phase 1 contributor *and* every
+trapdoor τ, which only exists if every Phase 1 contributor _and_ every
 Phase 2 contributor was malicious and shared their entropy.
 
 ### 5.1 v0.10 ceremony status — explicit honesty
@@ -374,7 +375,7 @@ binary):
    - `ingest_records` permits exactly two narrow UPDATEs: one-shot
      attach of `zk_bundle` (NULL → set) and a snapshot-column
      back-fill that fills in `(snapshot_root, snapshot_index,
-     snapshot_size, snapshot_path)` for rows that pre-dated the
+snapshot_size, snapshot_path)` for rows that pre-dated the
      persistence migration.
    - `anchor_receipts` is append-only for **identity** (id,
      anchor_kind, anchored_hash, checkpoint_id, target,
@@ -392,8 +393,8 @@ binary):
    - `own_checkpoints` is strictly INSERT-only (PR
      [#1165](https://github.com/OlympusLedgerOrg/Olympus/pull/1165))
      plus a v2 scoped uniqueness constraint on `(format_version,
-     checkpoint_scope, shard_id, ledger_root, tree_size)` with `ON CONFLICT DO
-     NOTHING` (migration 0051). Equal snapshots in different shards do not
+checkpoint_scope, shard_id, ledger_root, tree_size)` with `ON CONFLICT DO
+NOTHING` (migration 0051). Equal snapshots in different shards do not
      collide, and no shard snapshot is labeled global.
      There is no UPDATE or DELETE path through application code.
 4. **Bundled receipts.** Every published checkpoint can be exported
@@ -419,26 +420,28 @@ binary):
 
 The Ed25519 signature in the bundle is **pinned at checkpoint
 emission time** in the `own_checkpoints` row (PR #1168 + migration
-0042); the BJJ authority pubkey coordinates `(Ax, Ay)` are also
-written into the bundle at export time from the *current* in-memory
-key, with a Poseidon-hash check that they match the row's stored
-`authority_pubkey_hash`. The bundle producer refuses to emit (409
-Conflict) if the current in-memory BJJ key doesn't match the row's
-stored hash.
+0042), and the BJJ authority pubkey coordinates `(Ax, Ay)` are read
+from the row's own pinned `authority_pubkey_x/y` columns — never from
+the node's current in-memory key — with a Poseidon-hash check that
+they match the row's stored `authority_pubkey_hash`. The producer
+refuses (409 Conflict) only when the row itself is internally
+inconsistent (missing pinned coordinates on a pre-pinning legacy row,
+or a coordinate/hash mismatch indicating tampering).
 
 Consequence for rotation:
 
 - Re-exporting an unchanged checkpoint row produces a byte-identical
   bundle.
-- After rotating the BJJ authority key, the bundle producer can no
-  longer export old checkpoints — they bound to the *old* pubkey,
-  whose Poseidon hash no longer matches the live key. To preserve
-  audit access, operators must retain the old BJJ private key (e.g.
-  in escrow) or export and archive all in-flight bundles before
-  rotating.
+- Rotating the BJJ authority key does **not** block export of old
+  checkpoints: each row carries its issuing pubkey, and the
+  authority-key registry (migration 0056) keeps the retired key in
+  the trusted-issuer set with a bounded validity window. Escrowing
+  the old private key remains prudent (it is the only way to ever
+  re-_sign_ anything historical), but it is no longer required merely
+  to export evidence.
 - After rotating the Ed25519 ingest signing key, the embedded
   signature in the bundle is still verifiable against the
-  `ed25519_pubkey_hex` field (which records the *issuing* pubkey).
+  `ed25519_pubkey_hex` field (which records the _issuing_ pubkey).
   But there is **no in-band revocation mechanism for compromised old
   keys** — if an old Ed25519 private key is later stolen, old
   bundles still verify against the embedded pubkey. Operators must
@@ -477,30 +480,30 @@ describe the threat model the code is hardened against; the
 
 ## 8. Anchoring infrastructure — file-level pointers for the expert witness
 
-| Concern | Source |
-|---|---|
-| `anchor_receipts` schema and durable retry/idempotency state | [`migrations/0026_add_anchor_receipts.sql`](../migrations/0026_add_anchor_receipts.sql) + [`migrations/0052_harden_anchor_retry_state.sql`](../migrations/0052_harden_anchor_retry_state.sql) |
-| `own_checkpoints` schema and v2 scope | [`migrations/0041_add_own_checkpoints.sql`](../migrations/0041_add_own_checkpoints.sql) + [`migrations/0042_own_checkpoints_ed25519_sig.sql`](../migrations/0042_own_checkpoints_ed25519_sig.sql) + [`migrations/0051_harden_checkpoint_identity.sql`](../migrations/0051_harden_checkpoint_identity.sql) |
-| Own-checkpoint producer | [`src-tauri/src/anchoring/own_checkpoint.rs`](../src-tauri/src/anchoring/own_checkpoint.rs) |
-| Anchor cron | [`src-tauri/src/anchoring/cron.rs`](../src-tauri/src/anchoring/cron.rs) |
-| RFC 3161 client implementation | [`src-tauri/src/anchoring/rfc3161.rs`](../src-tauri/src/anchoring/rfc3161.rs) |
-| RFC 3161 TSTInfo binding verification (audit M-A1) | [`src-tauri/src/anchoring/tstinfo.rs`](../src-tauri/src/anchoring/tstinfo.rs) |
-| Sigstore Rekor client | [`src-tauri/src/anchoring/rekor.rs`](../src-tauri/src/anchoring/rekor.rs) |
-| OpenTimestamps client (submit + upgrade) | [`src-tauri/src/anchoring/ots.rs`](../src-tauri/src/anchoring/ots.rs) |
-| OTS bounded Timestamp parser/merger | [`src-tauri/src/anchoring/ots_tree.rs`](../src-tauri/src/anchoring/ots_tree.rs) + [`src-tauri/src/anchoring/ots_format.rs`](../src-tauri/src/anchoring/ots_format.rs) |
-| OTS upgrade cron | [`src-tauri/src/anchoring/upgrade_cron.rs`](../src-tauri/src/anchoring/upgrade_cron.rs) |
-| Domain-separated v2 statement and anchor digests | `checkpoint_signing_message_v2` / `checkpoint_anchor_hash_v2` in [`src-tauri/src/anchoring/mod.rs`](../src-tauri/src/anchoring/mod.rs) |
-| Admin bundle export endpoint (PR #1168) | `GET /api/admin/checkpoints/{id}/bundle` in [`src-tauri/src/api/checkpoint_bundle.rs`](../src-tauri/src/api/checkpoint_bundle.rs) |
-| Bundle schema specification | [`docs/checkpoint-bundle-schema.md`](checkpoint-bundle-schema.md) |
-| Per-anchor receipt export | `GET /anchors/{id}/receipt` returns the raw receipt with the correct Content-Type for offline verification. |
-| Cross-language verifiers | [`verifiers/{rust,javascript}/`](../verifiers/) |
-| Standalone Groth16 verifier binary (PR #1167) | [`verifiers/rust/src/bin/verify.rs`](../verifiers/rust/src/bin/verify.rs) |
-| JS `verify-checkpoint --bundle` (PR #1168) | [`verifiers/javascript/verify.js`](../verifiers/javascript/verify.js) |
-| Trusted setup ceremony script | [`proofs/phase2_ceremony.sh`](../proofs/phase2_ceremony.sh) |
-| Dev / single-contributor setup script | [`proofs/setup_circuits.sh`](../proofs/setup_circuits.sh) |
-| Setup provenance manifest | [`proofs/keys/PROVENANCE.md`](../proofs/keys/PROVENANCE.md) |
-| Ceremony manifest verification (audit A-2/A-3/A-4) | [`src-tauri/src/startup.rs`](../src-tauri/src/startup.rs) — `apply_extra_prod_gates`, `verify_ceremony_manifests` |
-| Federation checkpoint binding (audit F-1 / F-RT-1) | [`src-tauri/src/federation/verify.rs`](../src-tauri/src/federation/verify.rs) — `verify_checkpoint_proof` |
+| Concern                                                      | Source                                                                                                                                                                                                                                                                                                    |
+| ------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `anchor_receipts` schema and durable retry/idempotency state | [`migrations/0026_add_anchor_receipts.sql`](../migrations/0026_add_anchor_receipts.sql) + [`migrations/0052_harden_anchor_retry_state.sql`](../migrations/0052_harden_anchor_retry_state.sql)                                                                                                             |
+| `own_checkpoints` schema and v2 scope                        | [`migrations/0041_add_own_checkpoints.sql`](../migrations/0041_add_own_checkpoints.sql) + [`migrations/0042_own_checkpoints_ed25519_sig.sql`](../migrations/0042_own_checkpoints_ed25519_sig.sql) + [`migrations/0051_harden_checkpoint_identity.sql`](../migrations/0051_harden_checkpoint_identity.sql) |
+| Own-checkpoint producer                                      | [`src-tauri/src/anchoring/own_checkpoint.rs`](../src-tauri/src/anchoring/own_checkpoint.rs)                                                                                                                                                                                                               |
+| Anchor cron                                                  | [`src-tauri/src/anchoring/cron.rs`](../src-tauri/src/anchoring/cron.rs)                                                                                                                                                                                                                                   |
+| RFC 3161 client implementation                               | [`src-tauri/src/anchoring/rfc3161.rs`](../src-tauri/src/anchoring/rfc3161.rs)                                                                                                                                                                                                                             |
+| RFC 3161 TSTInfo binding verification (audit M-A1)           | [`src-tauri/src/anchoring/tstinfo.rs`](../src-tauri/src/anchoring/tstinfo.rs)                                                                                                                                                                                                                             |
+| Sigstore Rekor client                                        | [`src-tauri/src/anchoring/rekor.rs`](../src-tauri/src/anchoring/rekor.rs)                                                                                                                                                                                                                                 |
+| OpenTimestamps client (submit + upgrade)                     | [`src-tauri/src/anchoring/ots.rs`](../src-tauri/src/anchoring/ots.rs)                                                                                                                                                                                                                                     |
+| OTS bounded Timestamp parser/merger                          | [`src-tauri/src/anchoring/ots_tree.rs`](../src-tauri/src/anchoring/ots_tree.rs) + [`src-tauri/src/anchoring/ots_format.rs`](../src-tauri/src/anchoring/ots_format.rs)                                                                                                                                     |
+| OTS upgrade cron                                             | [`src-tauri/src/anchoring/upgrade_cron.rs`](../src-tauri/src/anchoring/upgrade_cron.rs)                                                                                                                                                                                                                   |
+| Domain-separated v2 statement and anchor digests             | `checkpoint_signing_message_v2` / `checkpoint_anchor_hash_v2` in [`src-tauri/src/anchoring/mod.rs`](../src-tauri/src/anchoring/mod.rs)                                                                                                                                                                    |
+| Admin bundle export endpoint (PR #1168)                      | `GET /api/admin/checkpoints/{id}/bundle` in [`src-tauri/src/api/checkpoint_bundle.rs`](../src-tauri/src/api/checkpoint_bundle.rs)                                                                                                                                                                         |
+| Bundle schema specification                                  | [`docs/checkpoint-bundle-schema.md`](checkpoint-bundle-schema.md)                                                                                                                                                                                                                                         |
+| Per-anchor receipt export                                    | `GET /anchors/{id}/receipt` returns the raw receipt with the correct Content-Type for offline verification.                                                                                                                                                                                               |
+| Cross-language verifiers                                     | [`verifiers/{rust,javascript}/`](../verifiers/)                                                                                                                                                                                                                                                           |
+| Standalone Groth16 verifier binary (PR #1167)                | [`verifiers/rust/src/bin/verify.rs`](../verifiers/rust/src/bin/verify.rs)                                                                                                                                                                                                                                 |
+| JS `verify-checkpoint --bundle` (PR #1168)                   | [`verifiers/javascript/verify.js`](../verifiers/javascript/verify.js)                                                                                                                                                                                                                                     |
+| Trusted setup ceremony script                                | [`proofs/phase2_ceremony.sh`](../proofs/phase2_ceremony.sh)                                                                                                                                                                                                                                               |
+| Dev / single-contributor setup script                        | [`proofs/setup_circuits.sh`](../proofs/setup_circuits.sh)                                                                                                                                                                                                                                                 |
+| Setup provenance manifest                                    | [`proofs/keys/PROVENANCE.md`](../proofs/keys/PROVENANCE.md)                                                                                                                                                                                                                                               |
+| Ceremony manifest verification (audit A-2/A-3/A-4)           | [`src-tauri/src/startup.rs`](../src-tauri/src/startup.rs) — `apply_extra_prod_gates`, `verify_ceremony_manifests`                                                                                                                                                                                         |
+| Federation checkpoint binding (audit F-1 / F-RT-1)           | [`src-tauri/src/federation/verify.rs`](../src-tauri/src/federation/verify.rs) — `verify_checkpoint_proof`                                                                                                                                                                                                 |
 
 ---
 

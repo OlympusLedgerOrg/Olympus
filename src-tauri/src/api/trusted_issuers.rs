@@ -127,6 +127,72 @@ pub fn load_trusted_issuers(primary: Option<&BabyJubJubPubKey>) -> Vec<TrustedIs
     out
 }
 
+/// Load the full trusted-issuer set: bootstrap primary (entry 0, unbounded)
+/// → env-var entries (operator overrides win over registry rows on the same
+/// pubkey via first-wins dedup) → authority-registry rows from
+/// `account_signing_keys` (the supersession chain written by
+/// `bootstrap::rotate_authority`; migration 0056). Registry rows carry their
+/// `valid_from`/`valid_until` windows — a revoked predecessor falls back to
+/// `revoked_at` as its upper bound when `valid_until` was never stamped — so
+/// credentials issued under a retired authority keep verifying without the
+/// operator hand-crafting `OLYMPUS_BJJ_TRUSTED_ISSUERS_JSON` entries.
+pub async fn load_trusted_issuers_with_registry(
+    primary: Option<&BabyJubJubPubKey>,
+    pool: Option<&sqlx::PgPool>,
+) -> Vec<TrustedIssuer> {
+    let mut out = load_trusted_issuers(primary);
+    let Some(pool) = pool else {
+        return out;
+    };
+    /// `(x_dec, y_dec, valid_from, valid_until, revoked_at)` as stored on an
+    /// authority registry row.
+    type RegistryRow = (
+        String,
+        String,
+        Option<chrono::DateTime<chrono::Utc>>,
+        Option<chrono::DateTime<chrono::Utc>>,
+        Option<chrono::DateTime<chrono::Utc>>,
+    );
+    let rows: Vec<RegistryRow> = match sqlx::query_as(
+        "SELECT bjj_pubkey_x, bjj_pubkey_y, valid_from, valid_until, revoked_at
+           FROM account_signing_keys
+          WHERE purpose = 'authority' AND bjj_pubkey_x IS NOT NULL",
+    )
+    .fetch_all(pool)
+    .await
+    {
+        Ok(rows) => rows,
+        Err(e) => {
+            tracing::warn!("trusted_issuers: registry query failed ({e}) — env-only set in use");
+            return out;
+        }
+    };
+    for (x, y, valid_from, valid_until, revoked_at) in rows {
+        let entry = RawEntry {
+            x,
+            y,
+            valid_from: valid_from.map(|t| t.timestamp()),
+            valid_until: valid_until.or(revoked_at).map(|t| t.timestamp()),
+        };
+        let Some(issuer) = parse_entry(&entry) else {
+            tracing::warn!(
+                "trusted_issuers: dropping malformed registry row (x={}, y={})",
+                entry.x,
+                entry.y
+            );
+            continue;
+        };
+        if out
+            .iter()
+            .any(|i| i.x_dec == issuer.x_dec && i.y_dec == issuer.y_dec)
+        {
+            continue;
+        }
+        out.push(issuer);
+    }
+    out
+}
+
 fn parse_entry(e: &RawEntry) -> Option<TrustedIssuer> {
     use crate::api::credentials::parse_fr_decimal;
     let x = parse_fr_decimal(&e.x)?;
