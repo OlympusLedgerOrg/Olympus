@@ -1,8 +1,9 @@
 # ADR-0043: Local secret storage and recovery — OS-keychain-first with encrypted-blob fallback
 
-- **Status:** Proposed (2026-08-11) — research/design only. This ADR records a
-  survey, a proposed posture, and a migration inventory. It makes **no** source
-  change to `AppState` or any signing path; implementation is follow-up work.
+- **Status:** Proposed (2026-08-11; research/design only)
+- **Scope note:** this ADR records a survey, a proposed posture, and a
+  migration inventory. It makes **no** source change to `AppState` or any
+  signing path; implementation is follow-up work.
 - **Decision owners:** Olympus maintainers
 - **Security boundary:** at-rest custody and in-memory handling of node-local
   long-lived secrets — the BJJ authority key, the Ed25519 ingest signing key,
