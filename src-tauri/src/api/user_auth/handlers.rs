@@ -119,6 +119,16 @@ pub(super) async fn register(
     let scopes = validate_scopes(&body.scopes, &allowed, "register")?;
     let expires = parse_expires(&body.expires_at)?;
 
+    if bootstrap_admin {
+        // Loud by design: this is a one-shot trust-bootstrap decision made
+        // implicitly (first registered user + no OLYMPUS_ADMIN_KEY configured),
+        // and the operator should be able to find it in the logs afterwards.
+        tracing::warn!(
+            "auth: first registered user granted the admin role because \
+             OLYMPUS_ADMIN_KEY is not configured — set OLYMPUS_ADMIN_KEY before \
+             exposing registration to disable public admin bootstrap"
+        );
+    }
     let role = if bootstrap_admin { "admin" } else { "user" };
     let (user_id, key_id, raw_key) = create_user_with_key(
         &mut tx,

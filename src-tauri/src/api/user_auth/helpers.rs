@@ -38,7 +38,12 @@ pub(super) const KEY_DEFAULT_SCOPES: &[&str] = &["ingest", "verify"];
 /// ISO-8601 datetime in the future.
 pub(super) const DEFAULT_EXPIRY_DAYS: i64 = 90;
 
-pub(super) const VALID_SCOPES: &[&str] = &["read", "write", "ingest", "commit", "verify", "admin"];
+// Aliases the crate-wide list (which includes `prove`); the policy subsets
+// below are unchanged, so `prove` is now a *known* scope on `/auth/*` routes
+// (previously a 400/422 "unknown scope") but is grantable only where the
+// allowed-set for the route contains it: bootstrap-admin registration and
+// detached keys minted from a caller whose own scopes include it.
+pub(super) const VALID_SCOPES: &[&str] = crate::api::middleware::auth::VALID_API_SCOPES;
 pub(super) const SELF_SERVICE_SCOPES: &[&str] = &["read", "verify"];
 pub(super) const PRIVILEGED_SCOPES: &[&str] = &["ingest", "commit", "write", "admin"];
 

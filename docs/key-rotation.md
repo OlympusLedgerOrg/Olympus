@@ -22,7 +22,7 @@ bundle export that you must handle **before** rotating, not after.
 
 | Key | Purpose | Persistence | Rotation today |
 | --- | --- | --- | --- |
-| `OLYMPUS_BJJ_AUTHORITY_KEY` | SBT/credential signing, checkpoint attestations, trusted-issuer entry 0 | Env var (production); OS keychain; dev DB column | Manual procedure below |
+| `OLYMPUS_BJJ_AUTHORITY_KEY` | SBT/credential signing, checkpoint attestations, trusted-issuer entry 0 | Env var (production's sole surface); OS keychain and DB column (dev only) | Manual procedure below |
 | `OLYMPUS_INGEST_SIGNING_KEY` | Ed25519 shard/redaction/snapshot signing | Env var only; Olympus never persists it — operator escrow in a secret manager is the required durable copy | Manual procedure below |
 | `OLYMPUS_ANCHOR_SIGN_KEY` | Ed25519 anchoring/receipt signing | Env var; **falls back to the ingest key when unset** | Same as ingest key |
 | `OLYMPUS_ADMIN_KEY` | `x-admin-key` break-glass admin header | Env var | Restart with new value |
@@ -116,9 +116,11 @@ scheme (the schema has `revoked_at` / `replaced_by_key_id`, but the singular aut
 the unique index on `public_key` prevent a supersession chain today). Keep your own rotation log
 until the registry work on the roadmap lands.
 
-Also update or clear the **OS keychain** entry (service `olympus-desktop`, account
-`bjj_authority_key`): a stale keychain entry deriving to the old pubkey will hard-fail startup
-with "keychain-key/pubkey mismatch" the moment the env var is absent.
+On **dev installs**, also update or clear the OS keychain entry (service `olympus-desktop`,
+account `bjj_authority_key`): a stale keychain entry deriving to the old pubkey will hard-fail
+startup with "keychain-key/pubkey mismatch" the moment the env var is absent. Production never
+reads or writes the keychain — the env var is its sole persistence surface (audit M-7), so no
+keychain step exists there.
 
 ### 4. Restart and verify
 

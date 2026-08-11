@@ -14,9 +14,7 @@ pub(super) const SIGNING_KEY_BINDING_DOMAIN: &str = "OLYMPUS:SIGNING_KEY_BINDING
 pub(super) const VALID_SIGNING_KEY_PURPOSES: &[&str] =
     &["dataset", "witness", "federation", "operator"];
 
-pub(super) const VALID_SCOPES: &[&str] = &[
-    "read", "write", "ingest", "commit", "verify", "prove", "admin",
-];
+pub(super) const VALID_SCOPES: &[&str] = crate::api::middleware::auth::VALID_API_SCOPES;
 
 // ── Error helpers ─────────────────────────────────────────────────────────────
 

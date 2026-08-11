@@ -80,6 +80,9 @@ fn main() {
                 );
                 std::process::exit(2);
             }
+            for warning in startup::production_runtime_config_warnings() {
+                eprintln!("[olympus-desktop] WARNING: {warning}");
+            }
             if let Err(error) = zk::canonicalization::canonicalization_image_id() {
                 eprintln!(
                     "[olympus-desktop] WARNING: canonicalization zkVM guest integrity check \
