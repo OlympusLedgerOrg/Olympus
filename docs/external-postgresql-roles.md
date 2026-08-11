@@ -323,3 +323,27 @@ updated.
 Every direct runtime ACL is checked for `WITH GRANT OPTION`; any grant option is
 rejected. Direct or `PUBLIC` access to off-path non-system schemas and their
 objects is also rejected.
+
+## Credential rotation
+
+Role passwords are provisioned outside Olympus and are not part of the runtime
+contract, so rotating them is a database-administration action performed with
+the separately controlled bootstrap administrator (never the runtime role, and
+not the migrator, which holds no role-administration attributes):
+
+1. Rotate `olympus_runtime` with the node stopped, or accept that new pool
+   checkouts fail between the password change and the restart: change the
+   password through the provider's secret mechanism (or `\password` in an
+   interactive session — never a command line that lands in shell history),
+   update the secret backing `DATABASE_URL`, and restart Olympus. PostgreSQL
+   validates passwords only at connection time, so already-established pool
+   connections are unaffected until they cycle.
+2. Rotate `olympus_migrator` at any time — it connects only during migration
+   runs. Update the secret backing `OLYMPUS_DATABASE_MIGRATION_URL` in the same
+   change.
+3. The neutral `NOLOGIN` owner (`olympus_db_owner`) has no password to rotate.
+
+Rotation changes no ACL, ownership, or catalog state, so the startup and
+per-checkout attestations are unaffected. Signing-key rotation is a separate
+procedure with ledger-visible consequences — see
+[key-rotation.md](key-rotation.md).

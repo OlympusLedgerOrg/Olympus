@@ -131,8 +131,10 @@ Olympus implements structured observability for detecting security and integrity
 
 The following are **by design** outside the current threat model:
 
-- **Key management** — Signing key rotation, HSM integration, and revocation
-  are future work.
+- **Key management** — In-band signing-key rotation, HSM integration, and
+  revocation are future work. The currently-possible manual rotation
+  procedures (and what each rotation breaks) are documented in
+  [docs/key-rotation.md](docs/key-rotation.md).
 - **Completeness guarantees** — Olympus cannot force submission of all records.
 - **Content confidentiality** — Documents are stored as hashes; access control
   to the raw content is a deployment concern.
@@ -152,11 +154,13 @@ for signing shard headers. **This key must be protected with the following contr
 1. **Never commit to source control** — Use secret managers (HashiCorp Vault, AWS
    Secrets Manager, Azure Key Vault, or GCP Secret Manager).
 2. **Persist, then rotate carefully** — The signing key **must be persisted**:
-   ephemeral keys make historical signed roots unverifiable. Rotate only with a
-   documented procedure (and immediately on suspected compromise), keeping the
-   old public key trusted for verification of historical roots. For BJJ
-   issuer/SBT keys, historical acceptance is configured through the
-   trusted-issuer set (`OLYMPUS_BJJ_TRUSTED_ISSUERS_JSON`,
+   ephemeral keys make historical signed roots unverifiable. Rotate only by
+   following the documented procedure in
+   [docs/key-rotation.md](docs/key-rotation.md) (and immediately on suspected
+   compromise), keeping the old public key trusted for verification of
+   historical roots. For BJJ issuer/SBT keys, historical acceptance is
+   configured through the trusted-issuer set
+   (`OLYMPUS_BJJ_TRUSTED_ISSUERS_JSON`,
    `src-tauri/src/api/trusted_issuers.rs`).
 3. **Restrict process access** — Run the Olympus API in a container or VM with
    restricted process listing (`hidepid=2` for procfs) to prevent key extraction
