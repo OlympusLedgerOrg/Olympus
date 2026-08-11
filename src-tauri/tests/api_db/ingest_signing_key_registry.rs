@@ -8,11 +8,33 @@
 //! startup with the resolved Ed25519 verifying key — directly against the
 //! shared cluster, plus `GET /redaction/issuer-key`'s `history` field and the
 //! single-active-ingest-key partial unique index.
+//!
+//! Deliberately ONE `#[tokio::test]`, not several. `ensure_ingest_signing_key`
+//! enforces a genuinely global invariant (at most one active `ingest_signing`
+//! row across the whole database — migration 0057's partial unique index),
+//! and `cargo test`'s default in-process thread-per-test concurrency runs
+//! every test function in this binary against the *same* shared cluster
+//! (`common::boot()` is a process-wide singleton). Two test functions each
+//! independently driving their own supersession chain would race and
+//! supersede *each other's* rows — not a test artifact, a structural
+//! consequence of the single-active-row invariant this function exists to
+//! enforce. One test, one sequential driver, avoids that entirely.
+//!
+//! The `history` assertions call the `get_issuer_key` handler directly with a
+//! manually assembled `AppState` rather than going through the shared test
+//! server (`common::boot()`): that harness's `AppState`
+//! (`tests/common/mod.rs::init`) deliberately mirrors only the DB + BJJ-key
+//! parts of `main.rs`'s startup, not the ingest-signing-key resolution, so
+//! `state.ingest_signing_key` is always `None` there — same pattern this
+//! module's own unit tests already use (`AppState::new(None)` + manual field
+//! assignment), just with a real pool instead of `None`.
 
 use crate::common;
 
+use axum::extract::State;
+use olympus_tauri_lib::api::redaction::issuer_key::get_issuer_key;
 use olympus_tauri_lib::bootstrap::ensure_ingest_signing_key;
-use serde_json::Value;
+use olympus_tauri_lib::state::AppState;
 use sqlx::PgPool;
 
 async fn ingest_rows(pool: &PgPool) -> Vec<(String, String, bool)> {
@@ -26,13 +48,16 @@ async fn ingest_rows(pool: &PgPool) -> Vec<(String, String, bool)> {
 }
 
 #[tokio::test]
-async fn ensure_ingest_signing_key_registers_and_supersedes() {
+async fn ensure_ingest_signing_key_registers_supersedes_and_reports_history() {
     let h = common::boot().await;
     let pool = PgPool::connect(&h.database_url).await.expect("pool");
 
-    // The booted server already resolved and registered its own ingest key on
-    // startup — isolate this test's assertions to a distinct synthetic pubkey
-    // so it doesn't depend on (or corrupt) that row.
+    // Nothing else in this test binary calls `ensure_ingest_signing_key` —
+    // the shared harness's own server never resolves an ingest key at all
+    // (see module doc comment) — so this table starts empty for this
+    // purpose and every row observed below was created by this test, in
+    // this order. That determinism is what makes the exact-count assertions
+    // meaningful despite running against the shared cluster.
     let key_a = "a".repeat(64);
     let key_b = "b".repeat(64);
     let key_c = "c".repeat(64);
@@ -98,62 +123,50 @@ async fn ensure_ingest_signing_key_registers_and_supersedes() {
         3,
         "A, B, and C must all still be present — supersession is append-only"
     );
-}
 
-#[tokio::test]
-async fn issuer_key_endpoint_reports_history() {
-    let h = common::boot().await;
-    let pool = PgPool::connect(&h.database_url).await.expect("pool");
+    // GET /redaction/issuer-key's `history` field, exercised by calling the
+    // handler directly (see module doc comment) with a real pool so its SQL
+    // query + response shape are checked end-to-end against the exact three
+    // rows this test just created.
+    let mut state = AppState::new(Some(pool));
+    state.ingest_signing_key = Some(std::sync::Arc::new(zeroize::Zeroizing::new([9u8; 32])));
 
-    // Register a couple of synthetic historical keys so `history` is
-    // guaranteed non-trivial regardless of what the live server's own key
-    // resolution already wrote.
-    let key_old = "d".repeat(64);
-    ensure_ingest_signing_key(&pool, &key_old)
+    let body = get_issuer_key(State(state))
         .await
-        .expect("register old key");
-    let key_new = "e".repeat(64);
-    ensure_ingest_signing_key(&pool, &key_new)
-        .await
-        .expect("supersede to new key");
-
-    let res = h
-        .client
-        .get(common::url(h, "/redaction/issuer-key"))
-        .send()
-        .await
-        .expect("request");
-    assert_eq!(res.status(), 200);
-    let body: Value = res.json().await.expect("JSON");
+        .expect("must return the public key")
+        .0;
 
     // Existing field is unchanged — back-compat with the audit UI's auto-fill.
-    assert!(body["ed25519PubkeyHex"].is_string());
+    assert_eq!(body.ed25519_pubkey_hex.len(), 64);
 
-    let history = body["history"].as_array().expect("history is an array");
-    assert!(
-        history.len() >= 2,
-        "history must include at least the two synthetic keys registered above, got: {history:?}"
+    assert_eq!(
+        body.history.len(),
+        3,
+        "history must report exactly A, B, and C, got: {:?}",
+        body.history
     );
 
-    let old_entry = history
+    let a_entry = body
+        .history
         .iter()
-        .find(|e| e["ed25519PubkeyHex"] == key_old)
-        .expect("old key present in history");
+        .find(|e| e.ed25519_pubkey_hex == key_a)
+        .expect("key A present in history");
     assert!(
-        !old_entry["validUntil"].is_null(),
-        "superseded key must have a non-null validUntil"
+        a_entry.valid_until.is_some(),
+        "superseded key A must have a non-null validUntil"
     );
 
-    let new_entry = history
+    let c_entry = body
+        .history
         .iter()
-        .find(|e| e["ed25519PubkeyHex"] == key_new)
-        .expect("new key present in history");
+        .find(|e| e.ed25519_pubkey_hex == key_c)
+        .expect("key C present in history");
     assert!(
-        new_entry["validUntil"].is_null(),
-        "the currently active key must have a null validUntil"
+        c_entry.valid_until.is_none(),
+        "the currently active key C must have a null validUntil"
     );
     assert!(
-        !new_entry["validFrom"].is_null(),
+        c_entry.valid_from.is_some(),
         "a superseding key's validFrom must be set (not the unbounded-first-key case)"
     );
 }

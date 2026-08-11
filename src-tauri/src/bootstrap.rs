@@ -615,12 +615,32 @@ pub async fn rotate_authority(
 /// registration failure is logged and non-fatal — `GET /redaction/issuer-key`
 /// falls back to reporting only the live key (its pre-registry behavior) if
 /// the history table can't be read or written.
+///
+/// Holds `pg_advisory_xact_lock` (the codebase's established serialization
+/// pattern, e.g. `federation/verify.rs`) across the whole read-then-branch,
+/// not just the write: a plain SELECT-then-INSERT would let two concurrent
+/// callers — this fn has exactly one serial caller today, but a bare
+/// SELECT-then-INSERT is a latent hazard for any future second caller (a
+/// hot-reload path, an admin endpoint) — both observe "no active row" and
+/// both attempt the first-row INSERT, and only one can win against the
+/// migration-0057 partial unique index — the loser would surface as a raw
+/// constraint-violation error instead of the intended
+/// idempotent/supersede behavior.
 pub async fn ensure_ingest_signing_key(pool: &PgPool, pubkey_hex: &str) -> Result<(), String> {
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| format!("ensure_ingest_signing_key: begin: {e}"))?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext('ensure_ingest_signing_key'))")
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| format!("ensure_ingest_signing_key: advisory lock: {e}"))?;
+
     let active: Option<(String, String)> = sqlx::query_as(
         "SELECT key_id, public_key FROM account_signing_keys
           WHERE purpose = 'ingest_signing' AND revoked_at IS NULL",
     )
-    .fetch_optional(pool)
+    .fetch_optional(&mut *tx)
     .await
     .map_err(|e| format!("ensure_ingest_signing_key: read active row: {e}"))?;
 
@@ -636,17 +656,16 @@ pub async fn ensure_ingest_signing_key(pool: &PgPool, pubkey_hex: &str) -> Resul
             .bind(&key_id)
             .bind(SYSTEM_USER_ID)
             .bind(pubkey_hex)
-            .execute(pool)
+            .execute(&mut *tx)
             .await
             .map_err(|e| format!("ensure_ingest_signing_key: insert first row: {e}"))?;
+            tx.commit()
+                .await
+                .map_err(|e| format!("ensure_ingest_signing_key: commit: {e}"))?;
             tracing::info!("bootstrap: ingest signing key registered (registry row created)");
             Ok(())
         }
         Some((old_key_id, _)) => {
-            let mut tx = pool
-                .begin()
-                .await
-                .map_err(|e| format!("ensure_ingest_signing_key: begin: {e}"))?;
             let new_key_id = Uuid::new_v4().to_string();
             sqlx::query(
                 "UPDATE account_signing_keys
