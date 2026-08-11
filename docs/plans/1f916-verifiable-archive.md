@@ -1,10 +1,20 @@
 # Feasibility: verifiable 1f916.ai archive with Olympus
 
+> **Status — implemented 2026-08-09.** What began as this feasibility note was
+> built the same day. The archive is a standalone repository,
+> `OlympusLedgerOrg/1f916-archive`, that consumes the Olympus dataset-manifest
+> CLI at a pinned commit; no 1f916-specific code was added to *this* repository.
+> This note is kept as the pre-build assessment, corrected only where building
+> the collector disproved a claim made here. **For as-built behaviour the
+> archive's own `README.md` and `docs/api-semantics.md` are authoritative**;
+> where this note disagrees with them, they win.
+
 **Decision:** **Go**, but as a small, standalone archive project that consumes
 the Olympus dataset-manifest CLI at a pinned Olympus revision. Do not add an
 1f916-specific ingest type, service, or workflow to this repository.
 
-This is a design note only; it proposes no production-code change.
+This note proposed no change to *this* repository's production code, and none was
+made — the archive is the separate project named above.
 
 ## Facts established on 2026-08-09
 
@@ -14,9 +24,9 @@ Observatory. Its documented read surface includes:
 | Resource | Read endpoint | Archive use |
 |---|---|---|
 | Constitution / front-door policy | `GET /` | capture as raw text |
-| Complete post discovery | `GET /api/changes?since=<ms>` | initial walk and incremental cursor |
+| Primary post discovery (incremental) | `GET /api/changes?since=<ms>` | initial walk and incremental cursor — **not complete on its own: omits moderated posts (see the correction below and §4)** |
 | Full post and nested comments | `GET /api/post/{id}` | capture the exact response per discovered post |
-| Moderation / identity events | `GET /api/events?kind=moderation` (page with `since`) | snapshot separately, including hashes |
+| Moderation / identity events | `GET /api/events?since=0` (complete log, **unfiltered** — the hash chain spans kinds, so a `?kind=moderation` page can't be verified; see §4) | snapshot separately, including hashes |
 | Treasury | `GET /treasury` | snapshot separately, including hashes |
 | Site self-check | `GET /api/attest` | **highest-value packet — see §1.1**; record its reported heads and check result |
 | Public metadata | `GET /api/official`, `/api/docket` | optional context packets |
@@ -26,6 +36,17 @@ wall-clock `now`, to drain pages while `has_more`, and to treat boundary rows as
 **upserts by id**, because rows may repeat. The `/api/front` feed is explicitly
 not a complete archive. `GET /api/treasury` returned 404 during this check;
 `/treasury` is the live documented endpoint.
+
+**Correction from the build (2026-08-09).** A full read-only drain measured
+against the live API established that `/api/changes` is *not* complete post
+discovery. It **omits every post with a non-null `mod_state`** entirely — at
+measurement, several posts across the 1..513 id range were collapsed or removed
+and none of them appeared in the feed, alongside 2 hard-deleted ids that returned
+bare 404s — and **no row anywhere in the API carries an `updated_at`/`edited_at`**,
+so edits are never reported either. The collector
+therefore also runs an **integer id sweep** to reach moderated and deleted posts,
+and drains `/api/events` **unfiltered** (§4). The measured evidence lives in the
+archive's `docs/api-semantics.md`; §4 below is corrected to match it.
 
 1f916 already hash-chains its events/identity and treasury ledgers and exposes
 `/api/attest` to check those chains. Its own response correctly says that a
@@ -178,27 +199,39 @@ someone else's public infrastructure, not a privileged replication client.
 
 ## 4. Ongoing capture
 
-Use a scheduled GitHub Action in the standalone archive repository, initially
-hourly or every few hours:
+Capture runs on a scheduled GitHub Action in the standalone archive repository,
+**hourly** — moderation upstream has a measured median latency of ~56 minutes,
+and a post moderated before the next poll loses its original bytes for good, so a
+daily cadence would miss most moderations:
 
-1. Read the committed cursor and drain `/api/changes`, following `next_since`.
-2. Deduplicate only discovery rows by post ID within the run; for each newly
-   discovered post, fetch `/api/post/{id}` once and preserve that raw response
-   in a new capture directory.
-3. Capture `/`, `/treasury`, `/api/events?kind=moderation`, and `/api/attest`
-   on each non-empty run (or daily, if cost matters).
-4. Build and diff a new cumulative manifest only when new packets exist;
+1. Read the committed cursor and drain `/api/changes`, following `next_since`;
+   dedupe discovery rows by post id within the run and treat rows as upserts by
+   id. For each newly discovered post, fetch `/api/post/{id}` once and preserve
+   that raw response in a new capture directory.
+2. Re-fetch the posts whose `post_id` appeared on this window's comment rows —
+   new comments are the one mutation class the feed surfaces, so this is how
+   comment-only thread changes get captured.
+3. Sweep integer post ids: probe the known gaps below the highest id seen, then
+   probe forward past it until a run of 404s. Moderated posts never appear in
+   `/api/changes`, so the sweep is the only way to reach them; a confirmed 404
+   below the high-water mark is committed as an `{id}.absent.json` packet, so a
+   gap is a recorded observation rather than a silence.
+4. Capture `/`, `/treasury`, `/api/events?since=0` (the **complete, unfiltered**
+   log — the hash chain spans event kinds, so a `?kind=moderation` page points at
+   `prev_hash` rows it does not contain and cannot be verified offline), and
+   `/api/attest` on each non-empty run.
+5. Build and diff a new cumulative manifest only when new packets exist;
    sign the manifest blob with keyless Cosign and retain its bundle.
-5. Commit the immutable packets, manifest, index, diff, bundle, and advanced
+6. Commit the immutable packets, manifest, index, diff, bundle, and advanced
    cursor together.
 
-The initial snapshot is the same process with `since=0`, drained completely,
-then one full-post fetch per discovered ID. Before operational use, run a small
-read-only validation to determine whether `/api/changes` reports post edits or
-comment-only changes. The live contract confirms new-post discovery and
-boundary duplication; it does not by itself establish complete update semantics.
-If complete later thread-state history is required, add a bounded periodic
-re-fetch policy and record every resulting response as a new packet.
+The initial snapshot was the same process with `since=0`, drained completely,
+then one full-post fetch per discovered id. The small read-only validation this
+note called for was carried out before operational use and is recorded in the
+archive's `docs/api-semantics.md`: `/api/changes` is a `created_at`-watermark
+feed that never reports edits and omits moderated posts, which is exactly what
+added the id sweep (step 3) and the comment-driven re-fetch (step 2) to the
+original design.
 
 The collector should be a small Rust CLI or a reviewed declarative workflow;
 no Python or Go is needed, and all hashing remains in the existing Rust CLI.
@@ -312,3 +345,10 @@ The only go/no-go caveat is operational intent: proceed if the archive will
 publish its verification materials and hold to the captured/committed/truthful
 boundary in §6. Do not proceed as a casual scraper that claims independent
 timestamps while retaining only its own Git history.
+
+**Outcome.** Built and operating within this scope: the collector is read-only by
+construction, every version is sealed under an ADR-0027 manifest and anchored in
+Rekor with keyless Sigstore, and `scripts/verify-archive.sh` enforces the
+captured/committed/truthful boundary — including negative controls that reject a
+wrong identity, a wrong issuer, and a tampered manifest. See
+`OlympusLedgerOrg/1f916-archive` for the running system.
