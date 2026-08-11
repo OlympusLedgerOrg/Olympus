@@ -7,10 +7,10 @@
 //! is the per-calendar commitment at the tip of the operations chain in
 //! the pending receipt, NOT the user's originally-submitted SHA-256.
 //!
-//! This module implements just enough of the OTS binary format to walk
-//! the receipt tree, accumulate the running `msg`, and return the
-//! commitment recorded at a PendingAttestation matching a given
-//! calendar URL.
+//! The public functions here are thin wrappers that delegate to the bounded
+//! Timestamp-tree parser in [`super::ots_tree`] (the single OTS parser). This
+//! module retains the shared [`OtsParseError`] type, the receipt-size cap, and
+//! the format-level tests.
 //!
 //! Format reference: <https://github.com/opentimestamps/python-opentimestamps>
 //! and the spec at <https://opentimestamps.org/>.
@@ -32,8 +32,6 @@
 //! `varbytes` and `varint` are the standard LEB128-style encoding used
 //! throughout the OTS binary format (see python-opentimestamps
 //! `serialize.py`).
-
-use sha2::{Digest, Sha256};
 
 /// All errors produced while walking a pending receipt.
 #[derive(Debug, thiserror::Error)]
@@ -64,11 +62,9 @@ pub enum OtsParseError {
 /// malicious calendar response. Real pending receipts are < 1 KiB.
 pub const MAX_RECEIPT_BYTES: usize = 64 * 1024;
 
-/// Hard cap on tree-walk depth. Real receipts are linear or very
-/// shallow; this guards against pathological recursion.
-const MAX_DEPTH: usize = 64;
-
-/// PendingAttestation type tag (8 bytes).
+/// PendingAttestation type tag (8 bytes). Referenced only by the test-fixture
+/// receipt builders below; production parsing lives in `ots_tree`.
+#[cfg(test)]
 const PENDING_ATTESTATION_TAG: [u8; 8] = [0x83, 0xdf, 0xe3, 0x0d, 0x2e, 0xf9, 0x0c, 0x8e];
 
 /// OpenTimestamps `BitcoinBlockHeaderAttestation` tag used by fixtures below.
@@ -98,38 +94,6 @@ pub fn extract_commitment(
     calendar_url: &str,
 ) -> Result<Vec<u8>, OtsParseError> {
     super::ots_tree::extract_pending_commitment(receipt, initial_msg, calendar_url)
-}
-
-/// Red-team OTS-1 closure. Walk `receipt` from `initial_msg` and return
-/// `Ok(true)` iff the running commitment ever equals `expected_commitment`
-/// at any intermediate state (after any op application). Used by
-/// `ots::try_upgrade` to verify that a calendar-returned upgraded blob
-/// actually extends the original pending receipt's commitment chain — a
-/// MITM or malicious calendar that returns an upgrade computed for a
-/// *different* anchored hash will produce ops whose running state, when
-/// fed our `initial_msg`, never passes through the pending commitment.
-///
-/// Attestation nodes are skipped without inspection — only the op chain
-/// drives `msg`. The structural traversal mirrors `extract_commitment`
-/// (single-child linear, `0xff` multi-child branches restoring `msg` on
-/// backtrack, MAX_DEPTH gate).
-pub fn walked_contains_commitment(
-    receipt: &[u8],
-    initial_msg: &[u8; 32],
-    expected_commitment: &[u8; 32],
-) -> Result<bool, OtsParseError> {
-    if receipt.len() > MAX_RECEIPT_BYTES {
-        return Err(OtsParseError::AttestationTooLong { len: receipt.len() });
-    }
-    // Degenerate but legal: if the upgrade started from the very commitment
-    // we expect, accept without walking ops. The cron only calls this with
-    // a non-trivial expected_commitment so this is a defence-in-depth case.
-    if initial_msg == expected_commitment {
-        return Ok(true);
-    }
-    let mut cur = Cursor::new(receipt);
-    let mut msg = *initial_msg;
-    scan_for_commitment(&mut cur, &mut msg, expected_commitment, 0)
 }
 
 /// Prove that an alleged upgrade both extends `expected_commitment` and reaches
@@ -178,376 +142,12 @@ pub fn merge_upgraded_timestamp(
     })
 }
 
-fn scan_for_commitment(
-    cur: &mut Cursor<'_>,
-    msg: &mut [u8; 32],
-    expected: &[u8; 32],
-    depth: usize,
-) -> Result<bool, OtsParseError> {
-    if depth > MAX_DEPTH {
-        return Err(OtsParseError::DepthExceeded {
-            max: MAX_DEPTH,
-            offset: cur.pos,
-        });
-    }
-    loop {
-        if cur.is_eof() {
-            return Ok(false);
-        }
-        let next = cur.peek()?;
-        match next {
-            0x00 => {
-                // Attestation node — consume the tag + payload but
-                // don't touch `msg`. We only care about op-derived
-                // commitment states for the OTS-1 chain check.
-                cur.advance(1);
-                skip_attestation(cur)?;
-            }
-            0xff => {
-                cur.advance(1);
-                let saved = *msg;
-                if scan_op_and_recurse(cur, msg, expected, depth)? {
-                    return Ok(true);
-                }
-                *msg = saved;
-            }
-            _ => {
-                if scan_op_and_recurse(cur, msg, expected, depth)? {
-                    return Ok(true);
-                }
-                return Ok(false);
-            }
-        }
-    }
-}
-
-fn scan_op_and_recurse(
-    cur: &mut Cursor<'_>,
-    msg: &mut [u8; 32],
-    expected: &[u8; 32],
-    depth: usize,
-) -> Result<bool, OtsParseError> {
-    let tag = cur.read_u8()?;
-    apply_op(tag, cur, msg)?;
-    if msg == expected {
-        return Ok(true);
-    }
-    scan_for_commitment(cur, msg, expected, depth + 1)
-}
-
-fn skip_attestation(cur: &mut Cursor<'_>) -> Result<(), OtsParseError> {
-    // 8-byte type tag + varint payload length + payload bytes. We don't
-    // care about the contents here — only the op stream advances `msg`.
-    let _tag = cur.read_bytes(8)?;
-    let payload_len = cur.read_varint()?;
-    if payload_len > MAX_RECEIPT_BYTES {
-        return Err(OtsParseError::AttestationTooLong { len: payload_len });
-    }
-    let _payload = cur.read_bytes(payload_len)?;
-    Ok(())
-}
-
-// ── Walker ────────────────────────────────────────────────────────────
-
-/// Recursively walk a single `Timestamp` node. Returns `Some(commitment)`
-/// the moment a matching `PendingAttestation` is found anywhere in the
-/// subtree (the running `msg` at that point); `None` if the subtree
-/// finished without a match.
-///
-/// The walker is depth-first: a single-child chain consumes its child
-/// directly, a multi-child branch (signalled by `0xff` markers) tries
-/// each branch in turn, restoring `msg` on backtrack.
-fn walk_timestamp(
-    cur: &mut Cursor<'_>,
-    msg: &mut [u8; 32],
-    target_url: &[u8],
-    depth: usize,
-) -> Result<Option<[u8; 32]>, OtsParseError> {
-    if depth > MAX_DEPTH {
-        return Err(OtsParseError::DepthExceeded {
-            max: MAX_DEPTH,
-            offset: cur.pos,
-        });
-    }
-    loop {
-        if cur.is_eof() {
-            return Ok(None);
-        }
-        // Peek the next byte: 0x00 = attestation, 0xff = multi-child
-        // branch marker, anything else = operation tag.
-        let next = cur.peek()?;
-        match next {
-            0x00 => {
-                cur.advance(1);
-                if let Some(found) = read_attestation(cur, msg, target_url)? {
-                    return Ok(Some(found));
-                }
-                // No match in this attestation; continue walking the
-                // current Timestamp (more attestations or operations
-                // may follow before EOF / parent unwind).
-            }
-            0xff => {
-                // Multi-child branch: each child consumes its own
-                // (op, subtree). Save the current msg, recurse into
-                // each child, restore on backtrack.
-                cur.advance(1);
-                // The first child after the marker reuses the current
-                // msg state; subsequent siblings each get a fresh copy.
-                let saved = *msg;
-                if let Some(found) = consume_op_and_recurse(cur, msg, target_url, depth)? {
-                    return Ok(Some(found));
-                }
-                // Continue iteration; restore msg for the next sibling.
-                *msg = saved;
-            }
-            _ => {
-                // Single-child / linear continuation: this byte is an
-                // op tag; consume the op + its child Timestamp.
-                if let Some(found) = consume_op_and_recurse(cur, msg, target_url, depth)? {
-                    return Ok(Some(found));
-                }
-                // Most ops have a single child and the walker tail-recurses
-                // implicitly: after returning from the child, control falls
-                // off the end of the input and the outer loop terminates.
-                return Ok(None);
-            }
-        }
-    }
-}
-
-fn consume_op_and_recurse(
-    cur: &mut Cursor<'_>,
-    msg: &mut [u8; 32],
-    target_url: &[u8],
-    depth: usize,
-) -> Result<Option<[u8; 32]>, OtsParseError> {
-    let tag = cur.read_u8()?;
-    apply_op(tag, cur, msg)?;
-    walk_timestamp(cur, msg, target_url, depth + 1)
-}
-
-// ── Attestation handling ──────────────────────────────────────────────
-
-/// Reads an 8-byte type tag + a varbytes payload. If the type tag is the
-/// PendingAttestation marker and the payload URL matches `target_url`,
-/// returns `Some(*msg)` (the running commitment at this attestation).
-fn read_attestation(
-    cur: &mut Cursor<'_>,
-    msg: &[u8; 32],
-    target_url: &[u8],
-) -> Result<Option<[u8; 32]>, OtsParseError> {
-    let tag = cur.read_bytes(8)?;
-    let payload_len = cur.read_varint()?;
-    if payload_len > MAX_RECEIPT_BYTES {
-        return Err(OtsParseError::AttestationTooLong { len: payload_len });
-    }
-    let payload = cur.read_bytes(payload_len)?;
-    if tag != PENDING_ATTESTATION_TAG {
-        // Other attestations (BITCOIN_BLOCK_HEADER, UNKNOWN, etc.) —
-        // skipped without inspection. We only care about PENDING for
-        // the upgrade flow.
-        return Ok(None);
-    }
-    // The PendingAttestation payload is itself a varbytes-wrapped URL.
-    let url_bytes = parse_varbytes(payload)?;
-    let url_trimmed = trim_trailing_slashes(url_bytes);
-    if url_trimmed == target_url {
-        Ok(Some(*msg))
-    } else {
-        Ok(None)
-    }
-}
-
-fn parse_varbytes(payload: &[u8]) -> Result<&[u8], OtsParseError> {
-    let mut local = Cursor::new(payload);
-    let len = local.read_varint()?;
-    if len > payload.len() {
-        return Err(OtsParseError::AttestationTooLong { len });
-    }
-    let bytes = local.read_bytes(len)?;
-    Ok(bytes)
-}
-
-fn trim_trailing_slashes(b: &[u8]) -> &[u8] {
-    let mut end = b.len();
-    while end > 0 && b[end - 1] == b'/' {
-        end -= 1;
-    }
-    &b[..end]
-}
-
-// ── Operation application ─────────────────────────────────────────────
-
-/// Apply one operation to the running `msg`. Unknown ops are an error
-/// — the walker refuses to silently pass over operations it doesn't
-/// understand, because skipping one corrupts the cumulative `msg` for
-/// every subsequent op.
-fn apply_op(tag: u8, cur: &mut Cursor<'_>, msg: &mut [u8; 32]) -> Result<(), OtsParseError> {
-    match tag {
-        0x02 => {
-            // OP_SHA1 — deprecated/legacy; spec-tagged but the
-            // OpenTimestamps protocol moved off SHA1. We refuse rather
-            // than silently produce a wrong commitment.
-            Err(OtsParseError::UnknownOpTag {
-                tag,
-                offset: cur.pos - 1,
-            })
-        }
-        0x03 => {
-            // OP_RIPEMD160 — used by some legacy paths, not in the
-            // upgrade hot path for any modern calendar. Refuse rather
-            // than carry it.
-            Err(OtsParseError::UnknownOpTag {
-                tag,
-                offset: cur.pos - 1,
-            })
-        }
-        0x08 => {
-            // OP_SHA256 — canonical hash op. msg = SHA-256(msg).
-            let mut h = Sha256::new();
-            h.update(&msg[..]);
-            let digest = h.finalize();
-            msg.copy_from_slice(&digest);
-            Ok(())
-        }
-        0xf0 => {
-            // OP_APPEND: msg = msg || arg
-            let arg_len = cur.read_varint()?;
-            let arg = cur.read_bytes(arg_len)?.to_vec();
-            // Apply: appended bytes are added; result is whatever len.
-            // OTS Append/Prepend may produce intermediate non-32-byte
-            // values. Production receipts feed every such concat
-            // through a subsequent SHA256, so the running buffer
-            // returns to 32 bytes before any attestation. To keep the
-            // running state typed `[u8; 32]`, materialise the concat
-            // into a temporary, fold through any immediately-following
-            // SHA-256 op via the next walker step.
-            //
-            // Workaround: SHA-256 of (msg || arg) directly, asserting
-            // the next op is a hash. This is true for every
-            // commitment-aggregation flow used by OTS calendars in
-            // practice (verified against the python-opentimestamps
-            // reference). Any receipt that violates this returns
-            // Err(UnknownOpTag) when the next-non-hash op is reached
-            // because the running `msg` at that point is the wrong
-            // shape.
-            apply_append_or_prepend(cur, msg, &arg, /*prepend=*/ false)
-        }
-        0xf1 => {
-            // OP_PREPEND: msg = arg || msg
-            let arg_len = cur.read_varint()?;
-            let arg = cur.read_bytes(arg_len)?.to_vec();
-            apply_append_or_prepend(cur, msg, &arg, /*prepend=*/ true)
-        }
-        _ => Err(OtsParseError::UnknownOpTag {
-            tag,
-            offset: cur.pos - 1,
-        }),
-    }
-}
-
-/// APPEND/PREPEND ops produce variable-length intermediate state. In
-/// every real OTS aggregation flow these are immediately followed by an
-/// OP_SHA256. We peek at the next byte, require it to be `0x08`
-/// (SHA-256), and apply the concat+hash atomically — keeping the
-/// running `msg` typed as `[u8; 32]`.
-fn apply_append_or_prepend(
-    cur: &mut Cursor<'_>,
-    msg: &mut [u8; 32],
-    arg: &[u8],
-    prepend: bool,
-) -> Result<(), OtsParseError> {
-    let next = cur.peek()?;
-    if next != 0x08 {
-        return Err(OtsParseError::UnknownOpTag {
-            tag: next,
-            offset: cur.pos,
-        });
-    }
-    cur.advance(1); // consume the SHA-256 op
-    let mut combined: Vec<u8> = Vec::with_capacity(arg.len() + 32);
-    if prepend {
-        combined.extend_from_slice(arg);
-        combined.extend_from_slice(&msg[..]);
-    } else {
-        combined.extend_from_slice(&msg[..]);
-        combined.extend_from_slice(arg);
-    }
-    let mut h = Sha256::new();
-    h.update(&combined);
-    let digest = h.finalize();
-    msg.copy_from_slice(&digest);
-    Ok(())
-}
-
-// ── Cursor / varint primitives ────────────────────────────────────────
-
-struct Cursor<'a> {
-    bytes: &'a [u8],
-    pos: usize,
-}
-
-impl<'a> Cursor<'a> {
-    fn new(bytes: &'a [u8]) -> Self {
-        Cursor { bytes, pos: 0 }
-    }
-    fn is_eof(&self) -> bool {
-        self.pos >= self.bytes.len()
-    }
-    fn peek(&self) -> Result<u8, OtsParseError> {
-        if self.pos >= self.bytes.len() {
-            Err(OtsParseError::Truncated {
-                offset: self.pos,
-                expected: 1,
-            })
-        } else {
-            Ok(self.bytes[self.pos])
-        }
-    }
-    fn advance(&mut self, n: usize) {
-        self.pos = (self.pos + n).min(self.bytes.len());
-    }
-    fn read_u8(&mut self) -> Result<u8, OtsParseError> {
-        let b = self.peek()?;
-        self.pos += 1;
-        Ok(b)
-    }
-    fn read_bytes(&mut self, n: usize) -> Result<&'a [u8], OtsParseError> {
-        if self.pos + n > self.bytes.len() {
-            return Err(OtsParseError::Truncated {
-                offset: self.pos,
-                expected: n,
-            });
-        }
-        let slice = &self.bytes[self.pos..self.pos + n];
-        self.pos += n;
-        Ok(slice)
-    }
-    /// LEB128-style varint, with the OTS spec cap of 8 bytes.
-    fn read_varint(&mut self) -> Result<usize, OtsParseError> {
-        let start = self.pos;
-        let mut value: u64 = 0;
-        let mut shift: u32 = 0;
-        for byte_idx in 0..8 {
-            let b = self.read_u8()? as u64;
-            value |= (b & 0x7f) << shift;
-            if b & 0x80 == 0 {
-                return Ok(value as usize);
-            }
-            shift += 7;
-            if byte_idx == 7 {
-                return Err(OtsParseError::VarintTooLong { offset: start });
-            }
-        }
-        Err(OtsParseError::VarintTooLong { offset: start })
-    }
-}
-
 // ── Tests ─────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sha2::{Digest, Sha256};
 
     /// Build a minimal pending receipt: one APPEND + SHA256 followed by
     /// a PendingAttestation. The commitment-at-tip is
