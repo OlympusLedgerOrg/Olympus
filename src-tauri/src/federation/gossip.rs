@@ -241,7 +241,7 @@ async fn pull_checkpoint(
 /// Verify and store a checkpoint received from a peer.
 ///
 /// Audit H-11 / H-5 / H-12: delegates the entire verify-then-store
-/// pipeline (BJJ signature → unified Groth16 vkey [no fallback] →
+/// pipeline (BJJ signature → document_existence Groth16 vkey [no fallback] →
 /// equivocation → conditional auto-block → store) to the shared
 /// `super::verify::verify_and_store`. The push handler in `api.rs`
 /// uses the same call, so push and pull can never drift.
