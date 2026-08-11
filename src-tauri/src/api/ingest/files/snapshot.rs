@@ -186,10 +186,21 @@ pub(super) async fn build_snapshot_in_tx(
     // timestamp is authenticated by the snapshot signature itself. Relying
     // parties use it to evaluate the authority key's trust window at signing
     // time (retired-key verification — docs/key-rotation.md).
+    // Fail closed if the clock is unreadable (set before 1970): a signed
+    // snapshot asserting a fabricated 1970 signing time would be a valid,
+    // non-repudiable signature over a false claim, permanently poisoning an
+    // append-only row (no issuer window covers 0, so verification would
+    // report Invalid forever, for the wrong reason).
     let signed_at_unix = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
+        .map_err(|_| {
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "snapshot: system clock is before the unix epoch; refusing to sign a \
+                 snapshot with a fabricated signing time",
+            )
+        })?;
     let snap: LedgerSnapshot = snapshot_new_record(
         bjj_priv,
         &existing_leaves,

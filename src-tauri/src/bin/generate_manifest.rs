@@ -257,7 +257,7 @@ fn build_manifest(args: &Args, priv_key: &[u8; 32]) -> Result<CeremonyManifest, 
     // `CeremonyManifest::coordinator_signing_digest` the runtime verifier
     // uses, so the generator can never drift from the verifier's expectation.
     // With `version: MANIFEST_VERSION` (3) that is the V3 digest, binding the
-    // full artifact map (vkey/zkey/r1cs/wasm) + circuit + ceremony id +
+    // full artifact map (vkey/ark_zkey/r1cs/wasm) + circuit + ceremony id +
     // `created_unix` + the chain hash — the signed creation time is what lets
     // consumers window-check a retired coordinator key at signing time.
     let mut manifest = CeremonyManifest {

@@ -445,5 +445,18 @@ mod tests {
         )
         .expect_err("negative signing time must be refused");
         assert!(matches!(err, SnapshotError::NegativeSignedAt(-5)));
+
+        // Boundary: exactly 0 is valid (only strictly-negative rejected) —
+        // kills the `< 0` → `<= 0` mutant on the signer-side guard.
+        assert!(snapshot_new_record(
+            &TEST_BJJ_PRIV,
+            &[],
+            tree.original_root,
+            0,
+            "cc".repeat(32).as_str(),
+            &fr_to_hex(tree.original_root),
+            0,
+        )
+        .is_ok());
     }
 }

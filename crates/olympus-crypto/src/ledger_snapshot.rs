@@ -892,6 +892,19 @@ mod tests {
             -1,
         )
         .is_none());
+        // Boundary: exactly 0 (the epoch itself) is a valid — if suspicious —
+        // timestamp and must be accepted; only strictly-negative values are
+        // rejected. Kills the `< 0` → `<= 0` mutant on the guard.
+        assert!(signing_digest_v2(
+            &snapshot_root_hex,
+            &leaf_hex,
+            0,
+            1,
+            &content_hash,
+            &original_root,
+            0,
+        )
+        .is_some());
 
         // And the converse downgrade: a V1 signature must not verify once a
         // timestamp is claimed.

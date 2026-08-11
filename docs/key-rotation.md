@@ -108,8 +108,9 @@ authenticates its own signing time: every snapshot signed since the V2 digest la
 keeps verifying under the retired key exactly as long as the window you configured says it
 should, and editing the stored timestamp breaks the signature rather than the window check.
 Historical snapshots without a `signed_at` (pre-V2 rows) carry no signature-covered signing
-time, so no window is evaluated for them — they verify under any `checkpoint_authority` key
-regardless of windows, which is the pre-rotation behavior they were written under.
+time, so issuer-window evaluation is skipped for them: the signature still binds each such
+snapshot to its own signing key, but that key's `checkpoint_authority` entry is accepted
+regardless of its validity window — the pre-rotation behavior those rows were written under.
 
 > **Ceremony-manifest exception (legacy manifests only):** if any **schema-version ≤ 2**
 > ceremony manifest was coordinator-signed by the old authority key (the dev fallback when

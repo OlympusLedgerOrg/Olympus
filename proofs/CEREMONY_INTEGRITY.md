@@ -131,23 +131,31 @@ coordinator_message = BLAKE3(
 )
 ```
 
-(`lp(x) = u64_le(len) || x`.) Manifests of schema version 1–2 use the
-same layout without the `created_unix` element under the domain tag
-`OLY:CEREMONY:MANIFEST:V2`; the disjoint tags make cross-version
-relabelling fail closed.
+(`lp(x) = u64_le(len) || x`.) Note the distinction between the manifest's
+**schema version** (the JSON `version` field: 1, 2, or 3) and the
+**signing recipe** (the domain tag): manifests of schema version 1–2 are
+both verified under the artifact-binding recipe tagged
+`OLY:CEREMONY:MANIFEST:V2` (same layout as above, without the
+`created_unix` element); schema version 3 uses the
+`OLY:CEREMONY:MANIFEST:V3` recipe above. The disjoint tags make
+cross-version relabelling fail closed. The _historical_ recipe V1 —
+which signed only `final_running_chain_hash` — is no longer implemented
+or accepted by any verifier in the tree; every manifest, whatever its
+schema version, must carry a signature over the full artifact map to
+verify at all.
 
-The artifact binding closes a V1 binding-scope gap: V1 signed only
-`final_running_chain_hash`, leaving the artifact digests — most
+The artifact binding closes recipe V1's binding-scope gap: it signed
+only `final_running_chain_hash`, leaving the artifact digests — most
 importantly `vkey.blake3`, the key `/zk/verify` loads to verify _every_
 proof — outside the signature. The other runtime checks (build.rs
 `blake3(vkey) == manifest.vkey.blake3`; `load_proving_key_with_manifest`
 `blake3(ark_zkey) == manifest.ark_zkey.blake3`) only assert the on-disk
 file matches the digest _recorded in the manifest_ — digests that were
-themselves unsigned under V1. An attacker who could edit the manifest
-could therefore substitute a backdoored vkey/zkey, update the recorded
-blake3s, and the coordinator signature would still verify. Under V2+ any
-edit to an artifact digest, the circuit name, or the ceremony id breaks
-the coordinator signature.
+themselves unsigned under recipe V1. An attacker who could edit the
+manifest could therefore substitute a backdoored vkey/zkey, update the
+recorded blake3s, and the recipe-V1 coordinator signature would still
+verify. Under recipe V2+ any edit to an artifact digest, the circuit
+name, or the ceremony id breaks the coordinator signature.
 
 Binding `created_unix` (V3) additionally anchors **when** the coordinator
 vouched: issuer validity windows are evaluated at the signed creation
@@ -308,18 +316,34 @@ For each commit that includes ceremony artifacts:
 
 ### When you receive a ceremony bundle from a contributor
 
-Until the runtime check lands, this is manual:
+The runtime startup gate (`verify_ceremony_manifests`, "Runtime checks"
+above) verifies the coordinator signature, contribution chain, and
+artifact digests once the bundle is installed — fail-closed (`exit 2`)
+under `OLYMPUS_ENV=production`, warn-and-continue in dev. It cannot,
+however, validate what it never sees: pre-installation checks on the
+bundle itself remain the operator's job, and one cryptographic property
+is outside the runtime's scope entirely (step 3 below — Phase-2
+increment validity of each intermediate `.zkey`, which the manifest
+chain attests but does not prove). Before unpacking:
 
-1. Verify the bundle's coordinator signature against the published
-   coordinator pubkey (out-of-band; e.g. signed announcement on the
-   project's release page).
+1. Confirm the coordinator pubkey in `manifest.json` matches the
+   published coordinator key (out-of-band; e.g. signed announcement on
+   the project's release page), and that it is the key configured in
+   your `OLYMPUS_BJJ_TRUSTED_ISSUERS_JSON` with the
+   `ceremony_coordinator` role — otherwise the startup gate will refuse
+   the manifest after installation.
 2. Replay the contribution chain — recompute `running_chain_hash` from
    the contribution list, confirm it matches the manifest's final value.
+   (The startup gate repeats this check on every boot.)
 3. For each `contributions[i]`, run
    `snarkjs zkey verify <circuit>.r1cs <ptau> contributions/<i>.zkey`.
    That confirms the contribution is a valid Phase-2 increment over the
-   previous step.
-4. Hash every artifact and confirm against `manifest.json`.
+   previous step — the one check no runtime gate performs, since the
+   intermediate `.zkey` files are not shipped to consumers.
+4. Hash every artifact and confirm against `manifest.json`. (The
+   startup gate re-checks the vkey at compile time and the `.ark.zkey`
+   at load time; `r1cs`/`wasm` digests are bound by the coordinator
+   signature.)
 5. Only then unpack into `proofs/keys/` and rebuild.
 
 ### Production ceremony — Phase 2 with multiple contributors

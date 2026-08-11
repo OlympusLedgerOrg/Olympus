@@ -87,7 +87,7 @@ const MANIFEST_SIG_DOMAIN_V3: &[u8] = b"OLY:CEREMONY:MANIFEST:V3";
 /// the sanity property "the manifest existed no later than its creation
 /// time" would be unenforceable. One day absorbs any realistic cross-machine
 /// clock drift between the ceremony host and consumers.
-const MAX_CREATED_UNIX_FUTURE_SKEW_SECS: i64 = 86_400;
+pub const MAX_CREATED_UNIX_FUTURE_SKEW_SECS: i64 = 86_400;
 
 /// Domain tag for each contributor's signature. Unlike the coordinator's
 /// manifest signature, this statement binds the contributor identity and the
@@ -331,6 +331,36 @@ impl CeremonyManifest {
         self.version >= TIMESTAMPED_MANIFEST_VERSION
     }
 
+    /// The timestamp at which issuer/contributor validity windows are
+    /// evaluated for this manifest — the single copy of the trust-window
+    /// rule shared by [`Self::verify_coordinator_signature`] and
+    /// [`Self::verify_authenticated_contributors`]:
+    ///
+    /// - **v3+**: the signature-covered `created_unix`. A manifest
+    ///   forward-dated more than [`MAX_CREATED_UNIX_FUTURE_SKEW_SECS`] past
+    ///   the local clock is rejected with [`ManifestError::CreatedInFuture`]
+    ///   — it claims a creation time that has not happened, which could
+    ///   reach into a not-yet-open window.
+    /// - **v1/v2**: wall-clock now. Their `created_unix` is not covered by
+    ///   any signature (attacker-editable), so it must not enter the trust
+    ///   decision.
+    fn trust_window_unix(&self) -> Result<i64, ManifestError> {
+        let now_unix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        if !self.binds_created_unix() {
+            return Ok(now_unix);
+        }
+        if self.created_unix > now_unix + MAX_CREATED_UNIX_FUTURE_SKEW_SECS {
+            return Err(ManifestError::CreatedInFuture {
+                created_unix: self.created_unix,
+                now_unix,
+            });
+        }
+        Ok(self.created_unix)
+    }
+
     /// True iff `json` is the `{"placeholder": true, ...}` stub that
     /// `build.rs` drops on a fresh checkout that hasn't run
     /// `setup_circuits.sh` yet. Lets callers distinguish "manifest not
@@ -480,31 +510,12 @@ impl CeremonyManifest {
 
         self.verify_contribution_chain()?;
         // Contributor windows use the same version-dependent time base as the
-        // coordinator window in `verify_coordinator_signature`: for v3+
-        // manifests `created_unix` is covered by the coordinator signature and
-        // is a sound evaluation point; for v1/v2 it is attacker-editable
-        // (sliding it could re-admit a retired contributor), so wall-clock now
-        // is used instead. The per-contribution `timestamp_unix` is signer
-        // supplied and is never used for the trust decision.
-        let now_unix = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
-        let window_unix = if self.binds_created_unix() {
-            // Same forward-dating bound as the coordinator path: this check
-            // must hold on its own (release preflight may run it without the
-            // trusted-issuer coordinator gate), so a future-dated manifest
-            // cannot reach a contributor window that hasn't opened yet.
-            if self.created_unix > now_unix + MAX_CREATED_UNIX_FUTURE_SKEW_SECS {
-                return Err(ManifestError::CreatedInFuture {
-                    created_unix: self.created_unix,
-                    now_unix,
-                });
-            }
-            self.created_unix
-        } else {
-            now_unix
-        };
+        // coordinator window (`trust_window_unix`, incl. the forward-dating
+        // bound — this check must hold on its own, since release preflight
+        // may run it without the trusted-issuer coordinator gate). The
+        // per-contribution `timestamp_unix` is signer supplied and is never
+        // used for the trust decision.
+        let window_unix = self.trust_window_unix()?;
         let mut distinct = HashSet::new();
         for (position, contribution) in self.contributions.iter().enumerate() {
             let digest = self.contribution_signing_digest(position)?;
@@ -638,41 +649,15 @@ impl CeremonyManifest {
     ) -> Result<&'a TrustedIssuer, ManifestError> {
         // 1. Coordinator pubkey must be in the trusted set with the
         //    CeremonyCoordinator role, AND authorised at the window-check
-        //    time, which depends on the manifest version:
-        //
-        //    - v3+: `created_unix` is covered by the coordinator signature
-        //      (the V3 digest folds it in), so the window is evaluated at the
-        //      authenticated creation time. A retired coordinator key — one
-        //      whose `valid_until` has passed — keeps vouching for the
-        //      manifests it signed while valid, and editing `created_unix`
-        //      to slide into any window breaks the signature. A manifest
-        //      forward-dated beyond clock-skew tolerance is rejected
-        //      outright: it claims to have been created at a time that
-        //      hasn't happened, which could reach into a not-yet-open
-        //      window.
-        //
-        //    - v1/v2: `created_unix` is NOT signature-covered, so an
-        //      attacker holding any one validly-signed manifest could edit
-        //      it to slide inside a retired-but-still-listed issuer's
-        //      window. Checking wall-clock *now* removes the field from the
-        //      trust decision entirely (the pre-v3 behavior, unchanged).
-        //      Consequence: legacy manifests cannot outlive their
-        //      coordinator key — regenerate under v3 to retire a key.
-        let now_unix = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
-        let window_unix = if self.binds_created_unix() {
-            if self.created_unix > now_unix + MAX_CREATED_UNIX_FUTURE_SKEW_SECS {
-                return Err(ManifestError::CreatedInFuture {
-                    created_unix: self.created_unix,
-                    now_unix,
-                });
-            }
-            self.created_unix
-        } else {
-            now_unix
-        };
+        //    time (`trust_window_unix`): for v3+ that is the
+        //    signature-covered `created_unix` — a retired coordinator key
+        //    (bounded `valid_until`) keeps vouching for manifests it signed
+        //    while valid, editing `created_unix` breaks the signature, and a
+        //    forward-dated manifest is rejected outright. For v1/v2 it is
+        //    wall-clock now, since their `created_unix` is attacker-editable
+        //    — the pre-v3 behavior, unchanged; legacy manifests cannot
+        //    outlive their coordinator key, regenerate under v3 to retire.
+        let window_unix = self.trust_window_unix()?;
         let issuer = trusted_issuers
             .iter()
             .find(|t| {
@@ -708,10 +693,17 @@ impl CeremonyManifest {
     /// Verify that the coordinator signature is cryptographically valid for
     /// the public key declared by this manifest.
     ///
-    /// This proves internal integrity only; it deliberately does **not** make
+    /// This proves internal integrity; it deliberately does **not** make
     /// the declared key trusted. Production callers must still use
     /// [`Self::verify_coordinator_signature`] with an independently configured
     /// trusted-issuer set.
+    ///
+    /// Because it delegates to [`Self::verify_coordinator_signature`], for
+    /// version-3 manifests the verdict is also wall-clock dependent: a
+    /// manifest whose `created_unix` is more than
+    /// [`MAX_CREATED_UNIX_FUTURE_SKEW_SECS`] past the local clock is
+    /// rejected with [`ManifestError::CreatedInFuture`] before the signature
+    /// is examined (fail closed).
     pub fn verify_signature_against_declared_coordinator(&self) -> Result<(), ManifestError> {
         let x = crate::api::credentials::parse_fr_decimal(&self.coordinator.bjj_pubkey.x).ok_or(
             ManifestError::BadFrField {
@@ -1410,6 +1402,32 @@ mod tests {
         assert!(matches!(
             legacy.verify_authenticated_contributors(std::slice::from_ref(&retired), 1),
             Err(ManifestError::UntrustedContributor { index: 0 })
+        ));
+    }
+
+    #[test]
+    fn v3_contributor_window_rejects_future_dated_manifest() {
+        // The contributor path carries its own forward-dating bound because
+        // release preflight may call it without the coordinator gate — this
+        // pins that removing the shared `trust_window_unix` check from that
+        // path (or bypassing it) fails the suite.
+        let key = [0x88; 32];
+        let mut manifest = build_test_manifest(
+            "document_existence",
+            &key,
+            ArtifactBytes {
+                vkey: b"v",
+                ark_zkey: b"z",
+                r1cs: b"r",
+                wasm: b"w",
+            },
+        );
+        replace_with_signed_contributions(&mut manifest, &[key]);
+        manifest.created_unix = now_unix() + 200_000; // > 1-day skew allowance
+        resign_as_version(&mut manifest, TIMESTAMPED_MANIFEST_VERSION, &key);
+        assert!(matches!(
+            manifest.verify_authenticated_contributors(&[trusted_issuer_for(&key)], 1),
+            Err(ManifestError::CreatedInFuture { .. })
         ));
     }
 
