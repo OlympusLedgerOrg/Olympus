@@ -105,8 +105,10 @@ blake3_mod_p("OLY:REDACTION:OBJ:V1" || lp(obj_id) || obj_bytes)), 0)`) instead
 ### Added
 
 - **BJJ authority-key registry + in-band rotation (migration 0056).** The
-  authority row in `account_signing_keys` becomes an append-only supersession
-  chain: `valid_from`/`valid_until` windows, a partial unique index enforcing
+  authority row in `account_signing_keys` becomes a supersession
+  chain (identity columns immutable; one-shot lifecycle stamps on the
+  predecessor, the user signing-key pattern): `valid_from`/`valid_until`
+  windows, a partial unique index enforcing
   at most one active authority, and `bootstrap::rotate_authority` performing
   the revoke-and-insert supersession when the operator restarts with a new
   `OLYMPUS_BJJ_AUTHORITY_KEY` plus the explicit

@@ -237,7 +237,7 @@ async fn ensure_bjj_authority(pool: &PgPool) -> Result<BootstrapResult, String> 
         //   * active row matches → normal restart, nothing to do;
         //   * active row differs → a key CHANGE. Refused unless the operator
         //     explicitly opted in with OLYMPUS_AUTHORITY_ROTATION=confirm, in
-        //     which case the registry records an append-only supersession
+        //     which case the registry records a supersession
         //     (old row revoked + windowed + replaced_by_key_id → new row).
         //     The refusal keeps the pre-registry anti-accidental-swap
         //     property: a pasted wrong key must not silently become the
@@ -522,11 +522,13 @@ async fn insert_authority_row(
     Ok(key_id)
 }
 
-/// Append-only authority supersession (docs/key-rotation.md, migration 0056):
-/// in one transaction, revoke the active authority row (`revoked_at` +
-/// `valid_until` = NOW(), `replaced_by_key_id` = successor) and insert the
-/// successor with `valid_from` = NOW(). Historical rows are never updated in
-/// place, so the registry keeps the full audit chain, and the
+/// Authority supersession (docs/key-rotation.md, migration 0056): in one
+/// transaction, stamp the active row's one-shot lifecycle columns
+/// (`revoked_at` + `valid_until` = NOW(), `replaced_by_key_id` = successor)
+/// and insert the successor with `valid_from` = NOW(). Identity columns are
+/// never rewritten — the same lifecycle pattern user signing-key revocation
+/// uses, and exactly the columns the external-PG DML contract whitelists for
+/// UPDATE — so the registry keeps the full audit chain, and the
 /// registry-driven trusted-issuer loader
 /// (`trusted_issuers::load_trusted_issuers_with_registry`) automatically
 /// windows the retired key for historical credential verification.

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Olympus Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 //! Authority-key registry + rotation (migration 0056, docs/key-rotation.md).
 //!
 //! Exercises `bootstrap::rotate_authority` — the sanctioned supersession
@@ -58,12 +61,14 @@ async fn rotate_authority_supersedes_append_only_and_windows_history() {
     let pk_b = BabyJubJubPubKey::from_private(&[0x5A; 32]).expect("key B");
     let b_id = rotate_authority(&pool, &pk_b).await.expect("rotate to B");
 
-    let row: (
-        Option<chrono::NaiveDateTime>,
-        Option<chrono::NaiveDateTime>,
+    /// `(revoked_at, valid_until, replaced_by_key_id, bjj_pubkey_x)`.
+    type PredecessorRow = (
+        Option<chrono::DateTime<chrono::Utc>>,
+        Option<chrono::DateTime<chrono::Utc>>,
         Option<String>,
         String,
-    ) = sqlx::query_as(
+    );
+    let row: PredecessorRow = sqlx::query_as(
         "SELECT revoked_at, valid_until, replaced_by_key_id, bjj_pubkey_x
                FROM account_signing_keys WHERE key_id = $1",
     )
@@ -134,6 +139,38 @@ async fn rotate_authority_supersedes_append_only_and_windows_history() {
     assert!(
         active.x_dec != old_x || active.y_dec != old_y,
         "the now-covering bounded entry must be a successor, not the original"
+    );
+
+    // Key reuse (A→B→A shape): rotate back to B — the registry then holds
+    // two disjoint intervals for B's coordinates. Every consumer scans the
+    // whole set with `covers`, so both must surface, and the loader called
+    // the way startup calls it (with the active primary) must tighten the
+    // primary entry to the active registry window instead of leaving it
+    // unbounded.
+    rotate_authority(&pool, &pk_b)
+        .await
+        .expect("rotate back to B");
+    let issuers = load_trusted_issuers_with_registry(Some(&pk_b), Some(&pool)).await;
+    let now = chrono::Utc::now().timestamp();
+    assert!(
+        !issuers[0].covers(0),
+        "active primary must not cover pre-adoption history (tightened window)"
+    );
+    assert!(issuers[0].covers(now), "active primary must cover now");
+    let (bx, by) = (issuers[0].x_dec.clone(), issuers[0].y_dec.clone());
+    let b_entries: Vec<_> = issuers
+        .iter()
+        .filter(|t| t.x_dec == bx && t.y_dec == by)
+        .collect();
+    assert_eq!(
+        b_entries.len(),
+        2,
+        "re-adopted key must keep both registry intervals"
+    );
+    assert_eq!(
+        b_entries.iter().filter(|t| t.covers(now + 86_400)).count(),
+        1,
+        "exactly one B interval may extend into the future"
     );
 
     // The pre-rotation credential row is untouched by rotation: the running

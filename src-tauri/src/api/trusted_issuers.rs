@@ -167,6 +167,18 @@ pub async fn load_trusted_issuers_with_registry(
             return out;
         }
     };
+    // Env entries are operator overrides: any registry interval for coords the
+    // env var names is dropped in its favour (e.g. bounding a compromised key
+    // earlier than its rotation time). The primary is different — when the
+    // ACTIVE registry row matches it, its window is tightened to the
+    // registry-recorded one instead of staying unbounded, so the active key
+    // does not cover timestamps from before it became the authority.
+    let primary_dec = primary.map(|p| (fr_to_decimal(&p.x), fr_to_decimal(&p.y)));
+    let env_start = usize::from(primary_dec.is_some());
+    let env_coords: std::collections::HashSet<(String, String)> = out[env_start..]
+        .iter()
+        .map(|i| (i.x_dec.clone(), i.y_dec.clone()))
+        .collect();
     for (x, y, valid_from, valid_until, revoked_at) in rows {
         let entry = RawEntry {
             x,
@@ -182,10 +194,28 @@ pub async fn load_trusted_issuers_with_registry(
             );
             continue;
         };
-        if out
-            .iter()
-            .any(|i| i.x_dec == issuer.x_dec && i.y_dec == issuer.y_dec)
+        if env_coords.contains(&(issuer.x_dec.clone(), issuer.y_dec.clone())) {
+            continue;
+        }
+        if revoked_at.is_none()
+            && primary_dec
+                .as_ref()
+                .is_some_and(|(px, py)| *px == issuer.x_dec && *py == issuer.y_dec)
         {
+            out[0].valid_from = issuer.valid_from;
+            out[0].valid_until = issuer.valid_until;
+            continue;
+        }
+        // Retired intervals are pushed even when their coordinates repeat
+        // (A→B→A re-adoption yields two disjoint windows for A); every
+        // consumer scans the whole set with `covers`, so multiple entries
+        // per pubkey compose correctly.
+        if out.iter().any(|i| {
+            i.x_dec == issuer.x_dec
+                && i.y_dec == issuer.y_dec
+                && i.valid_from == issuer.valid_from
+                && i.valid_until == issuer.valid_until
+        }) {
             continue;
         }
         out.push(issuer);
@@ -197,6 +227,10 @@ fn parse_entry(e: &RawEntry) -> Option<TrustedIssuer> {
     use crate::api::credentials::parse_fr_decimal;
     let x = parse_fr_decimal(&e.x)?;
     let y = parse_fr_decimal(&e.y)?;
+    // Reject identity / off-curve / wrong-subgroup keys outright — a trusted
+    // issuer that fails BJJ subgroup validation could never produce a valid
+    // signature, and listing it would only mask a corrupt row or env entry.
+    crate::zk::witness::baby_jubjub::validate_pubkey_subgroup(&BabyJubJubPubKey { x, y }).ok()?;
     // Non-degenerate window.
     if let (Some(lo), Some(hi)) = (e.valid_from, e.valid_until) {
         if lo > hi {

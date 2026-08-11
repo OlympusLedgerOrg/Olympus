@@ -3,8 +3,8 @@
 This is the operational procedure for rotating each long-lived Olympus secret in **v0.10.x, as
 the code works today**. It documents what is currently possible, what each rotation breaks, and
 the exact order of operations that avoids the known traps. The BJJ authority key now rotates
-in-band through the authority-key registry (migration `0056`: append-only supersession with
-validity windows, loaded into the trusted-issuer set at startup). Role-separated trust and
+in-band through the authority-key registry (migration `0056`: identity-immutable supersession
+with validity windows, loaded into the trusted-issuer set at startup). Role-separated trust and
 signed trust-list snapshots per
 [ADR-0041](adr/ADR-0041-role-separated-trust-list-rotation.md) remain roadmap work — see
 [ROADMAP.md](../ROADMAP.md).
@@ -40,7 +40,7 @@ this document covers the keys that do **not**.
 ## Rotating the BJJ authority key
 
 The BJJ authority key is the trust root: it signs SBT credentials, anchors the trusted-issuer
-set (it is always entry 0, with an unbounded validity window), signs checkpoint transition
+set (entry 0; its validity window is tightened to the active registry row's), signs checkpoint transition
 attestations, and binds checkpoint bundles. Rotation is a restart-time supersession driven by
 bootstrap — there is no HTTP endpoint (a network-reachable trust-root rotation would be a
 bigger attack surface than the key change it performs). The procedure is:
@@ -67,12 +67,16 @@ OLYMPUS_AUTHORITY_ROTATION=confirm
 ```
 
 Bootstrap (`src-tauri/src/bootstrap.rs::ensure_bjj_authority`) compares the env key against
-the active authority row and, with the confirmation flag set, performs an **append-only
+the active authority row and, with the confirmation flag set, performs a **registry
 supersession** (migration `0056`): the old row is revoked and windowed (`revoked_at` +
 `valid_until` = rotation time, `replaced_by_key_id` = successor) and the new key is inserted
-with `valid_from` = rotation time — matching how user signing keys already rotate. Historical
-rows are never modified, so the registry keeps the full audit chain, and a partial unique
-index guarantees at most one active authority at any time.
+with `valid_from` = rotation time — matching how user signing keys already rotate. Identity
+columns of historical rows are never rewritten; rotation stamps the predecessor's one-shot
+lifecycle columns (`revoked_at`, `valid_until`, `replaced_by_key_id`) — exactly the
+`account_signing_keys` columns the external-PostgreSQL DML contract whitelists for UPDATE —
+so the registry keeps the full audit chain, and a partial unique index guarantees at most one
+active authority at any time. (ADR-0031's insert-only invariant governs ledger tables, not
+the key registry.)
 
 Without the flag, a mismatched env key **refuses to start** with instructions — a pasted wrong
 key cannot silently become the signing authority. **Unset `OLYMPUS_AUTHORITY_ROTATION` after

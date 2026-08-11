@@ -54,8 +54,8 @@ single-operator risk + external review**.
   with remediations tracked as public PRs (see `SECURITY.md`).
 - ☐ **In-band key rotation and revocation.** Procedures live in
   [docs/key-rotation.md](docs/key-rotation.md). Landed: the authority-key
-  registry in `account_signing_keys` (migration 0056 — validity windows +
-  append-only supersession via `OLYMPUS_AUTHORITY_ROTATION=confirm`), trusted
+  registry in `account_signing_keys` (migration 0056 — validity windows + identity-immutable
+  supersession via `OLYMPUS_AUTHORITY_ROTATION=confirm`), trusted
   issuers loaded from that registry, per-row-pinned checkpoint-bundle export,
   and rotation integration tests. Remaining, in order: historical redaction
   issuer keys (the ingest Ed25519 key still rotates by env change with no
