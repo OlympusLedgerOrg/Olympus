@@ -168,11 +168,22 @@ pub fn load_trusted_issuers(primary: Option<&BabyJubJubPubKey>) -> Vec<TrustedIs
 /// [`load_trusted_issuers`] so entry parsing is testable without mutating
 /// process-global env vars.
 fn entries_from_env_json(raw: &str) -> Vec<TrustedIssuer> {
-    match serde_json::from_str::<Vec<RawEntry>>(raw) {
-        Ok(entries) => entries
+    // Deserialize as raw JSON values first, then each entry independently:
+    // a single field-type error (e.g. `"roles": "credential_authority"`
+    // instead of an array) must drop only that entry, never the valid
+    // siblings — an all-or-nothing Vec<RawEntry> parse would silently empty
+    // the whole operator-configured set.
+    match serde_json::from_str::<Vec<serde_json::Value>>(raw) {
+        Ok(values) => values
             .iter()
-            .filter_map(|e| {
-                let issuer = parse_entry(e);
+            .filter_map(|v| {
+                let Ok(e) = serde_json::from_value::<RawEntry>(v.clone()) else {
+                    tracing::warn!(
+                        "trusted_issuers: dropping undeserializable entry from {TRUSTED_ISSUERS_ENV}: {v}"
+                    );
+                    return None;
+                };
+                let issuer = parse_entry(&e);
                 if issuer.is_none() {
                     tracing::warn!(
                         "trusted_issuers: dropping malformed entry (x={}, y={}) from {TRUSTED_ISSUERS_ENV}",
@@ -337,6 +348,31 @@ use crate::zk::proof::fr_to_decimal;
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn malformed_entry_drops_independently_not_the_whole_set() {
+        // One valid entry beside an entry whose `roles` is a string, not an
+        // array: the type error must drop only the bad entry — an
+        // all-or-nothing parse would empty the operator's whole set.
+        let (x, y) = real_key_dec(0x42);
+        let raw = format!(
+            r#"[
+            {{"x":"3","y":"4","roles":"credential_authority"}},
+            {{"x":"{x}","y":"{y}"}}
+        ]"#
+        );
+        let entries = entries_from_env_json(&raw);
+        assert_eq!(
+            entries.len(),
+            1,
+            "only the type-broken entry may be dropped"
+        );
+        assert_eq!(
+            (entries[0].x_dec.as_str(), entries[0].y_dec.as_str()),
+            (x.as_str(), y.as_str()),
+            "the valid sibling must survive"
+        );
+    }
+
     use super::*;
     use ark_bn254::Fr;
 
