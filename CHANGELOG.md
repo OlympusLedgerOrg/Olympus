@@ -62,7 +62,7 @@ All notable changes to the Olympus protocol are documented in this file.
 - **redaction: replace the 16-chunk byte scheme with PDF object-level
   commitment (ADR-0025).** A PDF is now committed as one Poseidon leaf per
   indirect object (`leaf = Poseidon(Poseidon(POSEIDON_DOMAIN_LEAF,
-  blake3_mod_p("OLY:REDACTION:OBJ:V1" || lp(obj_id) || obj_bytes)), 0)`) instead
+blake3_mod_p("OLY:REDACTION:OBJ:V1" || lp(obj_id) || obj_bytes)), 0)`) instead
   of 16 length-proportional raw-byte chunks. Redaction zero-fills selected
   objects in place (file length and all byte offsets preserved), so non-redacted
   objects are byte-identical and their leaves survive a real redaction — the
@@ -104,6 +104,17 @@ All notable changes to the Olympus protocol are documented in this file.
 
 ### Added
 
+- **SBT credential expiry (signed, optional).** `POST /credentials` accepts
+  `expires_at` (unix seconds, strictly future); the value is embedded into the
+  JCS-canonicalized `details` object before `commit_id` is computed, so it is
+  covered by the issuer's BJJ signature and cannot be extended by a database
+  write. Enforcement: the SBT scope resolver grants nothing for an expired
+  credential, and `POST /credentials/{id}/verify` reports a new `expired`
+  diagnostic folded into the authoritative `valid` verdict. Credentials
+  without the key never expire (all pre-existing rows are unaffected).
+  Rejected with `commit: true` (a committed expiry would be unenforceable);
+  malformed `details.expires_at` values are rejected at issuance and fail
+  closed as expired at enforcement.
 - **Live parser-provenance commits** — `POST /ingest/files` now also commits each
   new record into the parser-bound BLAKE3 SMT (`commit_to_parser_smt`), stamped
   with the resolved provenance triple. This is the first runtime consumer of the
@@ -233,7 +244,7 @@ All notable changes to the Olympus protocol are documented in this file.
 - **Unified ZK circuit T3001** —
   `unified_canonicalization_inclusion_root_sign.circom` was reading
   `MerkleTreeInclusionProof.root` as an output when the template declares
-  it as an *input* (`lib/merkleProof.circom:64`). Changed two call sites
+  it as an _input_ (`lib/merkleProof.circom:64`). Changed two call sites
   from `===` (read + constraint) to `<==` (assign + constraint), which
   preserves the security property and lets the circuit compile.
 
@@ -318,12 +329,12 @@ before v1.0).
 Drops 4 entries from `cargo-audit-baseline.txt` (all gone from the
 lockfile after the arkworks 0.6 upgrade):
 
-| ID                  | Crate                |
-|---------------------|----------------------|
-| RUSTSEC-2025-0055   | tracing-subscriber   |
-| RUSTSEC-2023-0089   | atomic-polyfill      |
-| RUSTSEC-2025-0141   | bincode 1.x          |
-| RUSTSEC-2025-0057   | fxhash               |
+| ID                | Crate              |
+| ----------------- | ------------------ |
+| RUSTSEC-2025-0055 | tracing-subscriber |
+| RUSTSEC-2023-0089 | atomic-polyfill    |
+| RUSTSEC-2025-0141 | bincode 1.x        |
+| RUSTSEC-2025-0057 | fxhash             |
 
 ---
 
@@ -466,9 +477,9 @@ lockfile after the arkworks 0.6 upgrade):
 
 - **Merkle tree: 0x00/0x01 domain separation** (`api/services/merkle.py`)
   Internal node hashes are now computed as `H(0x01 || left || right)` and
-  leaf hashes as `H(0x00 || data)`, following RFC 6962 conventions.  This
+  leaf hashes as `H(0x00 || data)`, following RFC 6962 conventions. This
   prevents a crafted leaf value from colliding with an internal node hash
-  and eliminates structural ambiguity in the tree.  All Merkle roots change.
+  and eliminates structural ambiguity in the tree. All Merkle roots change.
   Pre-launch determination: no stored proofs reference unprefixed roots in
   a way that cannot be regenerated, so no `CANONICAL_VERSION` bump is needed.
 
@@ -476,23 +487,23 @@ lockfile after the arkworks 0.6 upgrade):
 
 - **Unicode homoglyph scrub** (`protocol/canonical.py`)
   `_scrub_homoglyphs()` replaces Unicode characters whose NFKD form is a
-  single ASCII printable character with that ASCII character.  This catches
+  single ASCII printable character with that ASCII character. This catches
   fullwidth Latin (`Ａ` → `A`), mathematical bold/italic (`𝐔` → `U`), and
   enclosed alphanumerics without touching legitimate non-ASCII (Arabic, CJK,
-  accented Latin).  Controlled via `scrub_homoglyphs=True/False` parameter
+  accented Latin). Controlled via `scrub_homoglyphs=True/False` parameter
   on `canonicalize_document()` and `document_to_bytes()`.
 
 - **Schema-annotated list sorting** (`protocol/canonical.py`)
   Added `sorted_list_keys: set[str] | None` parameter to
-  `canonicalize_document()` and `document_to_bytes()`.  Fields named in the
+  `canonicalize_document()` and `document_to_bytes()`. Fields named in the
   set have their array values sorted deterministically using canonical JSON
-  as the sort key.  Default is `None` (preserve order) for backward
+  as the sort key. Default is `None` (preserve order) for backward
   compatibility.
 
 - **Idempotency gate** (`api/ingest.py`)
   `IngestionResult` now includes an `idempotent: bool` field, set `True`
   when a duplicate submission returns the existing record instead of creating
-  a new ledger entry.  The existing content-hash dedup check was already
+  a new ledger entry. The existing content-hash dedup check was already
   enforced before any ledger write; this field lets callers distinguish fresh
   inserts from deduplicated returns.
 
@@ -505,14 +516,14 @@ lockfile after the arkworks 0.6 upgrade):
 - **Proof depth validation** (`api/services/merkle.py`)
   `MerkleProof` now carries `tree_size`; `verify_proof()` validates that
   proof depth matches `ceil(log2(tree_size))` and rejects invalid sibling
-  direction values.  `tree_size=0` disables the check for legacy proofs.
+  direction values. `tree_size=0` disables the check for legacy proofs.
 
 - **BLAKE3/Poseidon canonical-hash binding** (`proofs/proof_generator.py`)
   Added `recompute_canonical_hash()` and `_validate_canonical_hash_binding()`
-  to the unified circuit validator.  Before witness generation, the Python
+  to the unified circuit validator. Before witness generation, the Python
   layer independently recomputes the Poseidon chain from `sectionCount`,
   `sectionLengths`, and `sectionHashes`, and rejects inputs where
-  `canonicalHash` does not match.  This closes the binding gap between the
+  `canonicalHash` does not match. This closes the binding gap between the
   BLAKE3 canonicalization layer and the Poseidon ZK circuit.
 
 ## canonical_v2 (Round 1) — 2026-03-26
@@ -521,9 +532,9 @@ lockfile after the arkworks 0.6 upgrade):
 
 - **Merkle tree: lone-node self-pair instead of promotion** (`api/services/merkle.py`)
   Lone nodes at any level of the Merkle tree are now duplicated and hashed
-  (`H(node || node)`) instead of being promoted without rehashing.  This
+  (`H(node || node)`) instead of being promoted without rehashing. This
   prevents an attacker who controls batching boundaries from producing
-  alternate valid roots from the same dataset.  Any tree with an odd leaf
+  alternate valid roots from the same dataset. Any tree with an odd leaf
   count will produce a different root than under `canonical_v1`.
 
 ### Fixes
@@ -531,14 +542,14 @@ lockfile after the arkworks 0.6 upgrade):
 - **Numeric canonicalization** (`protocol/canonical.py`)
   `_canonicalize_value()` now normalises numeric types: whole floats are
   converted to `int`, non-whole floats to `Decimal`, and `NaN`/`Inf` are
-  rejected with `CanonicalizationError`.  This ensures semantically
+  rejected with `CanonicalizationError`. This ensures semantically
   equivalent JSON representations (`100`, `100.0`, `1e2`) produce the same
   canonical bytes.
 
 - **Merkle leaf ordering** (`api/services/merkle.py`)
   `build_tree()` now sorts leaf hashes lexicographically by default so that
   federation nodes ingesting the same dataset in different arrival orders
-  produce identical Merkle roots.  A `preserve_order=True` parameter is
+  produce identical Merkle roots. A `preserve_order=True` parameter is
   available for append-only log proofs where positional ordering is required.
 
 ### Migration
@@ -546,4 +557,4 @@ lockfile after the arkworks 0.6 upgrade):
 `CANONICAL_VERSION` has been bumped from `canonical_v1` to `canonical_v2`.
 `SUPPORTED_VERSIONS` includes both `canonical_v1` and `canonical_v2` so that
 the verifier can still accept proofs generated under the old version (with a
-deprecation warning).  A full migration layer is planned for a follow-up PR.
+deprecation warning). A full migration layer is planned for a follow-up PR.

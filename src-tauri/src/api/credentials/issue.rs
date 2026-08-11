@@ -51,6 +51,14 @@ pub(super) struct IssueRequest {
     /// (or 1) when omitted. Must be `>= 1` and `<=` the pinned signer-set size.
     #[serde(default)]
     quorum_threshold: Option<u32>,
+    /// Optional expiry, unix seconds, strictly in the future. Embedded into
+    /// the signed `details` object under `expires_at` so it is covered by
+    /// `commit_id` — enforcement then rejects the credential in both the
+    /// scope resolver and `POST /credentials/{id}/verify` once passed.
+    /// Rejected together with `commit: true`: the server cannot read
+    /// committed cleartext, so a committed expiry would be unenforceable.
+    #[serde(default)]
+    expires_at: Option<i64>,
 }
 
 /// Returned exactly once on `POST /credentials` when `commit: true`. The
@@ -98,7 +106,7 @@ pub(super) async fn issue_credential(
             "credential_type required",
         ));
     }
-    let details = if body.details.is_null() {
+    let mut details = if body.details.is_null() {
         serde_json::json!({})
     } else {
         body.details
@@ -118,6 +126,63 @@ pub(super) async fn issue_credential(
     })?;
 
     let issued_at_unix = chrono::Utc::now().timestamp();
+
+    // Signed expiry (details.expires_at). The param is injected into
+    // `details` BEFORE canonicalization so the expiry is bound into
+    // commit_id; a bare column would be alterable post-issuance without
+    // breaking the signature. All expiry shapes are then validated off the
+    // final `details`, so a hand-set details.expires_at follows the same
+    // rules as the param.
+    if let Some(exp) = body.expires_at {
+        let serde_json::Value::Object(ref mut map) = details else {
+            return Err(err(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "details must be a JSON object to carry expires_at",
+            ));
+        };
+        match map.get(super::types::DETAILS_EXPIRES_AT_KEY) {
+            Some(existing) if existing.as_i64() != Some(exp) => {
+                return Err(err(
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "expires_at conflicts with an existing details.expires_at value",
+                ));
+            }
+            _ => {
+                map.insert(
+                    super::types::DETAILS_EXPIRES_AT_KEY.to_owned(),
+                    serde_json::json!(exp),
+                );
+            }
+        }
+    }
+    if details.get(super::types::DETAILS_EXPIRES_AT_KEY).is_some() {
+        if body.commit {
+            // Committed rows store `{}` and bind a Pedersen commitment; the
+            // server could never read the expiry back to enforce it, and the
+            // opening-based verify path checks only (m, r). Fail closed at
+            // issuance instead of minting an unenforceable expiry.
+            return Err(err(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "expires_at is not supported with commit: true — a committed \
+                 expiry would be unenforceable",
+            ));
+        }
+        match super::types::details_expiry(&details) {
+            super::types::DetailsExpiry::At(at) if at > issued_at_unix => {}
+            super::types::DetailsExpiry::At(_) => {
+                return Err(err(
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "expires_at must be strictly in the future (unix seconds)",
+                ));
+            }
+            _ => {
+                return Err(err(
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "details.expires_at must be an integer unix timestamp",
+                ));
+            }
+        }
+    }
 
     // Pedersen-commit path: derive m from details, draw r, compute C, store
     // (C, version) and replace `details` with `{}` so the cleartext never

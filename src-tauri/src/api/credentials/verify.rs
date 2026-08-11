@@ -38,8 +38,9 @@ pub(super) struct VerifyResponse {
     /// valid *right now* against a trusted root: `commit_id` recomputes,
     /// the issued BJJ signature verifies, the issuer is in the configured
     /// trusted-issuer set (and was authorised at `issued_at`), the credential
-    /// is not revoked, any supplied commitment opening matches, and — for a
-    /// quorum credential — the M-of-N threshold is met (audit H-1/H-2).
+    /// is not revoked, its signed expiry (if any) has not passed, any
+    /// supplied commitment opening matches, and — for a quorum credential —
+    /// the M-of-N threshold is met (audit H-1/H-2).
     ///
     /// The individual booleans below are diagnostics. Relying parties MUST key
     /// off `valid`, not off `issued_signature_valid`/`quorum.satisfied` alone:
@@ -57,6 +58,15 @@ pub(super) struct VerifyResponse {
     issued_signature_valid: bool,
     revoked_signature_valid: Option<bool>,
     is_revoked: bool,
+    /// `Some(true)` iff the signed `details.expires_at` (unix seconds) has
+    /// passed — or is malformed, which fails closed. `Some(false)` when the
+    /// expiry is present and still in the future. `None` when the credential
+    /// carries no expiry (including every Pedersen-committed row: committed
+    /// details are `{}`; an enforceable committed expiry is rejected at
+    /// issuance). The expiry lives inside the JCS-canonicalized details, so
+    /// it is covered by `commit_id` and cannot be extended post-issuance.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    expired: Option<bool>,
     /// Present iff the row has a Pedersen commitment.  `Some(true)` means
     /// the caller's `opening` produced the stored commitment.  `Some(false)`
     /// means it did not.  `None` means the row is plaintext and no opening
@@ -323,15 +333,24 @@ async fn verify_credential_inner(
         _ => false,
     };
 
+    // 5b. Signed expiry: read `details.expires_at` from the same
+    //     JCS-canonicalized details that commit_id binds (step 1), so a
+    //     database-tier write cannot extend it without breaking the
+    //     signature. Committed rows store `{}` → no expiry (`None`);
+    //     malformed values fail closed as expired.
+    let expired = super::types::details_expired(&row.details, chrono::Utc::now().timestamp());
+    let is_expired = expired == Some(true);
+
     // 6. The single authoritative bit (audit H-1/H-2). Couples revocation,
-    //    trust-anchoring and quorum into one verdict so a relying party can't
-    //    accept a revoked-but-signature-valid or untrusted-issuer credential by
-    //    reading a lower-level boolean in isolation.
+    //    expiry, trust-anchoring and quorum into one verdict so a relying
+    //    party can't accept a revoked-, expired- or untrusted-issuer
+    //    credential by reading a lower-level boolean in isolation.
     let valid = overall_valid(
         commit_id_matches,
         issued_signature_valid,
         issuer_trusted,
         is_revoked,
+        is_expired,
         commitment_opens,
         quorum.as_ref(),
         quorum_issuer_anchored,
@@ -344,6 +363,7 @@ async fn verify_credential_inner(
         issued_signature_valid,
         revoked_signature_valid,
         is_revoked,
+        expired,
         commitment_opens,
         quorum,
     }))
@@ -355,6 +375,8 @@ async fn verify_credential_inner(
 ///   * the issued BJJ signature verifies,
 ///   * the issuer is trusted (in the configured set + within its window),
 ///   * it is not revoked,
+///   * its signed expiry (`details.expires_at`), when present, has not passed
+///     (a credential without the key never expires),
 ///   * any supplied Pedersen opening matched (an absent opening — `None` — does
 ///     not invalidate; only an explicit `Some(false)` does), and
 ///   * for a quorum credential, the M-of-N threshold is met, the pinned set
@@ -362,11 +384,16 @@ async fn verify_credential_inner(
 ///     genuine-multi-party constraint `build_quorum` enforces at issuance, so a
 ///     legacy/tampered self-satisfiable 1-of-1 row can't pass here either), and
 ///     the issuer roots the signer set (`quorum_issuer_anchored`, audit H-1).
+// The argument list is deliberately exhaustive — every verdict input is a
+// separate positional so a new signal cannot be silently dropped from the
+// fold (the same reason the tests enumerate them all).
+#[allow(clippy::too_many_arguments)]
 fn overall_valid(
     commit_id_matches: bool,
     issued_signature_valid: bool,
     issuer_trusted: bool,
     is_revoked: bool,
+    is_expired: bool,
     commitment_opens: Option<bool>,
     quorum: Option<&QuorumStatus>,
     quorum_issuer_anchored: bool,
@@ -375,6 +402,7 @@ fn overall_valid(
         && issued_signature_valid
         && issuer_trusted
         && !is_revoked
+        && !is_expired
         && commitment_opens != Some(false)
         && quorum.is_none_or(|q| {
             q.satisfied && q.threshold >= 2 && q.total_signers >= 2 && quorum_issuer_anchored
@@ -409,12 +437,15 @@ mod tests {
     #[test]
     fn happy_path_is_valid() {
         // Non-quorum rows: the anchoring flag is irrelevant (`quorum` is None).
-        assert!(overall_valid(true, true, true, false, None, None, false));
+        assert!(overall_valid(
+            true, true, true, false, false, None, None, false
+        ));
         // Supplied opening that matched.
         assert!(overall_valid(
             true,
             true,
             true,
+            false,
             false,
             Some(true),
             None,
@@ -426,31 +457,37 @@ mod tests {
             true,
             true,
             false,
+            false,
             None,
             Some(&quorum(true)),
-            true,
+            true
         ));
     }
 
     #[test]
     fn untrusted_issuer_is_invalid() {
         // H-1: signature self-consistent but issuer not in the trusted set.
-        assert!(!overall_valid(true, true, false, false, None, None, false));
+        assert!(!overall_valid(
+            true, true, false, false, false, None, None, false
+        ));
     }
 
     #[test]
     fn revoked_is_invalid_even_when_signatures_and_quorum_pass() {
         // H-2: a revoked credential must never report valid, even with a
         // satisfied quorum and a valid issued signature.
-        assert!(!overall_valid(true, true, true, true, None, None, false));
+        assert!(!overall_valid(
+            true, true, true, true, false, None, None, false
+        ));
         assert!(!overall_valid(
             true,
             true,
             true,
             true,
+            false,
             None,
             Some(&quorum(true)),
-            true,
+            true
         ));
     }
 
@@ -461,9 +498,10 @@ mod tests {
             true,
             true,
             false,
+            false,
             None,
             Some(&quorum(false)),
-            true,
+            true
         ));
     }
 
@@ -476,9 +514,10 @@ mod tests {
             true,
             true,
             false,
+            false,
             None,
             Some(&quorum(true)),
-            false,
+            false
         ));
     }
 
@@ -498,9 +537,10 @@ mod tests {
             true,
             true,
             false,
+            false,
             None,
             Some(&one_of_one),
-            true,
+            true
         ));
         // N >= 2 but threshold 1: still single-signer-satisfiable.
         let m1 = QuorumStatus {
@@ -513,6 +553,7 @@ mod tests {
             true,
             true,
             true,
+            false,
             false,
             None,
             Some(&m1),
@@ -527,16 +568,42 @@ mod tests {
             true,
             true,
             false,
+            false,
             Some(false),
             None,
-            false,
+            false
         ));
-        assert!(overall_valid(true, true, true, false, None, None, false));
+        assert!(overall_valid(
+            true, true, true, false, false, None, None, false
+        ));
+    }
+
+    #[test]
+    fn expired_is_invalid_even_when_everything_else_passes() {
+        // Signed expiry passed: never valid, even with a satisfied, anchored
+        // quorum — mirrors the revocation coupling.
+        assert!(!overall_valid(
+            true, true, true, false, true, None, None, false
+        ));
+        assert!(!overall_valid(
+            true,
+            true,
+            true,
+            false,
+            true,
+            None,
+            Some(&quorum(true)),
+            true,
+        ));
     }
 
     #[test]
     fn commit_mismatch_or_bad_signature_is_invalid() {
-        assert!(!overall_valid(false, true, true, false, None, None, false));
-        assert!(!overall_valid(true, false, true, false, None, None, false));
+        assert!(!overall_valid(
+            false, true, true, false, false, None, None, false
+        ));
+        assert!(!overall_valid(
+            true, false, true, false, false, None, None, false
+        ));
     }
 }

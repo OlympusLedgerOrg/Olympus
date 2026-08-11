@@ -2,22 +2,21 @@
 
 Olympus issues credentials as **Olympus-native** Soulbound Tokens —
 non-transferable, BJJ-EdDSA-signed records stored in the embedded
-PostgreSQL.  Every credential row carries the issuer's BJJ public key
+PostgreSQL. Every credential row carries the issuer's BJJ public key
 and a signature over a BLAKE3 commitment of its fields, so anyone with
 the federation's public key can verify a credential offline without
 contacting the issuing node.
 
-There is no blockchain mirror.  An earlier draft (see git history
+There is no blockchain mirror. An earlier draft (see git history
 prior to migration 0027) wired the schema for an optional ERC-5484
 EVM projection; that path was retired alongside the rest of the
-EVM/sequencer stack in #927 and dropped from the schema in migration
-0027.
+EVM/sequencer stack in #927 and dropped from the schema in migration 0027.
 
 ## Trust model
 
 A credential is bound to a `holder_key` — an opaque string that can be
 a UUID, an email, a `bjj:<x>:<y>` pubkey, an ENS name, or anything
-else the issuer chooses.  Olympus treats it as opaque bytes for the
+else the issuer chooses. Olympus treats it as opaque bytes for the
 hash; the issuer is responsible for whatever real-world binding they
 attach to it (notarised ID, key-signing party, etc.).
 
@@ -34,7 +33,7 @@ commit_id = BLAKE3(
 ```
 
 `details_json` is `serde_json::to_vec(&details)` of the issuer's JSON —
-verifiers must match byte-for-byte.  Length-prefixing every variable
+verifiers must match byte-for-byte. Length-prefixing every variable
 field prevents boundary-collision attacks.
 
 Revocation gets its own digest (`OLY:SBT:REVOKE:V1 | commit_id_hex |
@@ -46,13 +45,13 @@ as a revocation.
 All routes are HTTP and require API-key auth with `admin` (issue,
 revoke) or `read`/`verify`/`admin` (read, list, server-side verify).
 
-| Route | Method | Scope | Purpose |
-|---|---|---|---|
-| `/credentials` | POST | `admin` | Issue a new credential |
-| `/credentials` | GET | `read`/`verify`/`admin` | List, optionally filtered by `holder` and `type` |
-| `/credentials/{id}` | GET | `read`/`verify`/`admin` | Read one credential with signatures attached |
-| `/credentials/{id}/revoke` | POST | `admin` | Sign + record a revocation |
-| `/credentials/{id}/verify` | POST | `verify`/`read`/`admin` | Re-verify on the server (debug convenience) |
+| Route                      | Method | Scope                   | Purpose                                          |
+| -------------------------- | ------ | ----------------------- | ------------------------------------------------ |
+| `/credentials`             | POST   | `admin`                 | Issue a new credential                           |
+| `/credentials`             | GET    | `read`/`verify`/`admin` | List, optionally filtered by `holder` and `type` |
+| `/credentials/{id}`        | GET    | `read`/`verify`/`admin` | Read one credential with signatures attached     |
+| `/credentials/{id}/revoke` | POST   | `admin`                 | Sign + record a revocation                       |
+| `/credentials/{id}/verify` | POST   | `verify`/`read`/`admin` | Re-verify on the server (debug convenience)      |
 
 The full credential JSON includes:
 
@@ -68,7 +67,7 @@ The full credential JSON includes:
   "details": { "claims": ["FOIA filer"] },
   "issuer_pubkey": { "r8x": "<decimal Fr>", "r8y": "<decimal Fr>", "s": "" },
   "issued_signature": { "r8x": "…", "r8y": "…", "s": "…" },
-  "revoked_signature": null
+  "revoked_signature": null,
 }
 ```
 
@@ -89,9 +88,27 @@ curl -X POST "$OLYMPUS_API/credentials" \
 ```
 
 Response is the full credential JSON with the freshly-computed
-`issued_signature` populated.  The same JSON is what a verifier
+`issued_signature` populated. The same JSON is what a verifier
 ingests later; Olympus does not need to be online for the verifier to
 check it.
+
+### Expiry (optional)
+
+Pass `"expires_at": <unix seconds>` (strictly in the future) in the issue
+request to mint an expiring credential. The value is embedded into the
+signed `details` object as `details.expires_at` **before**
+canonicalization, so it is covered by `commit_id` and the issuer
+signature — a database write cannot extend it without breaking the
+signature. Enforcement is coupled everywhere that matters: the scope
+resolver grants nothing for an expired credential, and
+`POST /credentials/{id}/verify` reports `expired` and folds it into
+`valid`. A credential without the key never expires (that is also the
+shape of every credential issued before expiry support, so nothing
+changes retroactively). Not supported together with `commit: true`:
+committed details are opaque to the server, so a committed expiry would
+be unenforceable and issuance rejects the combination. A malformed
+`details.expires_at` (anything but an integer) is rejected at issuance
+and treated as expired by enforcement — fail closed.
 
 ## Offline verification (no Olympus node)
 
@@ -119,16 +136,16 @@ assert babyjubjub.verify(pubkey, signature, msg)
 ## UI
 
 Operators with an `admin`-scoped API key issue, list, revoke, and
-re-verify credentials at `/credentials` in the desktop app.  See
+re-verify credentials at `/credentials` in the desktop app. See
 `app/public-ui/src/pages/CredentialsPage.tsx`.
 
 ## Bootstrap-minted authority credential
 
 On first boot the federation also issues itself a single
 `authority_sbt` credential (see `src-tauri/src/bootstrap.rs`
-`ensure_system_sbt`).  It serves as a self-bound declaration that the
-BJJ pubkey is the federation's authority key.  Pre-migration-0027
+`ensure_system_sbt`). It serves as a self-bound declaration that the
+BJJ pubkey is the federation's authority key. Pre-migration-0027
 this row was created without a signature; if you upgrade an existing
 deployment, the row is preserved but its `issued_signature` will be
-`null`.  Re-issue via `POST /credentials` to obtain a signed authority
+`null`. Re-issue via `POST /credentials` to obtain a signed authority
 claim on the upgraded schema.
