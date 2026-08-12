@@ -51,7 +51,7 @@ individual is officially representing the project in public spaces.
 
 ## Enforcement Responsibilities
 
-Project maintainers (see [`MAINTAINERS.md`](MAINTAINERS.md)) are responsible for
+Project maintainers (see [`MAINTAINERS.md`](docs/MAINTAINERS.md)) are responsible for
 clarifying and enforcing these standards. They will take appropriate and fair
 corrective action in response to any behavior they deem inappropriate,
 threatening, offensive, or harmful, and have the right to remove, edit, or

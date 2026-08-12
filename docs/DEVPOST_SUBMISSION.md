@@ -14,7 +14,7 @@ Olympus gives journalists, investigators, lawyers, and oversight organizations
 offline-verifiable proof that pinned code canonicalized a record and that the
 record is covered by a committed checkpoint root and unchanged relative to it,
 while keeping source documents local; this establishes integrity under the
-[documented threat model](docs/threat-model.md), not truth, authorship, or
+[documented threat model](threat-model.md), not truth, authorship, or
 uncommitted history.
 
 ## Inspiration
@@ -76,8 +76,8 @@ Feature evidence:
 - Isolated diff: https://github.com/OlympusLedgerOrg/Olympus/compare/ad3e080dcfd758bff912b278da99710953608e4e...6e3fbfad397eb555690a1ba48d7241325e567426
 - zkVM PR: https://github.com/OlympusLedgerOrg/Olympus/pull/1409
 - zkVM core diff: https://github.com/OlympusLedgerOrg/Olympus/compare/357b1e51c363c956a7e61d609b352e19b3a58821...c69c2f7d3c518454374f5fd416614dbbb08f07c0
-- Provenance: https://github.com/OlympusLedgerOrg/Olympus/blob/main/BUILD_WEEK.md
-- Judge instructions: https://github.com/OlympusLedgerOrg/Olympus/blob/main/JUDGES.md
+- Provenance: https://github.com/OlympusLedgerOrg/Olympus/blob/main/docs/BUILD_WEEK.md
+- Judge instructions: https://github.com/OlympusLedgerOrg/Olympus/blob/main/docs/JUDGES.md
 
 ## How Codex and GPT-5.6 were used
 

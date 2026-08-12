@@ -36,10 +36,10 @@ prior reports are retained for historical reference only and are marked
 
 | Prior report | Date | Status |
 |---|---|---|
-| [`audits/archive/SECURITY_AUDIT_REPORT.md`](audits/archive/SECURITY_AUDIT_REPORT.md) (V1) | Apr 2026 | Superseded — predates the v0.9.x Rust/Tauri rewrite |
-| [`audits/archive/SECURITY_AUDIT_REPORT_V2.md`](audits/archive/SECURITY_AUDIT_REPORT_V2.md) (V2) | Apr 2026 | Superseded |
-| [`audits/archive/SECURITY_AUDIT_REPORT_V3.md`](audits/archive/SECURITY_AUDIT_REPORT_V3.md) (V3) | May 2026 | Superseded |
-| [`docs/audits/`](audits/) component audits | May 2026 | Retained as point-in-time records; consolidation plan in round 5 |
+| [`audits/archive/SECURITY_AUDIT_REPORT.md`](SECURITY_AUDIT_REPORT.md) (V1) | Apr 2026 | Superseded — predates the v0.9.x Rust/Tauri rewrite |
+| [`audits/archive/SECURITY_AUDIT_REPORT_V2.md`](SECURITY_AUDIT_REPORT_V2.md) (V2) | Apr 2026 | Superseded |
+| [`audits/archive/SECURITY_AUDIT_REPORT_V3.md`](SECURITY_AUDIT_REPORT_V3.md) (V3) | May 2026 | Superseded |
+| [`docs/audits/`](../) component audits | May 2026 | Retained as point-in-time records; consolidation plan in round 5 |
 
 > **Note for reviewers:** Olympus migrated from a Python/Go stack to an
 > all-Rust Tauri 2 desktop in v0.9.0. V1–V3 contain findings against the

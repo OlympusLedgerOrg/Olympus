@@ -21,7 +21,7 @@ and download the binary for your platform plus `SHA256SUMS`:
 | macOS Apple Silicon | `olympus-smt-demo-macos-arm64` |
 
 The release is produced by
-[`.github/workflows/build-week-demo.yml`](.github/workflows/build-week-demo.yml)
+[`.github/workflows/build-week-demo.yml`](../.github/workflows/build-week-demo.yml)
 from the commit recorded in the binary's JSON output.
 
 ## 2. Verify and run
@@ -110,7 +110,7 @@ single-contributor Groth16 development keys are production-trustworthy.
 The focused backend checks do not establish shard authorization, issuer or
 signature authenticity, integrity against an adversarial database, or
 concurrent multi-writer serialization. Those properties require the controls
-and assumptions described in the [project threat model](docs/threat-model.md);
+and assumptions described in the [project threat model](threat-model.md);
 the demo proves only the behaviors listed above.
 
 ## Build-from-source fallback

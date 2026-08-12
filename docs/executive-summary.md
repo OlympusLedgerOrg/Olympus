@@ -129,7 +129,7 @@ The remaining pre-launch milestone is a trusted-setup ceremony — a one-time st
 carried out by several independent parties so that no single one of them,
 including the Olympus team, keeps the ability to forge proofs. The current
 Groth16 keys are single-contributor development artifacts and are **not** a
-basis for production trust claims. See [`../ROADMAP.md`](../ROADMAP.md).
+basis for production trust claims. See [`ROADMAP.md`](ROADMAP.md).
 
 The implementation includes:
 
