@@ -67,7 +67,7 @@ function verifyBlake3Hash(data, expectedHash) {
  */
 function merkleParentHash(leftHash, rightHash) {
   // Concatenate: NODE_PREFIX || HASH_SEPARATOR || left || HASH_SEPARATOR || right
-  // Prefixes must match protocol/hashes.py: OLY:NODE:V1
+  // Prefixes must match crates/olympus-crypto/src/lib.rs: OLY:NODE:V1
   const NODE_PREFIX = new TextEncoder().encode("OLY:NODE:V1");
   const HASH_SEPARATOR = new TextEncoder().encode("|");
 
@@ -100,7 +100,7 @@ function merkleParentHash(leftHash, rightHash) {
  */
 function merkleLeafHash(leafData) {
   // Hash with LEAF_PREFIX domain separation
-  // Prefix must match protocol/hashes.py: OLY:LEAF:V1
+  // Prefix must match crates/olympus-crypto/src/lib.rs: OLY:LEAF:V1
   const LEAF_PREFIX = new TextEncoder().encode("OLY:LEAF:V1");
   const HASH_SEPARATOR = new TextEncoder().encode("|");
 
@@ -181,7 +181,7 @@ function verifyMerkleProof(proof) {
  * Compute the ledger entry hash from pre-canonicalized payload bytes.
  * Formula: BLAKE3(OLY:LEDGER:V1 || canonical_json_bytes(payload))
  * The canonical_json_bytes must be produced by the Olympus canonical JSON encoder
- * (JCS / RFC 8785 with BLAKE3-specific numeric rules — see protocol/canonical_json.py).
+ * (JCS / RFC 8785 with the Olympus divergences — see crates/olympus-crypto/src/canonical.rs).
  * @param {Uint8Array} canonicalPayloadBytes - Pre-canonicalized JSON payload bytes
  * @returns {Uint8Array} - 32-byte entry hash
  */
@@ -272,7 +272,7 @@ function bigIntTo32BytesBE(n) {
 // ---------------------------------------------------------------------------
 // Sparse Merkle Tree (SSMF) cross-language verifier — ADR-0003
 //
-// Mirrors protocol/ssmf.py::verify_proof and verify_nonexistence_proof.
+// Mirrors olympus_crypto::smt verify_proof / verify_nonexistence_proof.
 // Wire format: siblings are leaf-to-root (siblings[0] = leaf-adjacent,
 // siblings[255] = root-adjacent). Do NOT model this on
 // services/cdhs-smf-rust/src/smt.rs — that service uses the opposite
@@ -282,7 +282,7 @@ function bigIntTo32BytesBE(n) {
 
 /**
  * SMT empty-leaf sentinel: BLAKE3(b"OLY:EMPTY-LEAF:V1"). Must match
- * protocol/ssmf.py::EMPTY_LEAF. Hardcoded here for clarity; recomputed by
+ * olympus_crypto::empty_leaf(). Hardcoded here for clarity; recomputed by
  * the conformance test to guard against drift.
  * Value: 0c51a9c6fd8dd8847ba1053a17f62943c59052f4e311ab4e93867c4280579f29
  * @type {Uint8Array}
@@ -519,8 +519,8 @@ const SMT_EMPTY_LEAF_HEX = toHex(SMT_EMPTY_LEAF);
 /**
  * Canonical JSON encoder (JCS / RFC 8785 subset).
  *
- * Produces deterministic, byte-identical output matching the Python reference
- * implementation in ``protocol/canonical_json.py``:
+ * Produces deterministic, byte-identical output matching the authoritative
+ * Rust implementation in ``crates/olympus-crypto/src/canonical.rs``:
  *
  * - Object keys are sorted by UTF-16 code units (native JS sort).
  * - Strings are NFC-normalized before encoding.

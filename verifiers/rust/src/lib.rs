@@ -32,14 +32,15 @@ pub mod eddsa;
 /// ADR-0030 V3 signed-Merkle redaction bundle offline verifier (Phase 3).
 pub mod redaction;
 
-/// Constants for domain separation - must match protocol/hashes.py
+/// Constants for domain separation — must match `crates/olympus-crypto/src/lib.rs`
+/// (the authority; the Python `protocol/hashes.py` they originally mirrored was retired)
 const LEAF_PREFIX: &[u8] = b"OLY:LEAF:V1";
 const NODE_PREFIX: &[u8] = b"OLY:NODE:V1";
 const LEDGER_PREFIX: &[u8] = b"OLY:LEDGER:V1";
 const HASH_SEPARATOR: &[u8] = b"|";
 
 /// SMT empty-leaf sentinel (BLAKE3(b"OLY:EMPTY-LEAF:V1")) — must match
-/// `protocol/ssmf.py::EMPTY_LEAF`. Hardcoded for clarity; recomputed by
+/// `olympus_crypto::empty_leaf()`. Hardcoded for clarity; recomputed by
 /// `conformance_smt_empty_leaf` test to guard against drift.
 pub const SMT_EMPTY_LEAF: [u8; 32] = [
     0x0c, 0x51, 0xa9, 0xc6, 0xfd, 0x8d, 0xd8, 0x84, 0x7b, 0xa1, 0x05, 0x3a, 0x17, 0xf6, 0x29, 0x43,
@@ -155,7 +156,7 @@ pub fn verify_merkle_proof(proof: &MerkleProof) -> Result<bool, String> {
 /// Compute the ledger entry hash from pre-canonicalized payload bytes.
 /// Formula: BLAKE3(OLY:LEDGER:V1 || canonical_json_bytes(payload))
 /// The canonical_json_bytes must be produced by the Olympus canonical JSON encoder
-/// (JCS / RFC 8785 with BLAKE3-specific numeric rules — see protocol/canonical_json.py).
+/// (JCS / RFC 8785 with the Olympus divergences — see `crates/olympus-crypto/src/canonical.rs`).
 pub fn compute_ledger_entry_hash(canonical_payload_bytes: &[u8]) -> [u8; 32] {
     let mut combined = Vec::with_capacity(LEDGER_PREFIX.len() + canonical_payload_bytes.len());
     combined.extend_from_slice(LEDGER_PREFIX);
