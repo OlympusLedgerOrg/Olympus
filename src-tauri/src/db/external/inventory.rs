@@ -20,17 +20,20 @@ use sqlx::postgres::PgConnection;
 /// latent, not active), and the `COLLATE "C"` form reproduces it identically,
 /// which is why the pinned value did not change with the query hardening.
 ///
-/// Regenerated for migration `0057_ingest_signing_key_registry`, which adds
-/// the single-active-ingest-key partial index (`purpose = 'ingest_signing'`,
-/// docs/key-rotation.md — historical redaction/ingest issuer keys) — 674
-/// inventory rows before, 675 after. The previous value was
-/// `3acd13debe1ec1ee801f782027e210e84142191958c7f1a90760533a6d46860e` (itself
-/// set by `0056_authority_key_registry`, 671 -> 674). Each regeneration
+/// Regenerated for migration `0058_peer_checkpoints_v3_indexes`, which drops
+/// the three `wire_version = 2` partial indexes on `peer_checkpoints`
+/// (`peer_checkpoints_v2_statement_unique`, `_v2_equivocation_height`,
+/// `_v2_equivocation_timestamp`) and recreates them under new names predicated
+/// on `wire_version IN (2, 3)`. The object count is unchanged (675 -> 675):
+/// three index *definitions* change, not the number of inventory objects. The
+/// previous value was
+/// `09cf92379bc8ff74e67e9489c7cd3f4d8a6940b2240b12ff4186fc9a03cf77a5` (itself
+/// set by `0057_ingest_signing_key_registry`, 674 -> 675). Each regeneration
 /// is validated by re-applying the migration set *without* the new migration
 /// and confirming it still reproduces the prior constant exactly — see the
 /// `regen_semantic_inventory_digest` ignored maintenance test below.
 const EXTERNAL_PG_SEMANTIC_INVENTORY_BLAKE3: &str =
-    "09cf92379bc8ff74e67e9489c7cd3f4d8a6940b2240b12ff4186fc9a03cf77a5";
+    "85c869c260c5b6fd454d92426b9654fdba4d2ee3cae4cc04ccb1fce172735179";
 
 #[derive(Clone, Debug, PartialEq, Eq, sqlx::FromRow)]
 pub(super) struct ExternalPgTrustedBoundaryProbe {
