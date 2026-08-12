@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * API client for the Olympus FastAPI backend — facade re-exporting every
+ * API client for the Olympus desktop backend (embedded Axum server) —
+ * facade re-exporting every
  * domain module. Split by domain across `lib/api/*.ts`; import sites use
  * `from "../lib/api"` (or `"./api"`) unchanged, resolving to this directory's
  * `index.ts` exactly as they resolved to the flat `api.ts` before the split.

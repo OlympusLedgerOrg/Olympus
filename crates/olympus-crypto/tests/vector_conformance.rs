@@ -45,7 +45,8 @@ fn federation_event_fixture_payload_is_canonical() {
 #[test]
 fn end_to_end_fixture_canonical_bytes_derive_from_input_record() {
     let v = read_fixture("test_vectors/proofs/end_to_end.json");
-    let input = serde_json::to_string(&v["input_record"]).expect("re-serialize input_record");
+    let input_record = v.get("input_record").expect("fixture must carry input_record");
+    let input = serde_json::to_string(input_record).expect("re-serialize input_record");
     let expected_hex = v["canonicalized_bytes_hex"].as_str().expect("hex field");
     let canonical = canonicalize_str(&input).expect("canonicalize input_record");
     assert_eq!(
