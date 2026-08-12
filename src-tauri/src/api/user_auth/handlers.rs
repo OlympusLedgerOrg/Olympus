@@ -221,7 +221,7 @@ pub(super) async fn login(
         .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable."))?;
 
     let user_opt = sqlx::query_as::<_, UserRow>(
-        "SELECT id::uuid, email, password_hash, role, created_at FROM users WHERE email = $1",
+        "SELECT id::uuid, email, password_hash, created_at FROM users WHERE email = $1",
     )
     .bind(normalize_email(&body.email))
     .fetch_optional(pool)
@@ -275,7 +275,7 @@ pub(super) async fn reissue_key(
         .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable."))?;
 
     let user_opt = sqlx::query_as::<_, UserRow>(
-        "SELECT id::uuid, email, password_hash, role, created_at FROM users WHERE email = $1",
+        "SELECT id::uuid, email, password_hash, created_at FROM users WHERE email = $1",
     )
     .bind(normalize_email(&body.email))
     .fetch_optional(pool)
@@ -424,7 +424,7 @@ pub(super) async fn delete_own_account(
         .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable."))?;
 
     let user_opt = sqlx::query_as::<_, UserRow>(
-        "SELECT id::uuid, email, password_hash, role, created_at FROM users WHERE email = $1",
+        "SELECT id::uuid, email, password_hash, created_at FROM users WHERE email = $1",
     )
     .bind(normalize_email(&body.email))
     .fetch_optional(pool)

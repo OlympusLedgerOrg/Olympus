@@ -24,7 +24,7 @@
 //! CMS signature and X.509 chain validation is performed by the caller in
 //! `rfc3161.rs`; this module owns only the strict TSTInfo semantic checks.
 
-use der::{Decode, Encode, Tagged};
+use der::{Decode, Encode};
 use x509_tsp::{TimeStampResp, TstInfo};
 
 use super::AnchorError;

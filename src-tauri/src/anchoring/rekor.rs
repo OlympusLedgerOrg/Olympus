@@ -545,9 +545,7 @@ mod set_verification_tests {
     //! the safety net for any future refactor of the canonical payload
     //! shape or signature parsing.
     use super::*;
-    use p256::ecdsa::{
-        signature::Signer, signature::Verifier, Signature, SigningKey, VerifyingKey,
-    };
+    use p256::ecdsa::{signature::Signer, Signature, SigningKey, VerifyingKey};
     use p256::pkcs8::EncodePublicKey;
     use rand::rngs::OsRng;
 

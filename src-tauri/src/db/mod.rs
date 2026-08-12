@@ -4,6 +4,9 @@ mod embedded;
 mod external;
 mod process_identity;
 
+// Consumed only by the bin target (`window_events.rs`), which re-includes
+// this module tree — unused on the lib target by construction.
+#[allow(unused_imports)]
 pub(crate) use embedded::confirm_and_disarm_embedded_postgres_reaper;
 pub use embedded::{init_embedded, reap_embedded_pg, EmbeddedDb};
 pub use external::connect_external;
@@ -37,17 +40,6 @@ pub enum DbError {
     InstanceLocked(String),
     #[error("refused unsafe embedded PostgreSQL cleanup: {0}")]
     UnsafeProcessCleanup(String),
-}
-
-/// The point at which external PostgreSQL startup failed.
-///
-/// This deliberately carries no source error. SQLx and PostgreSQL diagnostics
-/// can contain connection strings, credentials, SQL text, and server paths, so
-/// only this coarse stage may cross the operator-log or renderer boundary.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ExternalDbFailure {
-    Connection,
-    Migration,
 }
 
 /// Return an operator-facing database failure description that cannot contain a
@@ -90,25 +82,5 @@ pub(crate) fn embedded_startup_error_message(error: &DbError) -> String {
          Check disk space, port availability, and the embedded-PostgreSQL debug log.\n\
          Database paths and sensitive diagnostics are intentionally omitted.",
         operator_safe_error(error)
-    )
-}
-
-/// Build the only external-database error text permitted in local logs or
-/// renderer IPC.
-pub(crate) fn external_startup_error_message(failure: ExternalDbFailure) -> String {
-    let (stage, hint) = match failure {
-        ExternalDbFailure::Connection => (
-            "connection",
-            "Verify that the server is running and DATABASE_URL is configured correctly",
-        ),
-        ExternalDbFailure::Migration => (
-            "schema migration",
-            "Verify that the configured database role can apply the authoritative migrations",
-        ),
-    };
-    format!(
-        "External PostgreSQL startup failed during {stage}.\n\
-         {hint}.\n\
-         Connection URLs, credentials, and server diagnostics are intentionally omitted."
     )
 }

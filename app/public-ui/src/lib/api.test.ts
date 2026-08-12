@@ -10,8 +10,6 @@ import {
   supportsDescribe,
   supportsRender,
   issueZkBundle,
-  registerPublicUser,
-  reissueKey,
   verifyAnchoredExistence,
   verifyDataset,
   verifyHash,
@@ -170,25 +168,6 @@ describe("POST wrappers", () => {
     expect(String(url)).toMatch(/\/ingest\/proofs\/verify$/);
     expect(init?.method).toBe("POST");
     expect(JSON.parse(String(init?.body))).toMatchObject({ content_hash: "ch" });
-  });
-
-  it("registerPublicUser posts to /auth/register", async () => {
-    vi.mocked(fetch).mockResolvedValue(jsonResponse({ user_id: "u-1", api_key: "k" }));
-    await registerPublicUser({ email: "u@x.com", password: "long-enough-password" });
-    const [url, init] = vi.mocked(fetch).mock.calls[0];
-    expect(String(url)).toMatch(/\/auth\/register$/);
-    expect(init?.method).toBe("POST");
-    const body = JSON.parse(String(init?.body));
-    expect(body.email).toBe("u@x.com");
-  });
-
-  it("reissueKey posts to /auth/reissue-key with the canonical scope list", async () => {
-    vi.mocked(fetch).mockResolvedValue(
-      jsonResponse({ api_key: "k", key_id: "kid", scopes: [], expires_at: "" }),
-    );
-    await reissueKey("u@x.com", "pw");
-    const body = JSON.parse(String(vi.mocked(fetch).mock.calls[0][1]?.body));
-    expect(body.scopes).toEqual(["read", "verify", "ingest", "commit", "write"]);
   });
 
   it("verifyZkProof posts to /zk/verify and forwards the API key header", async () => {

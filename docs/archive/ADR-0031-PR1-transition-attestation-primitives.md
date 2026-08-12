@@ -1,3 +1,7 @@
+> **ARCHIVED (2026-08-12).** Shipped: `SNAPSHOT_PERSIST_PREFIX`, `persist_message`,
+> and `TransitionAttestation` live in `crates/olympus-crypto/src/lib.rs`; the
+> verifiers mirror it in `verifiers/rust/src/transition.rs`.
+
 # PR1 brief — `TransitionAttestation` primitives in `olympus-crypto`
 
 > **Agent-ready.** Implements §1 of `docs/adr/ADR-0031-transition-attestations-insert-only-ledger.md`.

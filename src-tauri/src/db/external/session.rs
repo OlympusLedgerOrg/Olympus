@@ -52,6 +52,12 @@ pub(super) struct ExternalPgSessionProbe {
     pub(super) public_has_create_on_any_non_system_schema: bool,
     pub(super) has_search_path_schema_create: bool,
     pub(super) owns_database: bool,
+    // Probed but not yet asserted: `validate_external_pg_session` gates on
+    // `has_current_schema_create`, not ownership. Asserting ownership here is
+    // a policy change (docs/external-postgresql-roles.md says the migrator
+    // owns the application schema) — tracked as a follow-up, not slipped
+    // into a dead-code cleanup.
+    #[allow(dead_code)]
     pub(super) owns_current_schema: bool,
     pub(super) owns_search_path_schema: bool,
     pub(super) owns_search_path_objects: bool,

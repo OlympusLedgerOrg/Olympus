@@ -1,9 +1,10 @@
 /**
  * Shared TypeScript types for Olympus Public UI.
  *
- * These mirror the Pydantic schemas in api/schemas/ingest.py and
- * api/schemas/dataset.py so that the frontend remains type-safe against the
- * FastAPI contract without a code-generation step.
+ * These mirror the Axum handler request/response types in `src-tauri/src/api/`
+ * so the frontend stays type-safe against the desktop HTTP contract without a
+ * code-generation step. (The Python FastAPI schemas they originally mirrored
+ * were retired with the server in v0.9.0.)
  */
 
 // ─── Core domain types ────────────────────────────────────────────────────────

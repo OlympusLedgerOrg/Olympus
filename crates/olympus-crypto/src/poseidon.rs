@@ -63,7 +63,8 @@ const DOMAIN_COMMITMENT: u64 = 3;
 /// Domain tag for reveal-mask commitment chains.
 const DOMAIN_MASK: u64 = 4;
 
-/// `blake3_to_field_element` domain tag — matches `protocol/hashes.py`.
+/// `blake3_to_field_element` domain tag (inherited from the retired Python
+/// `protocol/hashes.py`; this crate is now the authority).
 const FIELD_ELEMENT_DOMAIN: &[u8] = b"OLY:FIELD-ELEMENT:V1";
 
 // ── BN254 scalar field prime ─────────────────────────────────────────────────
@@ -376,7 +377,7 @@ fn fr_to_biguint(f: Fr) -> BigUint {
 }
 
 /// Map raw bytes to a BN254 field element.
-/// Mirrors `blake3_to_field_element` in `protocol/hashes.py`:
+/// `blake3_to_field_element` (ported from the retired Python protocol layer):
 /// `BLAKE3("OLY:FIELD-ELEMENT:V1" || seed)` then reduce mod BN254.
 fn blake3_bytes_to_field(raw: &[u8]) -> Fr {
     let mut input = Vec::with_capacity(FIELD_ELEMENT_DOMAIN.len() + raw.len());
@@ -387,7 +388,7 @@ fn blake3_bytes_to_field(raw: &[u8]) -> Fr {
 }
 
 /// Domain-tagged Poseidon: `Poseidon(Poseidon(domain, left), right)`.
-/// Matches `poseidon_hash_with_domain` in `protocol/poseidon_tree.py`.
+/// `poseidon_hash_with_domain` (ported from the retired Python protocol layer).
 fn poseidon_with_domain(left: &BigUint, right: &BigUint, domain: u64) -> BigUint {
     let d = Fr::from(domain);
     let l = biguint_to_fr(left);
@@ -400,7 +401,7 @@ fn poseidon_with_domain(left: &BigUint, right: &BigUint, domain: u64) -> BigUint
 
 /// Convert a 64-char BLAKE3 hex digest to a Poseidon BN254 leaf field element.
 ///
-/// Mirrors `blake3_hex_to_poseidon_leaf` in `protocol/poseidon_tree.py`:
+/// `blake3_hex_to_poseidon_leaf` (ported from the retired Python protocol layer):
 /// 1. Decode hex → 32 bytes
 /// 2. `blake3_to_field_element(raw)` → apply BLAKE3 with domain tag + reduce
 /// 3. `Poseidon(DOMAIN_LEAF=1, field_elem)` → leaf
@@ -443,7 +444,7 @@ pub fn object_leaf(obj_id: u32, obj_bytes: &[u8]) -> BigUint {
 
 /// Poseidon commitment chain over `leaves`, seeded with `n_leaves`.
 ///
-/// Mirrors `compute_poseidon_commitment_root` in `protocol/poseidon_tree.py`.
+/// `compute_poseidon_commitment_root` (ported from the retired Python protocol layer).
 pub fn compute_poseidon_commitment_root(leaves: &[BigUint]) -> BigUint {
     // Audit follow-up: this used to be `assert!` — fine for internal
     // call sites with known-good inputs, but a future caller wiring this
@@ -469,7 +470,7 @@ pub fn compute_poseidon_commitment_root(leaves: &[BigUint]) -> BigUint {
 
 /// Compute `(redacted_commitment, reveal_mask_commitment)` for the ZK circuit.
 ///
-/// Mirrors `compute_redaction_commitments` in `protocol/poseidon_tree.py`.
+/// `compute_redaction_commitments` (ported from the retired Python protocol layer).
 pub fn compute_redaction_commitments(
     original_leaves: &[BigUint],
     reveal_mask: &[u8],

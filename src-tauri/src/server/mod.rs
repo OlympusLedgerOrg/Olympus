@@ -1,10 +1,12 @@
+#[cfg(feature = "federation")]
+use axum::Extension;
 use axum::{
     extract::DefaultBodyLimit,
     http::{header, HeaderName, Method, Request, StatusCode},
     middleware::{from_fn, from_fn_with_state, Next},
     response::Response,
     routing::get,
-    Extension, Router,
+    Router,
 };
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -17,7 +19,9 @@ use crate::api::{
     smt_stats, user_auth, zk,
 };
 use crate::routes::public_stats;
-use crate::state::{AppState, RateLimitOrigin};
+use crate::state::AppState;
+#[cfg(feature = "federation")]
+use crate::state::RateLimitOrigin;
 
 mod handlers;
 

@@ -11,6 +11,15 @@ use sqlx::postgres::PgConnection;
 /// `external_pg_semantic_inventory_digest`. This is populated from the
 /// reviewed v0.10.0 migration result and pins executable write semantics.
 ///
+/// The inventory query pins `COLLATE "C"` on all four sort keys (issue
+/// #1613.1): the canonical ordering must not depend on the cluster's default
+/// collation. Validated 2026-08-12 against real PostgreSQL 16.13 databases
+/// created with `LC_COLLATE 'C'` and `LC_COLLATE 'en_US.UTF-8'`: the as-is
+/// query reproduced this exact constant on BOTH (675 rows — the current
+/// catalog's total order coincides under the two collations, so the drift was
+/// latent, not active), and the `COLLATE "C"` form reproduces it identically,
+/// which is why the pinned value did not change with the query hardening.
+///
 /// Regenerated for migration `0057_ingest_signing_key_registry`, which adds
 /// the single-active-ingest-key partial index (`purpose = 'ingest_signing'`,
 /// docs/key-rotation.md — historical redaction/ingest issuer keys) — 674
@@ -888,6 +897,8 @@ pub(super) struct ExternalPgSemanticInventoryRow {
 }
 
 pub(super) const EXTERNAL_PG_SEMANTIC_INVENTORY_SQL: &str = r#"
+SELECT object_kind, parent_name, object_name, definition
+FROM (
 SELECT
     'table'::text AS object_kind,
     ''::text AS parent_name,
@@ -1327,7 +1338,15 @@ WHERE constraint_record.connamespace = (
     FROM pg_catalog.pg_namespace AS namespace
     WHERE namespace.nspname = current_schema()
 )
-ORDER BY object_kind, parent_name, object_name, definition
+-- PostgreSQL only allows bare result-column names in a UNION's ORDER BY, so
+-- the union is wrapped in a subquery and the collation-pinned sort applied
+-- outside it.
+) AS semantic_inventory
+ORDER BY
+    object_kind COLLATE "C",
+    parent_name COLLATE "C",
+    object_name COLLATE "C",
+    definition COLLATE "C"
 "#;
 
 pub(super) fn external_pg_semantic_inventory_digest(

@@ -34,7 +34,16 @@ If `proofs/keys/*.wasm` are 60-byte stubs, run the ZK setup from
 ```bash
 cargo tauri dev            # hot-reload frontend + Rust restart on src-tauri/ changes
 cargo tauri build          # production binary + installer bundles
+python scripts/dev.py      # optional: cargo tauri dev wrapped in a process-tree killer (needs Python 3)
 ```
+
+`scripts/dev.py` runs `cargo tauri dev` but guarantees the whole process tree
+(cargo → rustc → olympus-desktop → embedded PostgreSQL) is torn down when the
+launcher exits by any means — Ctrl-C, closed terminal, or a crash. Bare
+`cargo tauri dev` can orphan the embedded PostgreSQL, which then holds the
+embedded-DB lock and piles up stale builds; the wrapper exists because that
+happened. It forwards any extra args to `cargo tauri dev` (Job Objects on
+Windows, session/process-group + watchdog on Linux/macOS).
 
 The Tauri process:
 

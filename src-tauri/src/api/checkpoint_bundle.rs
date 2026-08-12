@@ -12,14 +12,12 @@
 //! commits to are NEVER serialised as JSON numbers — IEEE-754 would
 //! round-trip ledger_root or tree_size incorrectly through JS BigInt.
 
-use ark_ff::PrimeField;
 use axum::{
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
     routing::get,
     Json, Router,
 };
-use num_bigint::BigUint;
 use serde::Serialize;
 use uuid::Uuid;
 

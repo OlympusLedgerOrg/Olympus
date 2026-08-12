@@ -46,6 +46,10 @@ pub struct CircomProvingKey {
 /// Sealed trait — exists only to prevent any external impl of
 /// [`CircomProvingKey`] construction.
 mod sealed {
+    // No bound consumes this trait yet; the operative seal is the private
+    // `inner` field + `pub(crate) as_inner`. Kept as the documented M-5
+    // extension point.
+    #[allow(dead_code)]
     pub trait Sealed {}
 }
 impl sealed::Sealed for CircomProvingKey {}
@@ -55,6 +59,7 @@ impl CircomProvingKey {
     /// only `super::prove::prove_circom` can reach it — and that wrapper
     /// pins `CircomReduction` via its generic parameter, making the wrong
     /// reduction unreachable without writing fresh code in this module.
+    #[cfg_attr(not(feature = "prover"), allow(dead_code))]
     pub(crate) fn as_inner(&self) -> &ProvingKey<Bn254> {
         &self.inner
     }
