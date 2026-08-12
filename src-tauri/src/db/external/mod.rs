@@ -113,6 +113,19 @@ async fn prepare_external_pg_release_policy(
 /// another writer cannot slip into an unlocked interval. If another shared
 /// holder exists, this fails without changing CONNECT or object privileges and
 /// leaves recovery to the operator.
+///
+/// Same-session reacquisition is sound, and deliberately so. PostgreSQL's
+/// "a session never conflicts with its own advisory locks" rule excuses only
+/// conflicts against locks *this* session holds; a lock held by any **other**
+/// session still conflicts, so `pg_try_advisory_lock` here fails whenever
+/// another session holds the shared (or exclusive) form. Combined with this
+/// session's own shared hold — which no other session can upgrade past — a
+/// successful reacquisition is exactly global exclusivity. Issue #1613 item 2
+/// proposed replacing this with a separate verification session on the premise
+/// that the same-session attempt always succeeds; that premise is false, and
+/// acting on it would have required dropping the shared hold first, opening the
+/// unlocked interval this design exists to prevent. The semantics are pinned by
+/// `handoff_recovery_reacquisition_conflicts_with_other_sessions`.
 async fn recover_external_pg_handoff_failure(
     connection: &mut PgConnection,
     runtime_role: &str,
@@ -895,6 +908,69 @@ mod tests {
                 .expect("inventory query");
         println!("inventory rows: {}", rows.len());
         println!("digest: {}", external_pg_semantic_inventory_digest(&rows));
+    }
+
+    /// Concurrent-session proof of the advisory-lock semantics the handoff
+    /// recovery path and the per-checkout attestation split both rely on:
+    /// PostgreSQL's same-session reentrancy excuses only a session's **own**
+    /// locks, so an exclusive request still conflicts with a *different*
+    /// session's shared hold.
+    ///
+    /// This is what makes `recover_external_pg_handoff_failure`'s same-session
+    /// reacquisition a real exclusivity proof (issue #1613 item 2 assumed the
+    /// opposite), and what lets `attest_session` skip the control-plane sweep
+    /// per checkout (item 3): no maintenance mutation can occur while any
+    /// runtime connection holds the shared form.
+    ///
+    /// Requires a throwaway external PostgreSQL — advisory locks only, no
+    /// migrations:
+    ///
+    /// ```text
+    /// OLYMPUS_TEST_PG_URL=postgres://user:pass@host/db \
+    ///   cargo test -p olympus-desktop --lib \
+    ///   handoff_recovery_reacquisition -- --ignored --nocapture
+    /// ```
+    #[tokio::test]
+    #[ignore = "concurrent-session integration test — needs OLYMPUS_TEST_PG_URL"]
+    async fn handoff_recovery_reacquisition_conflicts_with_other_sessions() {
+        let url = std::env::var("OLYMPUS_TEST_PG_URL")
+            .expect("set OLYMPUS_TEST_PG_URL to a throwaway database");
+
+        // `keeper` stands in for the migration connection after the
+        // exclusive-to-shared handoff; `runtime` for a live pool member.
+        let mut keeper = PgConnection::connect(&url).await.expect("keeper connect");
+        let mut runtime = PgConnection::connect(&url).await.expect("runtime connect");
+        assert!(
+            acquire_external_pg_runtime_lock(&mut keeper).await,
+            "keeper must take the shared lifecycle lock"
+        );
+        assert!(
+            acquire_external_pg_runtime_lock(&mut runtime).await,
+            "a concurrent runtime session must also take the shared lock"
+        );
+
+        // The load-bearing assertion: the keeper already holds the shared form,
+        // yet its exclusive attempt is denied because *another* session holds
+        // shared. Same-session reentrancy does not extend to other sessions'
+        // locks, so this check cannot mistake a live runtime pool for an idle
+        // database.
+        assert!(
+            !acquire_external_pg_maintenance_lock(&mut keeper).await,
+            "exclusive reacquisition must fail while another session holds the \
+             shared lifecycle lock"
+        );
+
+        // With the only other shared holder gone (closing the session releases
+        // its advisory locks), the same call now proves exclusivity.
+        let _ = runtime.close().await;
+        assert!(
+            acquire_external_pg_maintenance_lock(&mut keeper).await,
+            "exclusive reacquisition must succeed once this session is the sole \
+             holder — its own shared hold does not block it"
+        );
+
+        assert!(release_external_pg_maintenance_lock(&mut keeper).await);
+        let _ = keeper.close().await;
     }
 
     #[test]
