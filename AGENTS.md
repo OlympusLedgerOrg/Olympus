@@ -215,7 +215,8 @@ For production: set `OLYMPUS_CEREMONY_COORDINATOR_KEY` when running setup script
 ### Frontend (`app/public-ui/`)
 
 React + TypeScript + Vite + Tailwind + React Query. API client in
-`app/public-ui/src/lib/api.ts`. Notable v0.9.x components:
+`app/public-ui/src/lib/api/` (split by domain; `index.ts` is the facade every
+import site resolves through). Notable v0.9.x components:
 
 - `InitialSecretsModal.tsx` — one-shot bootstrap dialog surfacing the API key + BJJ key on first launch
 - `StartupErrorScreen.tsx` — production startup-error landing page

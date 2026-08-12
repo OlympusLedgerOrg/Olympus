@@ -419,7 +419,7 @@ still a build-time placeholder. See
 | Axum server / router | `src-tauri/src/server/mod.rs` |
 | ZK proof generation | `src-tauri/src/zk/` |
 | Shared crypto crate | `crates/olympus-crypto/` |
-| Frontend API client | `app/public-ui/src/lib/api.ts` |
+| Frontend API client | `app/public-ui/src/lib/api/` |
 | sqlx migrations | `migrations/` |
 | ZK circuits | `proofs/circuits/` |
 | Verifiers | `verifiers/` |
