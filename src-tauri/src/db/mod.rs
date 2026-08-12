@@ -39,7 +39,6 @@ pub enum DbError {
     UnsafeProcessCleanup(String),
 }
 
-/// Append Olympus-managed PostgreSQL settings as the final, last-wins block.
 /// The point at which external PostgreSQL startup failed.
 ///
 /// This deliberately carries no source error. SQLx and PostgreSQL diagnostics

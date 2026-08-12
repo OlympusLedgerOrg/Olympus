@@ -554,6 +554,8 @@ async fn rotate_embedded_password_offline(
             data_dir.as_os_str().to_os_string(),
             std::ffi::OsString::from("postgres"),
         ];
+        // SECURITY: `password` is interpolated into SQL text. The 64-lowercase-hex
+        // check above is the injection precondition. Do not relax or relocate it.
         let statement = format!("ALTER ROLE {PG_USER} WITH LOGIN PASSWORD '{password}';\n");
         pg.run_postgres_utility_with_input(&arguments, statement.as_bytes(), pg.pg_settings.timeout)
             .await
