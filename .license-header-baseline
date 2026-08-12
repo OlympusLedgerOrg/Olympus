@@ -318,7 +318,6 @@ src-tauri/src/api/zk/parse.rs
 src-tauri/src/bin/export_ark_zkey.rs
 src-tauri/src/bin/generate_manifest.rs
 src-tauri/src/bootstrap.rs
-src-tauri/src/commands.rs
 src-tauri/src/env.rs
 src-tauri/src/federation/api.rs
 src-tauri/src/federation/checkpoint.rs

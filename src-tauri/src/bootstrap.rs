@@ -830,9 +830,10 @@ use crate::zk::proof::fr_to_decimal;
 // the Tokio runtime. Failures are always non-fatal: the caller falls through
 // to the next persistence tier (env var → keychain → DB dev column → generate).
 
-// `pub(crate)` so the keychain IPC commands in `commands.rs` can fence this
-// reserved account off from the renderer (a single source of truth prevents
-// the name drifting between the writer here and the guard there).
+// `pub(crate)` so the keychain IPC commands in `commands/keychain.rs` can
+// fence this reserved account off from the renderer (a single source of
+// truth prevents the name drifting between the writer here and the guard
+// there).
 pub(crate) const BJJ_KEYCHAIN_ACCOUNT: &str = "bjj_authority_key";
 const KEYCHAIN_SERVICE: &str = "olympus-desktop";
 
