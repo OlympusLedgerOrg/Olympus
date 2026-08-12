@@ -14,6 +14,22 @@ v0.9.0.
 - `proofs/` – legacy full-stack vectors that bind canonicalization → binary
   Merkle → ledger → proof verification in one artifact
 
+## CI conformance gates
+
+Files in this tree were historically published with **no CI consumer**, so
+nothing failed when they drifted. They are now gated:
+
+- `federation_event_v1.json` (ADR-0042 §4 fixture) — fully recomputed from
+  live primitives and signature-verified by
+  `verifiers/rust/tests/vector_conformance.rs`; its canonical payload is
+  additionally pinned against the live encoder by
+  `olympus-crypto::canonical::tests::federation_event_fixture_payload_is_canonical`.
+- `proofs/end_to_end.json` — live legs recomputed and the whole file
+  byte-pinned by the same conformance test (see `proofs/README.md` for which
+  fields are frozen legacy values).
+- `checkpoint_quorum_vectors.json` under `verifiers/test_vectors/` was already
+  gated by the Rust and JavaScript verifier suites.
+
 The existing golden files under `verifiers/test_vectors/` remain the source of
 truth for stage-specific vectors. The subdirectories here document where to
 find them and provide a single place for cross-language consumers to pick up

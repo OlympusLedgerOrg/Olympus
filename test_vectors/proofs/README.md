@@ -21,7 +21,7 @@ consumers. It binds the pre-SMT binary-Merkle pipeline:
   "description": "Human-readable summary",
   "input_record": { "...": "raw input used for canonicalization" },
   "canonicalized_bytes_hex": "hex-encoded canonical bytes",
-  "record_hash_hex": "BLAKE3 hash of the canonical bytes",
+  "record_hash_hex": "legacy record hash (see note below)",
   "merkle": {
     "leaf_hash_hex": "domain-separated leaf hash",
     "root_hex": "Merkle root for the tree",
@@ -41,6 +41,14 @@ consumers. It binds the pre-SMT binary-Merkle pipeline:
   }
 }
 ```
+
+**Legacy-field note.** `record_hash_hex` and the `ledger.*` fields were
+produced by the retired Python pipeline (v0.9.0 removed it) and are **not**
+reproducible by any current implementation — in particular, `record_hash_hex`
+is *not* `BLAKE3(canonicalized_bytes)`, despite what this schema previously
+claimed. `canonicalized_bytes_hex`, `merkle.*`, and `proof.*` are recomputed
+against the live verifier in `verifiers/rust/tests/vector_conformance.rs`,
+and the file as a whole is BLAKE3-pinned there so any edit fails CI.
 
 The vector is retained as a stable fixture for consumers of the legacy binary
 Merkle proof format. New integrations should prefer the SMT/snapshot fixtures in
