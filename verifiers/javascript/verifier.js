@@ -100,7 +100,9 @@ function merkleParentHash(leftHash, rightHash) {
  */
 function merkleLeafHash(leafData) {
   // Hash with LEAF_PREFIX domain separation
-  // Prefix must match crates/olympus-crypto/src/lib.rs: OLY:LEAF:V1
+  // LEGACY binary-Merkle leaf domain (pre-SMT pipeline only). The current
+  // leaf domain is the ADR-0005 structured prefix in olympus_crypto::leaf_hash;
+  // olympus-crypto pins OLY:LEAF:V1 as a legacy marker.
   const LEAF_PREFIX = new TextEncoder().encode("OLY:LEAF:V1");
   const HASH_SEPARATOR = new TextEncoder().encode("|");
 

@@ -23,10 +23,11 @@ nothing failed when they drifted. They are now gated:
   live primitives and signature-verified by
   `verifiers/rust/tests/vector_conformance.rs`; its canonical payload is
   additionally pinned against the live encoder by
-  `olympus-crypto::canonical::tests::federation_event_fixture_payload_is_canonical`.
-- `proofs/end_to_end.json` — live legs recomputed and the whole file
-  byte-pinned by the same conformance test (see `proofs/README.md` for which
-  fields are frozen legacy values).
+  `crates/olympus-crypto/tests/vector_conformance.rs`.
+- `proofs/end_to_end.json` — live legs recomputed (canonicalization in
+  `crates/olympus-crypto/tests/vector_conformance.rs`, Merkle/proof in the
+  verifier test) and the whole file byte-pinned (see `proofs/README.md` for
+  which fields are frozen legacy values).
 - `checkpoint_quorum_vectors.json` under `verifiers/test_vectors/` was already
   gated by the Rust and JavaScript verifier suites.
 

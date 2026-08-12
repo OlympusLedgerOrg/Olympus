@@ -34,7 +34,7 @@ If `proofs/keys/*.wasm` are 60-byte stubs, run the ZK setup from
 ```bash
 cargo tauri dev            # hot-reload frontend + Rust restart on src-tauri/ changes
 cargo tauri build          # production binary + installer bundles
-python scripts/dev.py      # cargo tauri dev, wrapped in a process-tree killer (recommended)
+python scripts/dev.py      # optional: cargo tauri dev wrapped in a process-tree killer (needs Python 3)
 ```
 
 `scripts/dev.py` runs `cargo tauri dev` but guarantees the whole process tree

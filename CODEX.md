@@ -3,8 +3,9 @@
 This file provides guidance to OpenAI Codex when working with code in this
 repository.
 
-**The single source of truth for agent guidance is [`AGENTS.md`](AGENTS.md)** —
-read it in full. This file used to carry a near-duplicate copy; the two drifted
+**The canonical guidance for AI assistants is the root [`CLAUDE.md`](CLAUDE.md)**;
+[`AGENTS.md`](AGENTS.md) is the agent-workflow companion kept in sync with it —
+read both in full. This file used to carry a near-duplicate copy; the two drifted
 in opposite directions (each was newer in different sections), which is exactly
 the failure mode a duplicate invites, so the copy was retired in favor of this
 pointer.

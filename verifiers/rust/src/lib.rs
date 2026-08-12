@@ -32,12 +32,19 @@ pub mod eddsa;
 /// ADR-0030 V3 signed-Merkle redaction bundle offline verifier (Phase 3).
 pub mod redaction;
 
-/// Constants for domain separation — must match `crates/olympus-crypto/src/lib.rs`
-/// (the authority; the Python `protocol/hashes.py` they originally mirrored was retired)
-const LEAF_PREFIX: &[u8] = b"OLY:LEAF:V1";
+/// Node-hash domain prefix and separator — must match
+/// `crates/olympus-crypto/src/lib.rs` (`NODE_PREFIX`, `SEP`), the authority.
 const NODE_PREFIX: &[u8] = b"OLY:NODE:V1";
-const LEDGER_PREFIX: &[u8] = b"OLY:LEDGER:V1";
 const HASH_SEPARATOR: &[u8] = b"|";
+
+/// **Legacy** binary-Merkle leaf and ledger-entry domains, kept only for the
+/// pre-SMT pipeline this verifier still accepts (e.g.
+/// `test_vectors/proofs/end_to_end.json`). They are NOT the current leaf
+/// domain: the authoritative leaf hash is the ADR-0005 structured binary
+/// prefix in `olympus_crypto::leaf_hash` (`olympus-crypto` pins `LEAF_PREFIX`
+/// as a legacy marker for the same reason).
+const LEAF_PREFIX: &[u8] = b"OLY:LEAF:V1";
+const LEDGER_PREFIX: &[u8] = b"OLY:LEDGER:V1";
 
 /// SMT empty-leaf sentinel (BLAKE3(b"OLY:EMPTY-LEAF:V1")) — must match
 /// `olympus_crypto::empty_leaf()`. Hardcoded for clarity; recomputed by

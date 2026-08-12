@@ -13,8 +13,11 @@
 //!   does not exist yet; when it lands, its output must match the preimage
 //!   this test rebuilds byte-for-byte.
 //! - `test_vectors/proofs/end_to_end.json` — a **legacy** pipeline vector.
-//!   The canonicalization → Merkle-leaf → root → proof legs are recomputed
-//!   against the live verifier. The `record_hash` and `ledger.*` fields were
+//!   The Merkle-leaf → root → proof legs are recomputed against the live
+//!   verifier here; the `input_record` → `canonicalized_bytes_hex` leg is
+//!   recomputed against the live encoder in
+//!   `crates/olympus-crypto/tests/vector_conformance.rs` (this standalone
+//!   verifier deliberately carries no canonical-JSON encoder). The `record_hash` and `ledger.*` fields were
 //!   produced by the retired Python pipeline (note the `canonical_v1` /
 //!   `pikepdf` canonicalizer tags) and are reproducible by **no current
 //!   implementation** — they are frozen by the whole-file pin below, not

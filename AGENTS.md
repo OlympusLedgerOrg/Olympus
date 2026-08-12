@@ -83,8 +83,10 @@ Rust       → Tauri app, Axum HTTP server, cryptographic hot path: BLAKE3, Ed25
 TypeScript → React frontend (app/public-ui/)
 ```
 
-Runtime Python and Go are retired. The Python FastAPI server, the Go sequencer, and
-the Go/Python verifiers were replaced by the Tauri + Axum desktop in v0.9.0.
+Runtime Python and Go are retired. The Python FastAPI server and the Go sequencer
+were replaced by the Tauri + Axum desktop in v0.9.0; the former Go/Python offline
+verifiers were replaced by the independent Rust/JavaScript verifiers in
+`verifiers/`, which remain the offline reference implementations.
 
 ### Deployment
 

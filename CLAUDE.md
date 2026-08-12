@@ -81,9 +81,10 @@ TypeScript → React frontend (app/public-ui/)
 Python     → verify-only client SDK (clients/python/) — NOT a service. See below.
 ```
 
-Go is retired, and so is **server-side** Python: the Python FastAPI server, the
-Go sequencer, and the Go/Python verifiers were replaced by the Tauri + Axum
-desktop in v0.9.0. There are zero tracked `.go` files.
+Go is retired, and so is **server-side** Python: the Python FastAPI server and
+the Go sequencer were replaced by the Tauri + Axum desktop in v0.9.0; the former
+Go/Python offline verifiers were replaced by the independent Rust/JavaScript
+verifiers in `verifiers/`, which remain the offline reference implementations. There are zero tracked `.go` files.
 
 Python is **not** fully gone, and the distinction matters when changing hashes:
 `clients/python/` is a live, CI-tested, verify-only client SDK

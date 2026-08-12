@@ -1,11 +1,10 @@
 //! Canonical JSON (JCS / RFC 8785 with Olympus's Decimal numeric rules).
 //!
-//! Pure-Rust port of the retired PyO3 encoder, operating directly on JSON
-//! **bytes** so it can be used from the desktop crate (no Python). This module
-//! is the authority (the Python `protocol/canonical_json.py` it was ported
-//! from was retired with the FastAPI server in v0.9.0); the
+//! Pure-Rust port of the PyO3 `src/canonical.rs` encoder, operating directly on
+//! JSON **bytes** so it can be used from the desktop crate (no Python).
+//! Byte-for-byte equivalent to `protocol/canonical_json.py`; the
 //! `verifiers/test_vectors/canonicalizer_vectors.tsv` conformance suite gates
-//! parity with the JavaScript implementation.
+//! parity with the Python and JavaScript implementations.
 //!
 //! Rules:
 //! - NFC normalization on all string keys and values
@@ -521,28 +520,6 @@ fn format_scientific(digits: &str, adjusted_exponent: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// ADR-0042 §4 interoperability fixture: the canonical payload committed
-    /// in `test_vectors/federation_event_v1.json` must be exactly what this
-    /// encoder produces for the fixture's source payload. The signature /
-    /// preimage legs of the same fixture are gated in
-    /// `verifiers/rust/tests/vector_conformance.rs`.
-    #[test]
-    fn federation_event_fixture_payload_is_canonical() {
-        let raw = std::fs::read_to_string(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../test_vectors/federation_event_v1.json"
-        ))
-        .expect("read federation event fixture");
-        let v: serde_json::Value = serde_json::from_str(&raw).expect("parse fixture");
-        let source = v["payload_source_utf8"].as_str().expect("source");
-        let canonical = v["payload_canonical_utf8"].as_str().expect("canonical");
-        assert_eq!(
-            canonicalize_str(source).expect("canonicalize"),
-            canonical,
-            "fixture canonical payload drifted from the live encoder"
-        );
-    }
 
     fn unhex(s: &str) -> Vec<u8> {
         hex::decode(s).expect("valid hex in test vector")
