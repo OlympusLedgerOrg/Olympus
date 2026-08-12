@@ -1,11 +1,19 @@
-//! Startup-time ZK-artifact resolution and ceremony-manifest verification.
+//! Startup-time ZK-artifact resolution, ceremony-manifest verification, and
+//! `main()`'s orchestration phases.
 //!
 //! Extracted from `main.rs`: resolving where the circuit artifacts live,
 //! detecting un-built placeholder stubs, and verifying each circuit's signed
-//! ceremony manifest (audit CEREMONY_INTEGRITY.md #3/#4). Pure functions with
-//! no Tauri managed state, so the placeholder/manifest logic is unit-testable.
+//! ceremony manifest (audit CEREMONY_INTEGRITY.md #3/#4) are pure functions
+//! with no Tauri managed state, so the placeholder/manifest logic is
+//! unit-testable. The named phases further down (panic-hook install,
+//! preflight checks, the async server bring-up body, managed-state
+//! registration, and the startup-waiter thread) are the bodies that used to
+//! live inline in `main()`'s `setup(|app| { ... })` closure — see the
+//! "main() orchestration phases" section below.
 
 use tauri::Manager;
+
+use crate::commands::{clear_startup_timeout, publish_startup_error, STARTUP_TIMEOUT_CODE};
 
 const PROD_REQUIRED_SECRETS: &[(&str, &str)] = &[
     (
@@ -639,6 +647,671 @@ pub(crate) fn verify_ceremony_manifests(
         out.push(ManifestCheck { circuit, result });
     }
     out
+}
+
+// ─── main() orchestration phases ───────────────────────────────────────────
+// `fn main()` in `main.rs` extracted its `setup(|app| { ... })` body into the
+// named phases below, so `main()` reads as a short sequence of phase calls
+// instead of one giant nested closure tree. Each phase keeps the exact
+// control flow (including every `std::process::exit(2)`) of the code it was
+// lifted from; only where the code physically lives changed.
+
+/// Phase 1: install the best-effort panic-time embedded-postgres reaper.
+///
+/// Covers the case where this process panics after PG starts (e.g. a
+/// setup-hook timeout): the clean-exit path is handled by
+/// [`crate::window_events::handle_window_event`]'s `WindowEvent::Destroyed`
+/// arm, but that only runs on a normal window-close, not a panic. Without
+/// this hook an orphaned `postgres.exe` would hold its port across the next
+/// launch.
+pub(crate) fn install_embedded_pg_panic_hook(cleanup_dir: std::path::PathBuf) {
+    let prev = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        crate::db::reap_embedded_pg(&cleanup_dir);
+        prev(info);
+    }));
+}
+
+/// Phase 2: resolve the ZK artifacts directory and enforce every
+/// production-only startup gate (unsafe runtime configuration, a stale
+/// canonicalization guest image, and placeholder ZK artifacts). Returns
+/// `(is_prod, proofs_dir)` for the phases that follow.
+///
+/// Calls `std::process::exit(2)` itself on a fatal misconfiguration, exactly
+/// as the inline code this was extracted from did — this phase does not
+/// change that control flow, only where it lives.
+pub(crate) fn run_preflight_checks(
+    app_handle: &tauri::AppHandle,
+) -> (bool, Option<std::path::PathBuf>) {
+    let proofs_dir = resolve_proofs_dir(app_handle);
+    let is_prod = crate::env::is_production();
+    let prod_config_errors = production_runtime_config_errors();
+    if !prod_config_errors.is_empty() {
+        eprintln!(
+            "[olympus-desktop] FATAL: OLYMPUS_ENV=production refuses to start \
+             with unsafe runtime configuration:"
+        );
+        for reason in &prod_config_errors {
+            eprintln!("[olympus-desktop]   - {reason}");
+        }
+        eprintln!(
+            "[olympus-desktop] Rotate any copied development secrets before building or \
+             sharing production artifacts."
+        );
+        std::process::exit(2);
+    }
+    for warning in production_runtime_config_warnings() {
+        eprintln!("[olympus-desktop] WARNING: {warning}");
+    }
+    if let Err(error) = crate::zk::canonicalization::canonicalization_image_id() {
+        eprintln!(
+            "[olympus-desktop] WARNING: canonicalization zkVM guest integrity check \
+             failed — {error}"
+        );
+        if is_prod {
+            eprintln!(
+                "[olympus-desktop] FATAL: OLYMPUS_ENV=production refuses to start \
+                 without the pinned canonicalization guest ELF and matching image ID."
+            );
+            std::process::exit(2);
+        }
+    }
+    if let Some(ref p) = proofs_dir {
+        eprintln!("[olympus-desktop] ZK artifacts dir: {}", p.display());
+        let placeholders = detect_placeholder_artifacts(p);
+        if !placeholders.is_empty() {
+            eprintln!(
+                "[olympus-desktop] WARNING: {} placeholder ZK artifact(s) detected — \
+                 /zk/prove will return 503 until `proofs/setup_circuits.sh` is run.",
+                placeholders.len()
+            );
+            for path in &placeholders {
+                eprintln!("[olympus-desktop]   placeholder: {}", path.display());
+            }
+            if is_prod {
+                eprintln!(
+                    "[olympus-desktop] FATAL: OLYMPUS_ENV=production refuses to start \
+                     with placeholder ZK artifacts. Re-build with real Groth16 keys."
+                );
+                std::process::exit(2);
+            }
+        }
+    } else {
+        eprintln!(
+            "[olympus-desktop] ZK artifacts dir: NOT FOUND \
+             (set OLYMPUS_PROOFS_DIR to enable /zk/prove and /zk/verify)"
+        );
+        if is_prod {
+            eprintln!(
+                "[olympus-desktop] FATAL: OLYMPUS_ENV=production refuses to start without \
+                 a populated ZK artifacts directory."
+            );
+            std::process::exit(2);
+        }
+    }
+
+    (is_prod, proofs_dir)
+}
+
+/// The result `main()`'s dedicated bring-up thread reports back over its
+/// `mpsc` channel: the bound port (or the reasons it never bound one), plus
+/// whatever `main()`'s waiter thread needs to publish into managed state.
+/// Named so [`run_server_bringup`] and [`spawn_startup_waiter`] can share it
+/// as an explicit function-parameter type without tripping
+/// `clippy::type_complexity` — the tuple itself is unchanged from the inline
+/// turbofish-annotated channel this was extracted from.
+pub(crate) type StartupBringupResult = (
+    u16,
+    Option<String>,
+    Option<crate::db::EmbeddedDb>,
+    Option<crate::commands::InitialSecretsSerde>,
+);
+
+/// Phase 3: the async server bring-up body run on the dedicated Tokio runtime
+/// thread spawned from `main()`'s setup hook — DB connect (embedded or
+/// external), bootstrap, BJJ/ingest-key/blind-secret/trusted-issuer
+/// resolution, ceremony-manifest verification, the three background crons,
+/// federation bootstrap prep + Tor/gossip spawn, `server::start`, reporting
+/// the bound port back to `main()` via `tx`, then parking forever.
+///
+/// Preserves the exact ordering of every step in the code this was extracted
+/// from — several of the comments below explain *why* the ordering matters
+/// (e.g. spawning the anchor cron before `app_state` moves into
+/// `server::start`), and moving this into a named function must not violate
+/// the invariant those comments describe.
+pub(crate) async fn run_server_bringup(
+    app_data_dir: std::path::PathBuf,
+    proofs_dir: Option<std::path::PathBuf>,
+    tx: std::sync::mpsc::Sender<StartupBringupResult>,
+) {
+    let (pool, db_error, embedded) = match std::env::var("DATABASE_URL") {
+        Ok(url) => {
+            let pool = crate::db::connect_external(&url).await;
+            let error = if pool.is_none() {
+                Some(
+                    "Could not prepare the external database.\n\
+                 Check database connectivity, TLS, and the configured \
+                 migration/runtime roles."
+                        .to_owned(),
+                )
+            } else {
+                None
+            };
+            (pool, error, None)
+        }
+        Err(std::env::VarError::NotPresent) => {
+            match crate::db::init_embedded(&app_data_dir).await {
+                Ok(embedded) => {
+                    let pool = embedded.pool.clone();
+                    (Some(pool), None, Some(embedded))
+                }
+                Err(e) => {
+                    let msg = crate::db::embedded_startup_error_message(&e);
+                    eprintln!("[olympus-desktop] {msg}");
+                    (None, Some(msg), None)
+                }
+            }
+        }
+        Err(std::env::VarError::NotUnicode(_)) => {
+            let msg = "DATABASE_URL is not valid Unicode; database startup was rejected.\n\
+                 Connection credentials are intentionally omitted from diagnostics."
+                .to_owned();
+            eprintln!("[olympus-desktop] {msg}");
+            (None, Some(msg), None)
+        }
+    };
+
+    // Bootstrap: ensure system user, API key, BJJ authority, and SBT exist.
+    let bjj_result = if let Some(ref p) = pool {
+        crate::bootstrap::run(p).await
+    } else {
+        None
+    };
+
+    let mut app_state = crate::state::AppState::new_with_error(pool, db_error.clone());
+    let mut initial_secrets: Option<crate::commands::InitialSecretsSerde> = None;
+    if let Some(br) = bjj_result {
+        app_state.bjj_authority_key = Some(std::sync::Arc::new(zeroize::Zeroizing::new(
+            br.bjj_authority_key,
+        )));
+        app_state.bjj_authority_pubkey = Some(br.bjj_authority_pubkey);
+        // Resolve the Ed25519 redaction-bundle signing key:
+        // explicit env key in production, else a stable
+        // dev key derived from the (now-set) persisted BJJ
+        // authority so `POST /redaction/issue` works on a
+        // fresh checkout without extra setup.
+        app_state.ingest_signing_key = crate::state::resolve_ingest_signing_key(
+            crate::state::secret_bytes(&app_state.bjj_authority_key),
+        );
+        // Historical redaction/ingest issuer keys
+        // (docs/key-rotation.md): record this instance's
+        // current Ed25519 verifying key in the registry so
+        // GET /redaction/issuer-key can serve prior keys
+        // too, not just the live one. Non-fatal — the
+        // endpoint falls back to live-key-only if this
+        // fails or there's no pool.
+        if let (Some(pool), Some(signing_key)) = (
+            app_state.pool.as_ref(),
+            crate::state::secret_bytes(&app_state.ingest_signing_key),
+        ) {
+            let pubkey_hex = hex::encode(
+                ed25519_dalek::SigningKey::from_bytes(signing_key)
+                    .verifying_key()
+                    .to_bytes(),
+            );
+            if let Err(e) = crate::bootstrap::ensure_ingest_signing_key(pool, &pubkey_hex).await {
+                tracing::warn!("bootstrap: ingest signing key registry: {e}");
+            }
+        }
+        // Server blinding secret for object-level redaction
+        // (ADR-0026): derived deterministically from the
+        // persisted BJJ authority (or an explicit override)
+        // so per-object blindings are stable across restarts
+        // and re-ingest reproduces the same committed root.
+        app_state.redaction_blind_secret = crate::state::resolve_redaction_blind_secret(
+            crate::state::secret_bytes(&app_state.bjj_authority_key),
+        );
+        // Audit M-3: resolve the full trusted-issuer set
+        // (primary bootstrap pubkey + any rotation entries
+        // in OLYMPUS_BJJ_TRUSTED_ISSUERS_JSON + the
+        // authority-registry supersession chain from
+        // account_signing_keys, migration 0056) once at
+        // startup so the scope resolver doesn't re-parse
+        // per request.
+        app_state.bjj_trusted_issuers =
+            crate::api::trusted_issuers::load_trusted_issuers_with_registry(
+                app_state.bjj_authority_pubkey.as_ref(),
+                app_state.pool.as_ref(),
+            )
+            .await;
+        // Audit CEREMONY_INTEGRITY.md #3 + #4:
+        // verify each circuit's embedded ceremony
+        // manifest against the trusted-issuer set
+        // and the on-disk .ark.zkey. Under
+        // OLYMPUS_ENV=production, any non-placeholder
+        // failure is fatal — exit(2) before the
+        // server starts serving. In dev, surface a
+        // tracing::warn! so the operator can fix it
+        // (the runtime check in
+        // load_proving_key_with_manifest provides
+        // belt-and-suspenders at first prove call).
+        if let Some(ref proofs_path) = proofs_dir {
+            let is_prod = crate::env::is_production();
+            let checks = verify_ceremony_manifests(
+                proofs_path,
+                &app_state.bjj_trusted_issuers,
+                is_prod,
+                app_state.bjj_authority_pubkey.as_ref(),
+            );
+            let mut real_failures = 0usize;
+            for ManifestCheck { circuit, result } in &checks {
+                match result {
+                    Ok(coord_x_dec) => {
+                        tracing::info!(
+                            "ceremony-integrity: {} manifest verified under coordinator x={}",
+                            circuit,
+                            coord_x_dec
+                        );
+                    }
+                    Err(reason) if reason.contains("placeholder") => {
+                        // detect_placeholder_artifacts above checks vkey JSON
+                        // but NOT manifest files — so a binary with real
+                        // .ark.zkey + placeholder manifest would otherwise
+                        // sail past the earlier gate. Treat as fatal in prod
+                        // so the runtime can't run without active manifest
+                        // verification.
+                        if is_prod {
+                            real_failures += 1;
+                            tracing::error!(
+                                "ceremony-integrity: {} FAILED in production — {}",
+                                circuit,
+                                reason
+                            );
+                        } else {
+                            tracing::warn!("ceremony-integrity: {} skipped — {}", circuit, reason);
+                        }
+                    }
+                    Err(reason) => {
+                        real_failures += 1;
+                        tracing::error!("ceremony-integrity: {} FAILED — {}", circuit, reason);
+                    }
+                }
+            }
+            if real_failures > 0 && is_prod {
+                eprintln!(
+                    "[olympus-desktop] FATAL: OLYMPUS_ENV=production refuses to start \
+                     with {real_failures} ceremony-manifest failure(s). See \
+                     tracing::error! above and proofs/CEREMONY_INTEGRITY.md for \
+                     the operator runbook."
+                );
+                std::process::exit(2);
+            }
+        }
+        if !br.freshly_generated.is_empty() {
+            // F-4: wrap each secret String in Zeroizing<String> at the
+            // earliest point we own the value, so the heap region is
+            // scrubbed on drop. The upstream `FreshlyGenerated` still
+            // holds plain Strings briefly; widening Zeroizing into
+            // bootstrap.rs is a separate larger change.
+            initial_secrets = Some(crate::commands::InitialSecretsSerde {
+                system_api_key: br
+                    .freshly_generated
+                    .system_api_key
+                    .map(zeroize::Zeroizing::new),
+                bjj_authority_key_hex: br
+                    .freshly_generated
+                    .bjj_authority_key_hex
+                    .map(zeroize::Zeroizing::new),
+            });
+        }
+    }
+    app_state.proofs_dir = proofs_dir;
+
+    // Audit H-A1: spawn the periodic anchor cron BEFORE
+    // moving app_state into server::start. The cron clones
+    // only the fields it needs (pool, anchoring cfg, http
+    // client, BJJ key + pubkey, proofs_dir). It always runs
+    // as the canonical own_checkpoints producer (red-team
+    // CR-5/CR-7), but external submission to OLYMPUS_ANCHOR_*
+    // backends is gated per-tick on `any_enabled()`, so a
+    // build with no anchor URLs still makes no outbound
+    // network calls.
+    let _anchor_cron = app_state.pool.as_ref().map(|pool| {
+        crate::anchoring::cron::spawn(
+            pool.clone(),
+            app_state.anchoring.clone(),
+            app_state.anchor_http.clone(),
+            crate::state::secret_bytes(&app_state.bjj_authority_key).copied(),
+            app_state.bjj_authority_pubkey,
+            // Red-team CR-5 / PR E: the cron is now
+            // the canonical own_checkpoint producer
+            // (runs `prove_existence` per tick) so
+            // it needs the proofs_dir alongside the
+            // BJJ key.
+            app_state.proofs_dir.clone(),
+        )
+    });
+
+    // Audit M-A3: spawn the OTS upgrade cron alongside the
+    // anchor cron. The anchor cron above creates pending
+    // OTS receipts; this one drives them through the
+    // upgrade pipeline (pending → upgraded) once the OTS
+    // calendars publish their Bitcoin attestations. No-op
+    // when no OTS calendars are configured.
+    let _ots_upgrade_cron = app_state.pool.as_ref().map(|pool| {
+        crate::anchoring::upgrade_cron::spawn(
+            pool.clone(),
+            app_state.anchor_http.clone(),
+            !app_state.anchoring.ots_calendars.is_empty(),
+            app_state.anchoring.ots_bitcoin_headers_path.clone(),
+        )
+    });
+
+    // ADR-0036: keep the signed-request replay cache bounded.
+    // The reaper deletes expired rows via
+    // ix_signed_request_nonces_expires_at and leaves live
+    // nonce reservations intact.
+    let _signed_request_nonce_reaper = app_state.pool.as_ref().map(|pool| {
+        crate::api::middleware::signed_request::spawn_signed_request_nonce_reaper(pool.clone())
+    });
+
+    // Federation: populate the config the Tor-exposed route
+    // handlers read (so they don't 503) and capture the
+    // handles the Tor + gossip tasks need. The actual Tor
+    // bootstrap happens AFTER the server reports its port,
+    // because the hidden service proxies to that port and a
+    // bootstrap can take 30-60s — longer than the startup
+    // budget the Tauri thread waits on. Gated on the
+    // `federation` feature AND `OLYMPUS_FEDERATION_ENABLED`.
+    #[cfg(feature = "federation")]
+    let federation_bootstrap = {
+        let fed_cfg = crate::federation::FederationConfig::default();
+        if fed_cfg.enabled {
+            let state_dir = app_data_dir.join("tor");
+            app_state.federation_config = Some(fed_cfg.clone());
+            app_state.federation_state_dir = Some(state_dir.clone());
+            // Capture proofs_dir here BEFORE app_state
+            // is moved into server::start below — the
+            // gossip task needs it for prove_existence
+            // in build_own_checkpoint (H-11/M-5 closure).
+            let proofs_dir = app_state.proofs_dir.clone();
+            // Shared cell the bootstrap task publishes the
+            // Tor handle into, so the credentials handler
+            // can collect quorum co-signatures over Tor.
+            let tor_handle_cell = app_state.tor_handle.clone();
+            match (
+                app_state.pool.clone(),
+                crate::state::secret_bytes(&app_state.bjj_authority_key).copied(),
+                app_state.bjj_authority_pubkey,
+            ) {
+                (Some(pool), Some(bjj_key), Some(bjj_pubkey)) => {
+                    // Clone AppState for the verify-only
+                    // Tor-facing listener BEFORE app_state
+                    // is moved into server::start below.
+                    let tor_state = app_state.clone();
+                    Some((
+                        pool,
+                        fed_cfg,
+                        bjj_key,
+                        bjj_pubkey,
+                        state_dir,
+                        proofs_dir,
+                        tor_handle_cell,
+                        tor_state,
+                    ))
+                }
+                _ => {
+                    tracing::warn!(
+                        "federation: OLYMPUS_FEDERATION_ENABLED set but the BJJ \
+                         authority key or database is unavailable; hidden service \
+                         and gossip not started"
+                    );
+                    None
+                }
+            }
+        } else {
+            tracing::info!(
+                "federation: compiled in but OLYMPUS_FEDERATION_ENABLED not set; \
+                 hidden service and gossip not started"
+            );
+            None
+        }
+    };
+
+    let addr = crate::server::start(app_state)
+        .await
+        .expect("axum server failed to bind");
+    let local_port = addr.port();
+    tx.send((local_port, db_error, embedded, initial_secrets))
+        .expect("receiver dropped before port was sent");
+
+    // Bootstrap Tor + start gossip off the critical path so a
+    // slow Tor bootstrap can't stall app startup. The task
+    // owns the `Arc<TorHandle>` for its lifetime, keeping the
+    // hidden service alive.
+    #[cfg(feature = "federation")]
+    if let Some((
+        pool,
+        fed_cfg,
+        bjj_key,
+        bjj_pubkey,
+        state_dir,
+        fed_proofs_dir,
+        tor_handle_cell,
+        tor_state,
+    )) = federation_bootstrap
+    {
+        tokio::spawn(async move {
+            // Bind the verify-only Tor-facing listener and
+            // point the hidden service at IT, not the full
+            // router's port. This keeps admin/auth/key/write
+            // and /zk/prove off the onion surface entirely.
+            let tor_local_port = match crate::server::start_tor_listener(tor_state).await {
+                Ok(addr) => addr.port(),
+                Err(e) => {
+                    tracing::error!(
+                        "federation: failed to bind Tor-facing listener: {e}; \
+                         hidden service not started"
+                    );
+                    return;
+                }
+            };
+            tracing::info!("federation: bootstrapping Tor hidden service (may take 30-60s)");
+            match crate::federation::tor::start_hidden_service(state_dir, tor_local_port).await {
+                Ok(handle) => {
+                    tracing::info!(
+                        "federation: hidden service live at {}; starting gossip",
+                        handle.onion_address
+                    );
+                    let handle = std::sync::Arc::new(handle);
+                    // Publish the handle so issue-time quorum
+                    // co-sign collection can reach peers over
+                    // Tor. Ignore the error: set() only fails
+                    // if already set (a second bootstrap),
+                    // which keeps the first live handle.
+                    let _ = tor_handle_cell.set(handle.clone());
+                    let _gossip = crate::federation::gossip::spawn(
+                        pool,
+                        fed_cfg,
+                        bjj_key,
+                        bjj_pubkey,
+                        handle,
+                        // proofs_dir is needed for
+                        // build_own_checkpoint's
+                        // prove_existence call (H-11/M-5
+                        // producer-side closure). When
+                        // None, build_own_checkpoint
+                        // returns Err and the gossip
+                        // round skips emission.
+                        fed_proofs_dir.clone(),
+                    );
+                }
+                Err(e) => {
+                    tracing::error!("federation: Tor bootstrap failed; gossip not started: {e}");
+                }
+            }
+        });
+    }
+
+    std::future::pending::<()>().await;
+}
+
+/// Phase 4: register the managed state `main()`'s setup hook depends on, up
+/// front and unpopulated (the port, DB error, embedded-DB handle, and
+/// one-shot initial secrets are all filled in later by
+/// [`spawn_startup_waiter`]).
+///
+/// Overrunning the startup budget must not fail the setup hook: returning
+/// `Err` from it panics Tauri with a bare "Failed to setup app" and kills the
+/// process, so the one failure the user most needs explained is the one that
+/// never reaches the GUI. Instead the app always comes up, and either the
+/// port or a startup-error screen is published — see
+/// [`spawn_startup_waiter`].
+///
+/// Also translates the one fatal-style startup config error that can be
+/// known this early (`OLYMPUS_ENV=production` with no proofs dir) into the
+/// GUI startup-error surface, rather than letting it die only on stderr.
+pub(crate) fn register_initial_managed_state(
+    app: &tauri::AppHandle,
+    proofs_dir: &Option<std::path::PathBuf>,
+    is_prod: bool,
+) {
+    app.manage(crate::commands::ApiState::new(
+        crate::commands::ApiState::NOT_READY,
+    ));
+    app.manage(crate::commands::DbErrorState {
+        error: std::sync::Mutex::new(None),
+    });
+    app.manage(crate::commands::EmbeddedDbState {
+        inner: std::sync::Mutex::new(None),
+    });
+    app.manage(crate::commands::InitialSecretsState {
+        inner: std::sync::Mutex::new(None),
+    });
+
+    // Surface fatal-style startup config errors to the GUI rather
+    // than letting them die only on stderr. Populated here by the
+    // OLYMPUS_ENV=production placeholder check above, and later by
+    // the waiter thread if the server never reports a port.
+    let startup_error = if proofs_dir.is_none() && is_prod {
+        Some(crate::commands::StartupError {
+            code: "PROD_NO_PROOFS_DIR".to_owned(),
+            message: "OLYMPUS_ENV=production but no usable ZK artifacts \
+                      directory was found. Set OLYMPUS_PROOFS_DIR or run \
+                      proofs/setup_circuits.sh to populate proofs/keys/."
+                .to_owned(),
+            doc_url: Some(
+                "https://github.com/OlympusLedgerOrg/Olympus/blob/main/proofs/README.md".to_owned(),
+            ),
+        })
+    } else {
+        None
+    };
+    app.manage(crate::commands::StartupErrorState {
+        inner: std::sync::Mutex::new(startup_error),
+    });
+}
+
+/// Phase 5: spawn the waiter thread that publishes the server thread's
+/// eventual result — a bound port, or a terminal startup error — into the
+/// managed state [`register_initial_managed_state`] registered.
+///
+/// The function itself does the `std::thread::spawn`, so the call site in
+/// `main()` is one line.
+pub(crate) fn spawn_startup_waiter(
+    app: tauri::AppHandle,
+    rx: std::sync::mpsc::Receiver<StartupBringupResult>,
+) {
+    // Budget for the whole embedded-Postgres bring-up, not just the
+    // bind: initdb + start_db + pool connect + migrations all run
+    // before the port is reported. A cold Windows start routinely
+    // spends 25s+ in initdb/start_db alone.
+    const STARTUP_PORT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
+    // Publish the server thread's result into managed state, either
+    // within the budget or — for a merely slow start — whenever it
+    // lands. The wait is deliberately *not* cancelled at the deadline:
+    // the server thread owns a live postmaster and the embedded
+    // instance lock, so abandoning the channel would strand both. It
+    // keeps blocking, and the app heals if startup eventually
+    // completes.
+    let startup_handle = app;
+    std::thread::spawn(move || {
+        let published = match rx.recv_timeout(STARTUP_PORT_TIMEOUT) {
+            Ok(result) => Some(result),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                publish_startup_error(
+                    &startup_handle,
+                    crate::commands::StartupError {
+                        code: STARTUP_TIMEOUT_CODE.to_owned(),
+                        message: format!(
+                            "The local server did not finish starting within {}s. \
+                             Embedded PostgreSQL is usually the slow step. The app \
+                             is still waiting and will recover on its own if startup \
+                             completes; if it does not, check the embedded-PostgreSQL \
+                             debug log next to the database directory.",
+                            STARTUP_PORT_TIMEOUT.as_secs()
+                        ),
+                        doc_url: None,
+                    },
+                );
+                // Keep waiting — see the comment above.
+                rx.recv().ok()
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => None,
+        };
+
+        let Some((port, db_error, embedded, initial_secrets)) = published else {
+            // The channel closed without a port: the server thread is
+            // gone, so nothing will arrive later. This is terminal.
+            //
+            // Retract first. On the timeout-then-disconnect path a
+            // STARTUP_TIMEOUT is already recorded, and the first-writer-
+            // wins rule would otherwise drop the terminal error and
+            // leave the user reading "still waiting, will recover on its
+            // own" about a thread that is dead. Retraction stays scoped
+            // to the timeout code, so any other error keeps precedence.
+            clear_startup_timeout(&startup_handle);
+            publish_startup_error(
+                &startup_handle,
+                crate::commands::StartupError {
+                    code: "STARTUP_FAILED".to_owned(),
+                    message: "The local server stopped before it could start \
+                              listening. Restart the app; if this repeats, check \
+                              the console output for the underlying error."
+                        .to_owned(),
+                    doc_url: None,
+                },
+            );
+            return;
+        };
+
+        if let Some(state) = startup_handle.try_state::<crate::commands::DbErrorState>() {
+            if let Ok(mut guard) = state.error.lock() {
+                *guard = db_error;
+            }
+        }
+        if let Some(state) = startup_handle.try_state::<crate::commands::EmbeddedDbState>() {
+            if let Ok(mut guard) = state.inner.lock() {
+                *guard = embedded;
+            }
+        }
+        if let Some(state) = startup_handle.try_state::<crate::commands::InitialSecretsState>() {
+            if let Ok(mut guard) = state.inner.lock() {
+                *guard = initial_secrets;
+            }
+        }
+        // Clear a STARTUP_TIMEOUT raised above — the server did come
+        // up, so the screen must not outlive the condition. Retraction
+        // stays scoped to that one code so a success can only ever
+        // withdraw the claim it actually disproves.
+        clear_startup_timeout(&startup_handle);
+        // Store the port last, so no command can observe a ready port
+        // while the states it depends on are still unpopulated.
+        if let Some(state) = startup_handle.try_state::<crate::commands::ApiState>() {
+            state.set_port(port);
+        }
+    });
 }
 
 #[cfg(test)]
