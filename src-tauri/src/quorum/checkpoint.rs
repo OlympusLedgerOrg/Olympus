@@ -39,9 +39,7 @@ use uuid::Uuid;
 
 use super::{normalize_signer, CollectedSignature, QuorumSigner, QuorumStatus};
 use crate::zk::proof::fr_to_decimal;
-use crate::zk::witness::baby_jubjub::{
-    self, BabyJubJubError, BabyJubJubPubKey,
-};
+use crate::zk::witness::baby_jubjub::{self, BabyJubJubError, BabyJubJubPubKey};
 
 /// Domain tag for checkpoint-quorum co-signatures.
 ///

@@ -84,4 +84,3 @@ pub(crate) fn embedded_startup_error_message(error: &DbError) -> String {
         operator_safe_error(error)
     )
 }
-

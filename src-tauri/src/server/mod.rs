@@ -1,3 +1,5 @@
+#[cfg(feature = "federation")]
+use axum::Extension;
 use axum::{
     extract::DefaultBodyLimit,
     http::{header, HeaderName, Method, Request, StatusCode},
@@ -6,8 +8,6 @@ use axum::{
     routing::get,
     Router,
 };
-#[cfg(feature = "federation")]
-use axum::Extension;
 use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::net::TcpListener;

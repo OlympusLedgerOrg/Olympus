@@ -351,8 +351,8 @@ pub(crate) fn ark_scalar_to_perm(s: &Fr) -> bjj::Fr {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use num_bigint::BigUint;
     use ark_ff::UniformRand;
+    use num_bigint::BigUint;
 
     #[test]
     fn sign_then_verify_roundtrips() {

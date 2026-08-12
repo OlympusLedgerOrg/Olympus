@@ -398,8 +398,8 @@ pub fn random_blinding<R: RngCore + CryptoRng>(rng: &mut R) -> Fr {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::witness::baby_jubjub::bjj_subgroup_order;
+    use super::*;
     use proptest::prelude::*;
     // G coordinates live at module scope as G_X_DEC / G_Y_DEC since PD-2 —
     // reuse them here for the "H ≠ G" test rather than duplicating.

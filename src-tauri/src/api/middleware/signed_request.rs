@@ -673,8 +673,8 @@ fn map_signature_error(e: SignatureEnvelopeError) -> SignedRequestRejection {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use olympus_crypto::request_envelope::REQUEST_V1_PREFIX;
     use ed25519_dalek::SigningKey;
+    use olympus_crypto::request_envelope::REQUEST_V1_PREFIX;
     use olympus_crypto::signature_envelope::{
         DomainSeparator, SignatureComponent, SignatureEnvelopeV2, SignatureSuite,
     };
