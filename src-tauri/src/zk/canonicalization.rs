@@ -12,9 +12,10 @@ use std::sync::OnceLock;
 use ark_bn254::Fr;
 use ark_ff::PrimeField;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+#[cfg(feature = "zkvm-prover")]
+use olympus_crypto::canonical_proof::MAX_CANONICALIZATION_USER_CYCLES;
 use olympus_crypto::canonical_proof::{
-    CanonicalClaimError, CanonicalizationClaim, MAX_CANONICALIZATION_USER_CYCLES,
-    MAX_CANONICAL_RECEIPT_BYTES,
+    CanonicalClaimError, CanonicalizationClaim, MAX_CANONICAL_RECEIPT_BYTES,
 };
 use risc0_zkvm::{compute_image_id, sha::Digest, InnerReceipt, Receipt, VerifierContext};
 use thiserror::Error;

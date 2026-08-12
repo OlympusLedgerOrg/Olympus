@@ -29,9 +29,8 @@
 //! and the persistence (`store_*`/`load_*`, table in migration 0048). The live
 //! producer — collecting peer co-signatures over Tor (the checkpoint analogue of
 //! `federation::cosign`) and persisting them in the gossip loop — is PR-2 and is
-//! the first non-test caller; until then `#![allow(dead_code)]` keeps the
-//! bin-target compilation warning-clean (items are public API on the lib target).
-#![allow(dead_code)]
+//! the first non-test caller of the persistence pair; those two functions carry
+//! targeted `#[allow(dead_code)]` until PR-2 lands.
 
 use ark_bn254::Fr;
 use ark_ff::PrimeField;
@@ -39,10 +38,8 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use super::{normalize_signer, CollectedSignature, QuorumSigner, QuorumStatus};
-use crate::zk::proof::{fr_to_decimal, parse_fr};
-use crate::zk::witness::baby_jubjub::{
-    self, BabyJubJubError, BabyJubJubPubKey, BabyJubJubSignature,
-};
+use crate::zk::proof::fr_to_decimal;
+use crate::zk::witness::baby_jubjub::{self, BabyJubJubError, BabyJubJubPubKey};
 
 /// Domain tag for checkpoint-quorum co-signatures.
 ///
@@ -192,6 +189,7 @@ pub fn cosign_checkpoint(
 /// Persist the collected checkpoint-quorum signatures for an `own_checkpoints`
 /// row. Idempotent per `(checkpoint, signer)` via the UNIQUE constraint in
 /// migration 0048. Mirrors [`super::store_quorum_signatures_tx`] for credentials.
+#[allow(dead_code)] // PR-2 (gossip-loop producer) is the first caller — see module doc
 pub async fn store_checkpoint_quorum_signatures(
     pool: &PgPool,
     checkpoint_id: Uuid,
@@ -217,6 +215,7 @@ pub async fn store_checkpoint_quorum_signatures(
 }
 
 /// Load all stored checkpoint-quorum signatures for an `own_checkpoints` row.
+#[allow(dead_code)] // PR-2 (gossip-loop producer) is the first caller — see module doc
 pub async fn load_checkpoint_quorum_signatures(
     pool: &PgPool,
     checkpoint_id: Uuid,
@@ -254,6 +253,7 @@ pub async fn load_checkpoint_quorum_signatures(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::zk::proof::parse_fr;
 
     fn signer_for(priv_key: &[u8; 32]) -> (QuorumSigner, [u8; 32]) {
         (signer_from_private(priv_key).expect("pubkey"), *priv_key)

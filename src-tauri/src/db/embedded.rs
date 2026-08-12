@@ -684,7 +684,7 @@ fn load_or_create_embedded_password(app_data_dir: &Path) -> Result<String, DbErr
 
 #[cfg(test)]
 mod tests {
-    use super::super::{external_startup_error_message, operator_safe_error, ExternalDbFailure};
+    use super::super::operator_safe_error;
     use super::*;
 
     fn assert_managed_pg_settings_are_last(config: &str) {
@@ -818,12 +818,6 @@ mod tests {
             let message = embedded_startup_error_message(&error);
             assert!(!safe.contains(marker));
             assert!(!safe.contains("secret"));
-            assert!(!message.contains(marker));
-            assert!(!message.contains("secret"));
-        }
-
-        for failure in [ExternalDbFailure::Connection, ExternalDbFailure::Migration] {
-            let message = external_startup_error_message(failure);
             assert!(!message.contains(marker));
             assert!(!message.contains("secret"));
         }

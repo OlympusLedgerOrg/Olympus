@@ -1,3 +1,6 @@
+> **ARCHIVED (2026-08-12).** This plan shipped; the "frontend pending / builds RED"
+> status below is historical. Kept for the contract and UX rationale it records.
+
 # Redaction frontend object-port — execution plan (ADR-0026)
 
 **Status:** backend complete & merged; frontend pending (needs a working JS

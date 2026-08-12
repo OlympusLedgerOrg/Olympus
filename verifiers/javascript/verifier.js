@@ -100,8 +100,9 @@ function merkleParentHash(leftHash, rightHash) {
  */
 function merkleLeafHash(leafData) {
   // Hash with LEAF_PREFIX domain separation
-  // Prefix must match olympus_crypto (crates/olympus-crypto/src/lib.rs::LEAF_PREFIX,
-  // retained there as a pinned legacy marker): OLY:LEAF:V1
+  // LEGACY binary-Merkle leaf domain (pre-SMT pipeline only). The current
+  // leaf domain is the ADR-0005 structured prefix in olympus_crypto::leaf_hash;
+  // olympus-crypto pins OLY:LEAF:V1 as a legacy marker.
   const LEAF_PREFIX = new TextEncoder().encode("OLY:LEAF:V1");
   const HASH_SEPARATOR = new TextEncoder().encode("|");
 
@@ -181,9 +182,14 @@ function verifyMerkleProof(proof) {
 /**
  * Compute the ledger entry hash from pre-canonicalized payload bytes.
  * Formula: BLAKE3(OLY:LEDGER:V1 || canonical_json_bytes(payload))
+ * LEGACY binary-Merkle entry chain (pre-SMT pipeline only) — current ledger
+ * inclusion goes through the ADR-0005 SMT path. The OLY:LEDGER:V1 domain
+ * itself is NOT legacy: computeDualCommitment below uses it for the live V2
+ * dual-root commitment (mirroring the Rust verifier's classification).
  * The canonical_json_bytes must be produced by the Olympus canonical JSON encoder
- * (JCS / RFC 8785 with exact-decimal numeric rules — the authoritative
- * implementation is olympus_crypto::canonical, crates/olympus-crypto/src/canonical.rs).
+ * (JCS / RFC 8785 with the Olympus divergences, including exact-decimal
+ * numeric rules — the authoritative implementation is
+ * olympus_crypto::canonical, crates/olympus-crypto/src/canonical.rs).
  * @param {Uint8Array} canonicalPayloadBytes - Pre-canonicalized JSON payload bytes
  * @returns {Uint8Array} - 32-byte entry hash
  */

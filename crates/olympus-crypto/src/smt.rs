@@ -1,6 +1,7 @@
 //! Constant-depth hierarchical Sparse Merkle Tree (single global tree).
 //!
-//! Pure-Rust port/evolution of `protocol/ssmf.py`. A single 256-height sparse
+//! Pure-Rust port/evolution of the retired Python `protocol/ssmf.py` (this
+//! module is now the authority). A single 256-height sparse
 //! Merkle tree holds every record; the **shard is a literal 64-bit prefix of
 //! the key**:
 //!

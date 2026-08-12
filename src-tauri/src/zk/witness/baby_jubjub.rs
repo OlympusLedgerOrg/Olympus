@@ -40,7 +40,7 @@ use babyjubjub_permissive::{
     self as bjj, is_identity, is_in_prime_subgroup, is_on_curve, BabyJubjubAffine, PrivateKey,
     PublicKey, Signature as PermSignature,
 };
-use num_bigint::{BigInt, BigUint, Sign};
+use num_bigint::{BigInt, Sign};
 use thiserror::Error;
 
 use crate::zk::poseidon::{hash2, PoseidonError};
@@ -352,6 +352,7 @@ pub(crate) fn ark_scalar_to_perm(s: &Fr) -> bjj::Fr {
 mod tests {
     use super::*;
     use ark_ff::UniformRand;
+    use num_bigint::BigUint;
 
     #[test]
     fn sign_then_verify_roundtrips() {

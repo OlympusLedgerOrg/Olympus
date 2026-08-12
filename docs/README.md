@@ -136,6 +136,8 @@ A: See [../SECURITY.md](../SECURITY.md) for coordinated disclosure.
 | [supply-chain-vetting.md](supply-chain-vetting.md) | Maintainers, auditors      | 10 min | Dependency review baseline                                   |
 | [landing-page.md](landing-page.md)                 | Maintainers                | 5 min  | What the public landing page claims, and how Pages serves it |
 | [adr/](adr/)                                       | Architects, crypto experts | varies | Protocol design decisions                                    |
+| [plans/](plans/)                                   | Developers                 | varies | Live design references for in-flight work                    |
+| [archive/](archive/)                               | Historians                 | varies | Shipped planning/handoff docs, kept as provenance            |
 | [../CONTRIBUTING.md](../CONTRIBUTING.md)           | Contributors               | 10 min | How to submit PRs                                            |
 | [MAINTAINERS.md](MAINTAINERS.md)                   | Contributors               | 5 min  | Roles and ladder                                             |
 | [ONBOARDING.md](ONBOARDING.md)                     | New developers             | 20 min | Dev environment and first contribution                       |

@@ -1,3 +1,7 @@
+> **ARCHIVED (2026-08-12).** This work shipped: `RedactTab.tsx` now renders the
+> object-checklist contract this handoff specified, and the byte-range surface it
+> retired is gone. Kept as provenance for how the ADR-0026 frontend port was executed.
+
 # Redaction frontend object-port — UI handoff for Claude Design (ADR-0026)
 
 **Status:** the hooks / API / test layer is ported to the object-level contract

@@ -74,8 +74,6 @@
 use std::collections::{BTreeMap, HashSet};
 
 use olympus_crypto::redaction::redaction_leaf_for_segment;
-#[cfg(test)]
-use olympus_crypto::redaction::{content_scalar, derive_blinding, redaction_leaf};
 
 use crate::zk::chunk::fr_to_hex;
 use crate::zk::pdf_describe::{resolve_pages, SegmentDescription, WORD_TEXT_CHARS};

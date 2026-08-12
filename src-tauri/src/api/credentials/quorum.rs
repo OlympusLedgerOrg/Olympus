@@ -10,7 +10,9 @@ use crate::state::AppState;
 use crate::zk::witness::baby_jubjub::{self, BabyJubJubPubKey};
 
 use super::crypto::fr_to_decimal;
-use super::{db_err, err, ApiError};
+#[cfg(feature = "federation")]
+use super::db_err;
+use super::{err, ApiError};
 
 /// Everything a quorum issuance produces, threaded back into the INSERT and
 /// the post-insert signature persistence.

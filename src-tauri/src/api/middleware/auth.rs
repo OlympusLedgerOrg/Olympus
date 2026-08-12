@@ -115,7 +115,7 @@ pub(crate) async fn resolve_sbt_scopes(
     bjj_pubkey_y: &str,
     trusted_issuers: &[crate::api::trusted_issuers::TrustedIssuer],
 ) -> Vec<String> {
-    use crate::zk::witness::baby_jubjub::{self, BabyJubJubPubKey, BabyJubJubSignature};
+    use crate::zk::witness::baby_jubjub::{self, BabyJubJubPubKey};
 
     if trusted_issuers.is_empty() {
         // No trusted authority pubkey configured — nothing to verify

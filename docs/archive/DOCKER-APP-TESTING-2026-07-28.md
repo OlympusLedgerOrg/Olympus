@@ -1,3 +1,6 @@
+> **ARCHIVED (2026-08-12).** One-off session log from a completed Docker testing
+> run (branch and commit it names are historical). Frozen record, not living docs.
+
 # Docker Full-App Testing — 2026-07-28/29
 
 **Branch:** `claude/docker-app-testing-892b9c`, rebased onto `origin/main` @ `992afb1a`
