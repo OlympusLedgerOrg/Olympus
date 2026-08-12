@@ -67,7 +67,6 @@ app/public-ui/src/hooks/useWasmStatus.ts
 app/public-ui/src/index.css
 app/public-ui/src/lib/__tests__/smoke.test.ts
 app/public-ui/src/lib/api.test.ts
-app/public-ui/src/lib/api.ts
 app/public-ui/src/lib/audio.ts
 app/public-ui/src/lib/babyJubjub.ts
 app/public-ui/src/lib/blake3.test.ts

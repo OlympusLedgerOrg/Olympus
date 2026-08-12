@@ -123,7 +123,7 @@ installer version is published.
 
 ### Frontend
 
-`app/public-ui/` is a single SPA. API client lives in `app/public-ui/src/lib/api.ts`; all hooks use the `getApiBase()` helper so the same code works in Tauri and standalone-Vite. Notable v0.9.x surfaces:
+`app/public-ui/` is a single SPA. API client lives in `app/public-ui/src/lib/api/` (split by domain, re-exported through `index.ts`); all hooks use the `getApiBase()` helper so the same code works in Tauri and standalone-Vite. Notable v0.9.x surfaces:
 
 - `InitialSecretsModal.tsx` — first-launch dialog that surfaces the API key + BJJ key once.
 - `CredentialsPage.tsx` — SBT issue / list / revoke / verify.

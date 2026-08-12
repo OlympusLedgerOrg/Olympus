@@ -168,7 +168,7 @@ The holder's existing API key now resolves with `read`, `verify`,
 ## Frontend conventions
 
 - React + TypeScript + Vite + Tailwind + React Query
-- API client in [`app/public-ui/src/lib/api.ts`](../app/public-ui/src/lib/api.ts) — use the typed `ApiError`
+- API client in [`app/public-ui/src/lib/api/`](../app/public-ui/src/lib/api/) — use the typed `ApiError`
 - Routes registered in [`app/public-ui/src/App.tsx`](../app/public-ui/src/App.tsx)
 - Page components in `app/public-ui/src/pages/`, reusable in `components/`
 - Skins/themes in `app/public-ui/src/skins/`
