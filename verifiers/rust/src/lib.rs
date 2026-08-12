@@ -37,17 +37,23 @@ pub mod redaction;
 const NODE_PREFIX: &[u8] = b"OLY:NODE:V1";
 const HASH_SEPARATOR: &[u8] = b"|";
 
-/// **Legacy** binary-Merkle leaf and ledger-entry domains, kept only for the
-/// pre-SMT pipeline this verifier still accepts (e.g.
-/// `test_vectors/proofs/end_to_end.json`). They are NOT the current leaf
-/// domain: the authoritative leaf hash is the ADR-0005 structured binary
-/// prefix in `olympus_crypto::leaf_hash` (`olympus-crypto` pins `LEAF_PREFIX`
-/// as a legacy marker for the same reason).
+/// **Legacy** binary-Merkle leaf domain, kept only for the pre-SMT pipeline
+/// this verifier still accepts (e.g. `test_vectors/proofs/end_to_end.json`).
+/// It is NOT the current leaf domain: the authoritative leaf hash is the
+/// ADR-0005 structured binary prefix in `olympus_crypto::leaf_hash`
+/// (`olympus-crypto` pins `LEAF_PREFIX` as a legacy marker for the same
+/// reason).
 const LEAF_PREFIX: &[u8] = b"OLY:LEAF:V1";
+/// Ledger domain with two uses: the **legacy** binary-Merkle entry chain
+/// (`compute_ledger_entry_hash`, pre-SMT pipeline only) and the **live**
+/// dual-root commitment (`compute_dual_commitment`, V2 — committed test
+/// vectors exercise it). The domain itself is not legacy; only the entry
+/// chain is.
 const LEDGER_PREFIX: &[u8] = b"OLY:LEDGER:V1";
 
 /// SMT empty-leaf sentinel (BLAKE3(b"OLY:EMPTY-LEAF:V1")) — must match
-/// `olympus_crypto::empty_leaf()`. Hardcoded for clarity; recomputed by
+/// `olympus_crypto::empty_leaf()` (`crates/olympus-crypto/src/lib.rs`,
+/// `EMPTY_LEAF_PREFIX`). Hardcoded for clarity; recomputed by
 /// `conformance_smt_empty_leaf` test to guard against drift.
 pub const SMT_EMPTY_LEAF: [u8; 32] = [
     0x0c, 0x51, 0xa9, 0xc6, 0xfd, 0x8d, 0xd8, 0x84, 0x7b, 0xa1, 0x05, 0x3a, 0x17, 0xf6, 0x29, 0x43,
@@ -163,7 +169,9 @@ pub fn verify_merkle_proof(proof: &MerkleProof) -> Result<bool, String> {
 /// Compute the ledger entry hash from pre-canonicalized payload bytes.
 /// Formula: BLAKE3(OLY:LEDGER:V1 || canonical_json_bytes(payload))
 /// The canonical_json_bytes must be produced by the Olympus canonical JSON encoder
-/// (JCS / RFC 8785 with the Olympus divergences — see `crates/olympus-crypto/src/canonical.rs`).
+/// (JCS / RFC 8785 with the Olympus divergences, including exact-decimal
+/// numeric rules — the authoritative implementation is
+/// `olympus_crypto::canonical`, `crates/olympus-crypto/src/canonical.rs`).
 pub fn compute_ledger_entry_hash(canonical_payload_bytes: &[u8]) -> [u8; 32] {
     let mut combined = Vec::with_capacity(LEDGER_PREFIX.len() + canonical_payload_bytes.len());
     combined.extend_from_slice(LEDGER_PREFIX);

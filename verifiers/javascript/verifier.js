@@ -67,7 +67,7 @@ function verifyBlake3Hash(data, expectedHash) {
  */
 function merkleParentHash(leftHash, rightHash) {
   // Concatenate: NODE_PREFIX || HASH_SEPARATOR || left || HASH_SEPARATOR || right
-  // Prefixes must match crates/olympus-crypto/src/lib.rs: OLY:NODE:V1
+  // Prefixes must match olympus_crypto (crates/olympus-crypto/src/lib.rs::NODE_PREFIX): OLY:NODE:V1
   const NODE_PREFIX = new TextEncoder().encode("OLY:NODE:V1");
   const HASH_SEPARATOR = new TextEncoder().encode("|");
 
@@ -182,11 +182,14 @@ function verifyMerkleProof(proof) {
 /**
  * Compute the ledger entry hash from pre-canonicalized payload bytes.
  * Formula: BLAKE3(OLY:LEDGER:V1 || canonical_json_bytes(payload))
- * LEGACY binary-Merkle ledger domain (pre-SMT pipeline only, mirroring the
- * Rust verifier's LEDGER_PREFIX classification) — current ledger inclusion
- * goes through the ADR-0005 SMT path, not this entry chain.
+ * LEGACY binary-Merkle entry chain (pre-SMT pipeline only) — current ledger
+ * inclusion goes through the ADR-0005 SMT path. The OLY:LEDGER:V1 domain
+ * itself is NOT legacy: computeDualCommitment below uses it for the live V2
+ * dual-root commitment (mirroring the Rust verifier's classification).
  * The canonical_json_bytes must be produced by the Olympus canonical JSON encoder
- * (JCS / RFC 8785 with the Olympus divergences — see crates/olympus-crypto/src/canonical.rs).
+ * (JCS / RFC 8785 with the Olympus divergences, including exact-decimal
+ * numeric rules — the authoritative implementation is
+ * olympus_crypto::canonical, crates/olympus-crypto/src/canonical.rs).
  * @param {Uint8Array} canonicalPayloadBytes - Pre-canonicalized JSON payload bytes
  * @returns {Uint8Array} - 32-byte entry hash
  */
@@ -277,18 +280,19 @@ function bigIntTo32BytesBE(n) {
 // ---------------------------------------------------------------------------
 // Sparse Merkle Tree (SSMF) cross-language verifier — ADR-0003
 //
-// Mirrors olympus_crypto::smt verify_proof / verify_nonexistence_proof.
-// Wire format: siblings are leaf-to-root (siblings[0] = leaf-adjacent,
-// siblings[255] = root-adjacent). Do NOT model this on
-// services/cdhs-smf-rust/src/smt.rs — that service uses the opposite
-// (root-to-leaf) convention internally; this module follows the wire format
-// used by verifiers/test_vectors/vectors.json and the Python reference.
+// Mirrors the canonical `olympus_crypto::smt` verify path
+// (`verify_existence_proof` / `verify_nonexistence_proof`). Wire format:
+// siblings are leaf-to-root (siblings[0] = leaf-adjacent, siblings[255] =
+// root-adjacent), matching `verifiers/test_vectors/vectors.json`. (The Python
+// `protocol/` reference this once mirrored was retired with the FastAPI
+// server in v0.9.0; `olympus_crypto` is now the sole canonical source.)
 // ---------------------------------------------------------------------------
 
 /**
  * SMT empty-leaf sentinel: BLAKE3(b"OLY:EMPTY-LEAF:V1"). Must match
- * olympus_crypto::empty_leaf(). Hardcoded here for clarity; recomputed by
- * the conformance test to guard against drift.
+ * olympus_crypto::empty_leaf() (crates/olympus-crypto/src/lib.rs::EMPTY_LEAF_PREFIX).
+ * Hardcoded here for clarity; recomputed by the conformance test to guard
+ * against drift.
  * Value: 0c51a9c6fd8dd8847ba1053a17f62943c59052f4e311ab4e93867c4280579f29
  * @type {Uint8Array}
  */
@@ -525,13 +529,14 @@ const SMT_EMPTY_LEAF_HEX = toHex(SMT_EMPTY_LEAF);
  * Canonical JSON encoder (JCS / RFC 8785 subset).
  *
  * Produces deterministic, byte-identical output matching the authoritative
- * Rust implementation in ``crates/olympus-crypto/src/canonical.rs``:
+ * Rust implementation, ``olympus_crypto::canonical``
+ * (crates/olympus-crypto/src/canonical.rs):
  *
  * - Object keys are sorted by UTF-16 code units (native JS sort).
  * - Strings are NFC-normalized before encoding.
  * - Non-ASCII characters are emitted as raw UTF-8, not ``\uXXXX`` escapes.
  * - ``null``, ``true``, ``false``, integers, and arrays are handled
- *   identically to the Python encoder.
+ *   identically to the Rust encoder.
  *
  * **⚠ NON-AUTHORITATIVE FOR THE NUMBER DOMAIN (audit M-1).**
  * The authoritative canonicalizer is the Rust ``olympus_crypto::canonical``
