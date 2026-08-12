@@ -75,14 +75,10 @@ app/public-ui/src/lib/blake3.ts
 app/public-ui/src/lib/bytes.test.ts
 app/public-ui/src/lib/bytes.ts
 app/public-ui/src/lib/constants.ts
-app/public-ui/src/lib/pdfObjects.test.ts
-app/public-ui/src/lib/pdfObjects.ts
 app/public-ui/src/lib/redactionBinding.conformance.test.ts
 app/public-ui/src/lib/redactionBinding.ts
 app/public-ui/src/lib/safeJson.test.ts
 app/public-ui/src/lib/safeJson.ts
-app/public-ui/src/lib/selectionBytes.test.ts
-app/public-ui/src/lib/selectionBytes.ts
 app/public-ui/src/lib/storage.test.ts
 app/public-ui/src/lib/storage.ts
 app/public-ui/src/lib/types.ts

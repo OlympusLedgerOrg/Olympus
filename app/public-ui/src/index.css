@@ -247,234 +247,13 @@ body {
   min-height: 100vh;
 }
 
-.ods-display {
-  font-family: var(--font-logo);
-  font-weight: 900;
-  font-size: var(--t-display);
-  line-height: var(--leading-tight);
-  letter-spacing: var(--tracking-flat);
-  text-transform: uppercase;
-  color: var(--accent);
-  text-shadow: 0 0 14px var(--accent-glow);
-}
-.ods-h1 {
-  font-family: var(--font-logo);
-  font-weight: 700;
-  font-size: var(--t-h1);
-  line-height: var(--leading-tight);
-  letter-spacing: var(--tracking-tight);
-  text-transform: uppercase;
-  color: var(--fg-1);
-  text-shadow: 0 0 12px var(--accent-glow);
-}
-.ods-h2 {
-  font-family: var(--font-section);
-  font-weight: 700;
-  font-size: var(--t-h2);
-  line-height: var(--leading-tight);
-  letter-spacing: var(--tracking-mid);
-  text-transform: uppercase;
-  color: var(--fg-1);
-}
-.ods-h3 {
-  font-family: var(--font-section);
-  font-weight: 600;
-  font-size: var(--t-h3);
-  letter-spacing: var(--tracking-mid);
-  text-transform: uppercase;
-  color: var(--fg-1);
-}
-.ods-h4 {
-  font-family: var(--font-headings);
-  font-weight: 600;
-  font-size: var(--t-h4);
-  letter-spacing: var(--tracking-mid);
-  text-transform: uppercase;
-  color: var(--fg-1);
-}
-.ods-system {
-  font-family: var(--font-system);
-  font-size: var(--t-eyebrow);
-  letter-spacing: var(--tracking-bracket);
-  text-transform: uppercase;
-  color: var(--fg-2);
-}
-.ods-ui {
-  font-family: var(--font-ui-cyber);
-  font-weight: 600;
-  font-size: var(--t-meta);
-  letter-spacing: var(--tracking-wide);
-  text-transform: uppercase;
-  color: var(--fg-1);
-}
-.ods-eyebrow,
-.ods-label {
-  font-family: var(--font-ui-cyber);
-  font-weight: 500;
-  font-size: var(--t-meta);
-  letter-spacing: var(--tracking-wide);
-  text-transform: uppercase;
-  color: var(--fg-2);
-}
-.ods-eyebrow {
-  font-size: var(--t-eyebrow);
-  color: var(--fg-3);
-}
-.ods-p,
-.ods-body-public {
-  font-family: var(--font-body-public);
-  font-size: 0.95rem;
-  line-height: var(--leading-loose);
-  color: var(--fg-2);
-}
-.ods-body-admin {
-  font-family: var(--font-body-admin);
-  font-size: 0.9rem;
-  line-height: var(--leading-body);
-  color: var(--fg-2);
-}
-.ods-hash,
-.ods-terminal {
-  font-family: var(--font-terminal);
-  font-size: var(--t-small);
-  color: var(--accent);
-  letter-spacing: 0;
-  word-break: break-all;
-}
-.ods-hash {
-  background: var(--green-06);
-  border: 1px solid var(--border-2);
-  padding: 0.18em 0.4em;
-}
-.ods-proof {
-  font-family: var(--font-proof);
-  font-size: var(--t-small);
-  color: var(--fg-1);
-}
-.ods-record {
-  font-family: var(--font-record);
-  font-size: var(--t-small);
-  letter-spacing: 0.02em;
-  color: var(--fg-1);
-}
-.ods-cockpit {
-  font-family: var(--font-cockpit);
-  font-size: var(--t-small);
-  color: var(--fg-1);
-}
-.ods-code {
-  font-family: var(--font-cockpit);
-  font-size: var(--t-small);
-  color: var(--accent);
-  background: var(--green-06);
-  border: 1px solid var(--border-2);
-  padding: 0.18em 0.4em;
-  word-break: break-all;
-}
-html.skin-basic .ods-code,
-html.skin-basic .ods-hash {
-  background: var(--slate-1);
-  color: var(--ink);
-  border-color: var(--slate-2);
-}
-.ods-pixel,
-.ods-boot {
-  font-family: var(--font-pixel);
-  font-size: 1.4rem;
-  line-height: 1.1;
-  letter-spacing: 0.02em;
-}
-.ods-arcade {
-  font-family: var(--font-arcade);
-  font-size: 0.55rem;
-  text-transform: uppercase;
-  line-height: 1.4;
-}
-.ods-warn-pixel {
-  font-family: var(--font-warn-pixel);
-  font-weight: 700;
-  font-size: 0.7rem;
-  letter-spacing: var(--tracking-wide);
-  text-transform: uppercase;
-}
-.ods-popup {
-  font-family: var(--font-popup);
-  font-weight: 600;
-  font-size: 0.9rem;
-  line-height: 1.3;
-}
-.ods-glitch {
-  font-family: var(--font-glitch);
-  font-size: 0.85rem;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-}
-.ods-wordmark {
-  font-family: var(--font-logo);
-  font-weight: 900;
-  letter-spacing: var(--tracking-bracket);
-  text-transform: uppercase;
-  color: var(--fg-1);
-}
-.ods-wordmark .bracket {
-  color: var(--danger);
-  margin-right: 0.4em;
-}
-
-/* Font role utility classes */
+/* Font role utility classes (only the classes with live .tsx consumers —
+   the Tailwind v4 `@theme --font-*` tokens generate the rest on demand) */
 .font-logo {
   font-family: var(--font-logo);
 }
-.font-logo-alt {
-  font-family: var(--font-arcade-alt);
-}
-.font-section {
-  font-family: var(--font-section);
-}
-.font-ui-label {
-  font-family: var(--font-ui-cyber);
-}
-.font-heading {
-  font-family: var(--font-headings);
-}
-.font-system {
-  font-family: var(--font-system);
-}
-.font-hash {
-  font-family: var(--font-terminal);
-}
-.font-proof {
-  font-family: var(--font-proof);
-}
-.font-dev {
-  font-family: var(--font-cockpit);
-}
-.font-record {
-  font-family: var(--font-record);
-}
-.font-table {
-  font-family: var(--font-table);
-}
 .font-boot {
   font-family: var(--font-pixel);
-}
-.font-arcade {
-  font-family: var(--font-arcade);
-}
-.font-retro {
-  font-family: var(--font-warn-pixel);
-}
-.font-popup {
-  font-family: var(--font-popup);
-}
-.font-glitch {
-  font-family: var(--font-glitch);
-}
-.font-body {
-  font-family: var(--font-body-public);
-}
-.font-admin-body {
-  font-family: var(--font-body-admin);
 }
 
 /* ════════════════════════════════════════════════════════════════════════
@@ -742,12 +521,6 @@ html.skin-basic .ods-hash {
   font-size: 0.68rem;
   line-height: 1.45;
 }
-.startup-note {
-  margin: 0;
-  color: var(--fg-muted);
-  font-size: 0.62rem;
-  line-height: 1.6;
-}
 
 /* ════════════════════════════════════════════════════════════════════════
    CYBER PANELS & BUTTONS (Glitch skin primary components)
@@ -833,11 +606,6 @@ html.skin-basic .ods-hash {
 
 .err-text {
   color: var(--danger);
-  font-size: 0.7rem;
-  margin: 0.4rem 0 0;
-}
-.ok-text {
-  color: var(--accent);
   font-size: 0.7rem;
   margin: 0.4rem 0 0;
 }
@@ -1001,17 +769,6 @@ details summary::-webkit-details-marker {
   background: rgba(0, 255, 65, 0.08);
   color: var(--accent);
   outline: none;
-}
-.preview-line {
-  margin-top: 0.8rem;
-  padding: 0.75rem;
-  border: 1px solid var(--border-2);
-  background: rgba(0, 0, 0, 0.35);
-  color: var(--fg-2);
-  font-family: var(--font-terminal);
-  font-size: 0.68rem;
-  line-height: 1.55;
-  overflow-wrap: anywhere;
 }
 .ready-panel {
   display: flex;
@@ -1443,11 +1200,6 @@ html.skin-basic .flow-step {
 html.skin-basic .flow-step[data-active="true"] {
   color: var(--link-blue);
 }
-html.skin-basic .preview-line {
-  border-color: var(--slate-2);
-  background: var(--slate-1);
-  color: var(--slate-6);
-}
 html.skin-basic .icon-text-btn {
   border-color: var(--slate-3);
   background: var(--slate-1);
@@ -1516,11 +1268,6 @@ html.skin-terminal .flow-step {
 }
 html.skin-terminal .flow-step[data-active="true"] {
   color: var(--accent);
-}
-html.skin-terminal .preview-line {
-  border-color: var(--border-2);
-  background: rgba(0, 0, 0, 0.35);
-  color: var(--fg-2);
 }
 
 /* ════════════════════════════════════════════════════════════════════════
