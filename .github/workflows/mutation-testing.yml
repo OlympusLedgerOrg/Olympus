@@ -530,11 +530,28 @@ jobs:
           # verify.rs / zkey.rs (whose return types ARE default-constructible)
           # or any broader build/dependency failure still fails closed. Full
           # (scheduled/dispatch) runs never tolerate all-unviable.
-          unexplained_unviable=$(jq "${mutants_jq} | map(select(.summary == \"Unviable\" and ((.scenario.Mutant.file // \"\") != \"src-tauri/src/zk/prove.rs\"))) | length" \
+          # A tolerated unviable mutant must match ALL of: (1) file is
+          # prove.rs, (2) the replacement is the Ok(...) genre (the Err(...)
+          # siblings from error_values are expected to be viable — an unviable
+          # Err mutant means the build environment itself is broken), and
+          # (3) its per-mutant build log carries the documented
+          # non-constructibility signature (E0599 missing ctor / E0283
+          # inference failure). A missing artifact or dependency failure
+          # produces different diagnostics and therefore fails closed even
+          # when confined to prove.rs.
+          unexplained_unviable=$(jq "${mutants_jq} | map(select(.summary == \"Unviable\" and (((.scenario.Mutant.file // \"\") != \"src-tauri/src/zk/prove.rs\") or (((.scenario.Mutant.replacement // \"\") | startswith(\"Ok(\")) | not)))) | length" \
                        mutants.out/outcomes.json 2>/dev/null || echo 0)
+          while IFS= read -r log_path; do
+            [ -n "$log_path" ] || continue
+            if ! grep -qE 'E0599|E0283' "mutants.out/${log_path}" 2>/dev/null; then
+              echo "unviable prove.rs Ok(...) mutant log ${log_path} lacks the E0599/E0283 non-constructibility signature — counting as unexplained"
+              unexplained_unviable=$((unexplained_unviable + 1))
+            fi
+          done < <(jq -r "${mutants_jq} | map(select(.summary == \"Unviable\" and ((.scenario.Mutant.file // \"\") == \"src-tauri/src/zk/prove.rs\") and ((.scenario.Mutant.replacement // \"\") | startswith(\"Ok(\")))) | .[].log_path // empty" \
+                       mutants.out/outcomes.json 2>/dev/null || true)
           if [ "$total" -gt 0 ] && [ "$viable" -eq 0 ]; then
             if [ -n "${MUTANTS_IN_DIFF:-}" ] && [ "$unexplained_unviable" -eq 0 ]; then
-              echo "all ${total} in-diff mutants in shard ${{ matrix.shard }}/8 are the documented non-constructible Ok(Proof<Bn254>) family in prove.rs — tolerated; their viable Err(...) siblings are tested by other shards"
+              echo "all ${total} in-diff mutants in shard ${{ matrix.shard }}/8 are the documented non-constructible Ok(Proof<Bn254>) family in prove.rs, each with the E0599/E0283 signature in its build log — tolerated; their viable Err(...) siblings are tested by other shards"
             else
             echo "::error::cargo-mutants found ${total} mutants but ALL were unviable (${unexplained_unviable} outside the prove.rs allowlist) — gate validated nothing. Inspect mutants.out/log/* in the mutants-out-zk-${{ matrix.shard }} artifact for the real cause. Common modes: (a) ZK ceremony artifacts not restored — every per-mutant 'cargo test' skips; (b) per-mutant build failure — scratch-dir, missing system dep (webkit/gtk), broken feature combo; (c) every return type non-constructible by cargo-mutants' default placeholders (E0599 on a default ctor / E0283 inference failure on 'Proof::from(Default::default())') — extend .cargo/mutants.toml's error_values. The zk job has hit (c) before because ark_groth16::Proof<Bn254> has no Default / new()."
               exit 1
