@@ -518,12 +518,12 @@ with no grouping hack — the only reason the old 1024 cap mattered.
   **only while `blind_secret` is independent of the signing identity**: its leaves
   fold in per-segment blindings `derive_blinding(blind_secret, content_hash,
   segment_id)`, and `content_hash = BLAKE3(plaintext)` is itself recomputable from
-  a guess — the *only* secret input is `blind_secret`. By default `blind_secret`
-  is **not** independent: it derives from the BJJ authority key
-  (`state.rs::derive_redaction_blind_secret`), the same root the signing key
-  derives from. A production deployment MUST set `OLYMPUS_REDACTION_BLIND_SECRET`
-  to an independent secret; otherwise a single key compromise restores exactly the
-  oracle this fix removes (see the key-custody note below).
+  a guess — the *only* secret input is `blind_secret`. In development only,
+  `blind_secret` derives from the BJJ authority key
+  (`state.rs::derive_redaction_blind_secret`) for zero-setup local work. A
+  production deployment requires `OLYMPUS_REDACTION_BLIND_SECRET` to be an
+  independent secret, so a BJJ-key compromise cannot restore this oracle (see
+  the key-custody note below).
 - **Issuer Ed25519 key compromise — the single largest residual trust assumption,
   and strictly worse than V2.** With the Groth16 proof dropped (§4), a V3 bundle's
   authenticity rests entirely on the Ed25519 signature over `(original_root,
@@ -544,10 +544,10 @@ with no grouping hack — the only reason the old 1024 cap mattered.
   signing key and `blind_secret`. One key compromise therefore yields **both**
   bundle forgery (above) **and** the `original_root` confirmation oracle (the
   blinding qualification above). Production decouples the *signing* key
-  (`OLYMPUS_INGEST_SIGNING_KEY` required) but **not** `blind_secret` by default, so
-  a hardened deployment MUST set **both** `OLYMPUS_INGEST_SIGNING_KEY` and
-  `OLYMPUS_REDACTION_BLIND_SECRET` to independent secrets. Document both as
-  production-required in the §4 operator runbook.
+  (`OLYMPUS_INGEST_SIGNING_KEY` required) and `blind_secret` independently
+  (`OLYMPUS_REDACTION_BLIND_SECRET` required), so a production deployment MUST
+  set **both** to independent secrets. Document both as production-required in
+  the §4 operator runbook.
 
 ## Security & invariants
 
@@ -729,7 +729,7 @@ findings confirmed and folded in (no new forgery/recovery attack):
   trim charset pinned (§3); a normative leaf-construction block added (§3);
   canonical-range + tampered-bytes negative vectors added (§Security).
 - *Threat model (TMH-1/2 + combined):* the `original_root` oracle is **conditional**
-  on an independent `blind_secret` (which defaults to the BJJ key in production);
+  on an independent `blind_secret` (which derives from the BJJ key only in development);
   the issuer-Ed25519-key-compromise blast radius (strictly worse than V2) and the
   combined single-key trust root are now stated (§What is lost). Net new
   production requirement: set **both** `OLYMPUS_INGEST_SIGNING_KEY` and

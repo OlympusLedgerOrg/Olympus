@@ -171,8 +171,18 @@ mod windows {
         ObjectIdentifier::new_unwrap("1.2.840.113549.1.9.16.2.47");
     const ID_KP_TIMESTAMPING: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.6.1.5.5.7.3.8");
     const ID_KP_TIMESTAMPING_VALUE: &[u8] = &[0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x08];
+    // Raw extension OIDs, used only by the tests below to locate and strip
+    // individual extensions when building negative cases. The verifier itself
+    // reads these extensions through the typed `get::<ExtendedKeyUsage>()` /
+    // `get::<CertificateKeyUsage>()` accessors in
+    // `verify_timestamping_certificate_profile`, so they are dead outside
+    // `cfg(test)` — and on Linux the whole `windows` module is compiled out,
+    // which is why only Windows builds saw the dead_code error.
+    #[cfg(test)]
     const ID_CE_EXT_KEY_USAGE: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.5.29.37");
+    #[cfg(test)]
     const ID_CE_BASIC_CONSTRAINTS: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.5.29.19");
+    #[cfg(test)]
     const ID_CE_KEY_USAGE: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.5.29.15");
 
     const ID_SHA1: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.14.3.2.26");
