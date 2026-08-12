@@ -1,8 +1,8 @@
 # External PostgreSQL role contract
 
 This is the release-pinned external-database privilege and maintenance
-contract for Olympus v0.10.0. `src-tauri/src/db.rs` enforces it at startup and
-again before every runtime-pool checkout. The catalog representation is pinned
+contract for Olympus v0.10.0. `src-tauri/src/db/external/` enforces it at
+startup and again before every runtime-pool checkout. The catalog representation is pinned
 to PostgreSQL 15.x, matching the verified 15.16 embedded package; other major
 versions are rejected.
 

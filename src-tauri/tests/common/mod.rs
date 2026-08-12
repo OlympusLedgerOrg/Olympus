@@ -415,7 +415,7 @@ async fn start_embedded_pg(data_root: &std::path::Path, port: u16) -> PgEmbed {
     };
     let mut pg = PgEmbed::new(settings, fetch).await.expect("PgEmbed::new");
     pg.setup().await.expect("PG setup (initdb)");
-    // MUST mirror `src-tauri/src/db.rs::patch_pg_conf` and run BEFORE
+    // MUST mirror `src-tauri/src/db/embedded.rs::patch_pg_conf` and run BEFORE
     // `start_db()`. On Windows with Hyper-V/WSL, postgres resolving
     // "localhost" tries ::1 first, hits "Permission denied", and
     // `start_db()` HANGS instead of falling through to 127.0.0.1.
@@ -440,7 +440,7 @@ async fn start_embedded_pg(data_root: &std::path::Path, port: u16) -> PgEmbed {
 /// Append loopback-only `listen_addresses` + the chosen `port` to the
 /// freshly-`initdb`'d cluster's `postgresql.conf`. Idempotent — guards on
 /// the marker line so a re-run doesn't duplicate it. Mirrors
-/// `src-tauri/src/db.rs::patch_pg_conf` (kept as a private copy here so the
+/// `src-tauri/src/db/embedded.rs::patch_pg_conf` (kept as a private copy here so the
 /// test harness doesn't force that fn to become `pub`).
 fn patch_pg_conf(data_dir: &std::path::Path, port: u16) -> std::io::Result<()> {
     use std::io::Write;

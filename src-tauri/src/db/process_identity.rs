@@ -1132,7 +1132,7 @@ fn observe_postgres_arguments(arguments: &[OsString]) -> (Option<PathBuf>, Optio
 /// else — see `PgEmbed::start_db`, which is the only code in this repository
 /// that spawns a postmaster. `-F` is deliberately **not** accepted: it disables
 /// fsync, directly contradicting the `fsync = on` line that
-/// `db::patch_pg_conf` pins into the managed `postgresql.conf` block. A
+/// `db::embedded::patch_pg_conf` pins into the managed `postgresql.conf` block. A
 /// postmaster running with `-F` is therefore not a postmaster Olympus started,
 /// and must never be granted termination authority over this data directory.
 fn normalize_pg_embed_postgres_arguments(arguments: &[OsString]) -> Option<(PathBuf, u16)> {
@@ -1475,7 +1475,7 @@ mod tests {
     }
 
     /// `-F` disables fsync, contradicting the `fsync = on` line
-    /// `db::patch_pg_conf` pins into the managed config block. pg_embed never
+    /// `db::embedded::patch_pg_conf` pins into the managed config block. pg_embed never
     /// passes it, so a postmaster carrying it is not one Olympus started.
     #[test]
     fn fsync_disabling_postmaster_is_never_granted_termination_authority() {
