@@ -182,6 +182,9 @@ function verifyMerkleProof(proof) {
 /**
  * Compute the ledger entry hash from pre-canonicalized payload bytes.
  * Formula: BLAKE3(OLY:LEDGER:V1 || canonical_json_bytes(payload))
+ * LEGACY binary-Merkle ledger domain (pre-SMT pipeline only, mirroring the
+ * Rust verifier's LEDGER_PREFIX classification) — current ledger inclusion
+ * goes through the ADR-0005 SMT path, not this entry chain.
  * The canonical_json_bytes must be produced by the Olympus canonical JSON encoder
  * (JCS / RFC 8785 with the Olympus divergences — see crates/olympus-crypto/src/canonical.rs).
  * @param {Uint8Array} canonicalPayloadBytes - Pre-canonicalized JSON payload bytes
