@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use super::grants::{
     EXTERNAL_PG_ENUM_TYPES, EXTERNAL_PG_SEQUENCE_GRANTS, EXTERNAL_PG_TABLE_GRANTS,
 };

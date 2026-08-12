@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use super::process_identity::{
     arm_verified_postgres, cleanup_verified_postgres, probe_postmaster_presence, ArmedPostgres,
     ExpectedPostgres, PidPresence, TerminationOutcome,

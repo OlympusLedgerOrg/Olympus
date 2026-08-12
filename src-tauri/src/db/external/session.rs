@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use super::connection::effective_database;
 use sqlx::postgres::{PgConnectOptions, PgConnection};
 

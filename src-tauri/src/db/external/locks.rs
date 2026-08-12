@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use sqlx::postgres::PgConnection;
 
 /// ASCII `OLYP` in the upper 32 bits of the advisory-lock key. The namespace's

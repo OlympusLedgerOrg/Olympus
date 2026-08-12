@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use super::session::{session_policy_error, ExternalPgSessionPolicyError};
 use sqlx::postgres::PgConnection;
 use sqlx::Connection;

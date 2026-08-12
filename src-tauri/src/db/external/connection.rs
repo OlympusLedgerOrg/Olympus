@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use super::super::{
     DbError, DEV_ALLOW_SINGLE_DATABASE_URL_ENV, MIGRATION_DATABASE_URL_ENV, PGOPTIONS_ENV,
 };
