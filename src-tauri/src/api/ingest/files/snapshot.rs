@@ -65,9 +65,11 @@ pub(super) async fn build_snapshot_in_tx(
     // persist the per-segment manifest so `/redaction/issue` can rebuild the
     // 1024-leaf witness from a content_hash. A `detect_format` returning `None`
     // (opaque binary, ZIP/Office until Phase 3) — OR a detected-but-unparseable
-    // document (a modern cross-reference-stream PDF, whose `extract` errors) — OR
-    // a missing `blind_secret` falls back to the chunk root: it ingests fine but
-    // is not object-redactable. The fallback is explicit, never silent.
+    // document (a modern cross-reference-stream PDF, whose `extract` errors)
+    // falls back to the chunk root: it ingests fine but is not object-redactable.
+    // The route rejects a missing `blind_secret` with 503 for redaction-capable
+    // inputs before this function. `None` is reserved for the intentional opaque
+    // chunk path, so production cannot silently downgrade a candidate document.
     let hex_to_fr = |h: &str| -> Option<Fr> {
         let decoded = hex::decode(h).ok()?;
         if decoded.len() > 32 {
@@ -77,8 +79,8 @@ pub(super) async fn build_snapshot_in_tx(
         b[32 - decoded.len()..].copy_from_slice(&decoded);
         Some(Fr::from_be_bytes_mod_order(&b))
     };
-    let segment_manifest: Option<SegmentManifest> = blind_secret.and_then(|s| {
-        match crate::zk::segment::segment_document_with(bytes, s, granularity) {
+    let segment_manifest: Option<SegmentManifest> = blind_secret.and_then(|secret| {
+        match crate::zk::segment::segment_document_with(bytes, secret, granularity) {
             Ok(m) => Some(m),
             Err(e) => {
                 tracing::info!(

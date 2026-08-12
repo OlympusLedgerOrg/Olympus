@@ -33,6 +33,14 @@ const FILE_MAX_BYTES: usize = 100 * 1024 * 1024; // 100 MB
 /// shard/record the entry belonged to.
 const LEDGER_ENTRY_DOMAIN: &[u8] = b"OLY:LEDGER_ENTRY:V2";
 
+/// Require the independent redaction blinding secret only when this upload can
+/// produce an object-level redaction manifest. Opaque binaries and other
+/// intrinsically non-redactable inputs retain the documented chunk commitment
+/// path and do not need redaction key material.
+fn requires_redaction_blind_secret(bytes: &[u8]) -> bool {
+    crate::zk::segment::detect_format(bytes).is_some()
+}
+
 pub(in crate::api::ingest) async fn ingest_file(
     State(state): State<AppState>,
     auth: AuthenticatedKey,
@@ -45,11 +53,6 @@ pub(in crate::api::ingest) async fn ingest_file(
             "API key lacks required scope (write, ingest, or admin).",
         ));
     }
-    let pool = state
-        .pool
-        .as_ref()
-        .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable."))?;
-
     let mut file_bytes: Option<Vec<u8>> = None;
     let mut shard_id = "files".to_owned();
     let mut record_id_opt: Option<String> = None;
@@ -209,6 +212,22 @@ pub(in crate::api::ingest) async fn ingest_file(
     if !sanitize_shard(&shard_id) {
         return Err(err(StatusCode::UNPROCESSABLE_ENTITY, "Invalid shard_id."));
     }
+
+    // A redactable input must never silently fall back to a chunk-only commitment
+    // merely because production key material is missing. Check this before any
+    // database access; opaque inputs remain on their intentional chunk path.
+    let redaction_candidate = requires_redaction_blind_secret(&bytes);
+    if redaction_candidate && state::secret_bytes(&state.redaction_blind_secret).is_none() {
+        return Err(err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "OLYMPUS_REDACTION_BLIND_SECRET unavailable — cannot ingest object-redactable documents.",
+        ));
+    }
+
+    let pool = state
+        .pool
+        .as_ref()
+        .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable."))?;
 
     // Operator-controlled shard creation (fail-closed): the target shard must be
     // registered + active, and this key must be authorized to write to it.
@@ -462,10 +481,17 @@ pub(in crate::api::ingest) async fn ingest_file(
     let mut committed_format = None;
     if row.is_new || row.needs_snapshot_backfill {
         let bjj_priv = bjj_priv.expect("BJJ key presence checked above");
+        // The presence gate above makes this `Some` for redactable inputs; keep
+        // the secret inside its `Zeroizing` owner and borrow it only here.
+        let blind_secret = if redaction_candidate {
+            state::secret_bytes(&state.redaction_blind_secret)
+        } else {
+            None
+        };
         committed_format = build_snapshot_in_tx(
             &mut tx,
             &bjj_priv,
-            state::secret_bytes(&state.redaction_blind_secret),
+            blind_secret,
             &row.shard_id,
             &row.content_hash,
             &row.proof_id,
@@ -530,4 +556,84 @@ pub(in crate::api::ingest) async fn ingest_file(
             redaction_format: committed_format.map(|f| f.as_tag().to_string()),
         }),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::{
+        body::Body,
+        extract::{FromRequest, Multipart, State},
+        http::{header::CONTENT_TYPE, Request, StatusCode},
+        Json,
+    };
+    use uuid::Uuid;
+
+    use super::ingest_file;
+    use crate::{
+        api::middleware::auth::{AuthenticatedKey, RateLimit},
+        state::AppState,
+    };
+
+    fn ingest_key() -> AuthenticatedKey {
+        AuthenticatedKey {
+            db_id: Uuid::new_v4(),
+            user_id: Uuid::new_v4(),
+            legacy_scopes: vec!["ingest".to_owned()],
+            scopes: vec!["ingest".to_owned()],
+            name: "test".to_owned(),
+            user_role: "user".to_owned(),
+        }
+    }
+
+    async fn multipart_file(bytes: &[u8]) -> Multipart {
+        let boundary = "olympus-ingest-test";
+        let mut body = format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"test\"\r\n\r\n"
+        )
+        .into_bytes();
+        body.extend_from_slice(bytes);
+        body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+        let request = Request::builder()
+            .header(
+                CONTENT_TYPE,
+                format!("multipart/form-data; boundary={boundary}"),
+            )
+            .body(Body::from(body))
+            .expect("test request builds");
+        Multipart::from_request(request, &())
+            .await
+            .expect("test multipart parses")
+    }
+
+    #[tokio::test]
+    async fn redactable_upload_returns_503_without_blind_secret_before_database_access() {
+        let result = ingest_file(
+            State(AppState::new(None)),
+            ingest_key(),
+            RateLimit,
+            multipart_file(b"%PDF-1.7\n").await,
+        )
+        .await;
+
+        let (status, Json(body)) = match result {
+            Err(error) => error,
+            Ok(_) => panic!("missing secret must fail closed"),
+        };
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            body["detail"],
+            "OLYMPUS_REDACTION_BLIND_SECRET unavailable — cannot ingest object-redactable documents."
+        );
+    }
+
+    #[test]
+    fn only_redaction_capable_formats_require_the_blind_secret() {
+        assert!(super::requires_redaction_blind_secret(b"%PDF-1.7\n"));
+        assert!(super::requires_redaction_blind_secret(
+            b"line one\nline two\n"
+        ));
+        assert!(!super::requires_redaction_blind_secret(
+            b"\x89PNG\r\n\x1a\n"
+        ));
+    }
 }

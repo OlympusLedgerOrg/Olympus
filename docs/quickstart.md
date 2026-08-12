@@ -132,7 +132,13 @@ above is the explicit equivalent.)
 
 ### Build a production bundle
 
-Generate real ZK artifacts first, then build with production mode explicit:
+Generate real ZK artifacts first. Before running in production, configure stable,
+independent 32-byte-hex values for both `OLYMPUS_INGEST_SIGNING_KEY` and
+`OLYMPUS_REDACTION_BLIND_SECRET` (alongside the persisted
+`OLYMPUS_BJJ_AUTHORITY_KEY`). The blind secret is required for object-redaction
+ingest and issuance; keeping it independent ensures a BJJ-key compromise cannot
+retroactively de-hide historical redactions. Then build with production mode
+explicit:
 
 **Bash / Zsh:**
 

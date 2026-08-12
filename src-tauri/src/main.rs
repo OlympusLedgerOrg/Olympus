@@ -200,10 +200,9 @@ fn main() {
                                     &app_state.bjj_authority_key,
                                 ));
                             // Server blinding secret for object-level redaction
-                            // (ADR-0026): derived deterministically from the
-                            // persisted BJJ authority (or an explicit override)
-                            // so per-object blindings are stable across restarts
-                            // and re-ingest reproduces the same committed root.
+                            // (ADR-0026): production requires the independent,
+                            // explicit secret; dev derives a stable fallback from
+                            // the persisted BJJ authority for zero-setup local use.
                             app_state.redaction_blind_secret =
                                 state::resolve_redaction_blind_secret(state::secret_bytes(
                                     &app_state.bjj_authority_key,
