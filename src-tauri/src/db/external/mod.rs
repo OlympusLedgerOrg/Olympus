@@ -155,7 +155,16 @@ struct ExternalPgRuntimeAttestationContext {
 }
 
 impl ExternalPgRuntimeAttestationContext {
-    async fn attest(&self, connection: &mut PgConnection) -> Result<(), sqlx::Error> {
+    /// Per-checkout attestation: the shared lifecycle lock and the session
+    /// identity/policy boundary.
+    ///
+    /// These are the properties a *live session* can drift on — a lock dropped
+    /// out from under us, a `SET ROLE`/`search_path` change, a role-membership
+    /// grant — so they are re-verified on every pool checkout.
+    ///
+    /// The control-plane half (trusted boundary, closed catalog, privilege
+    /// matrix) is deliberately **not** repeated here; see [`Self::attest`].
+    async fn attest_session(&self, connection: &mut PgConnection) -> Result<(), sqlx::Error> {
         let runtime_lock_held =
             external_pg_runtime_lock_is_held(connection)
                 .await
@@ -198,6 +207,32 @@ impl ExternalPgRuntimeAttestationContext {
             self.shared_development_identity,
         )
         .map_err(session_policy_sqlx_error)?;
+        Ok(())
+    }
+
+    /// Per-physical-connection attestation: [`Self::attest_session`] plus the
+    /// control plane — trusted boundary, closed release catalog (a full
+    /// semantic-inventory materialisation), and the four runtime privilege
+    /// probes.
+    ///
+    /// Run from `after_connect` only, i.e. exactly once per physical
+    /// connection. It costs seven round trips beyond `attest_session`'s three —
+    /// one trusted-boundary probe, two closed-catalog probes (one of which
+    /// materialises the whole semantic inventory: measured at ~33 ms warm,
+    /// ~320 ms cold on a freshly migrated PostgreSQL 16 database), and four
+    /// privilege probes.
+    ///
+    /// Repeating that on every checkout (as this hook pair originally did) buys
+    /// no safety: schema and ACL state can only be mutated while holding the
+    /// **exclusive** maintenance lock, and every runtime connection holds the
+    /// **shared** form for its whole lifetime. A shared hold in one session
+    /// denies an exclusive acquisition in any other — verified against a real
+    /// server by `handoff_recovery_reacquisition_conflicts_with_other_sessions`
+    /// — so no maintenance mutation can occur while a runtime connection
+    /// exists, and that lock hold is exactly what `attest_session` re-proves on
+    /// each checkout (issue #1613 item 3).
+    async fn attest(&self, connection: &mut PgConnection) -> Result<(), sqlx::Error> {
+        self.attest_session(connection).await?;
         if !self.shared_development_identity {
             attest_external_pg_control_plane(
                 connection,
@@ -237,11 +272,19 @@ impl ExternalPgRuntimeAttestationContext {
 /// the closed release catalog is verified, exact grants are installed, and
 /// only then is runtime CONNECT restored. Before releasing the exclusive lock,
 /// that same session acquires the shared form; every physical runtime
-/// connection then acquires and attests that shared lifecycle lock exactly
-/// once. The migration session closes only after the pool has a shared-lock
-/// keeper, so there is no unlocked handoff window. Explicit development mode
-/// can reuse `DATABASE_URL` only when
-/// `OLYMPUS_DEV_ALLOW_SINGLE_DATABASE_URL=true`.
+/// connection then acquires that shared lifecycle lock once, on connect. The
+/// migration session closes only after the pool has a shared-lock keeper, so
+/// there is no unlocked handoff window. Explicit development mode can reuse
+/// `DATABASE_URL` only when `OLYMPUS_DEV_ALLOW_SINGLE_DATABASE_URL=true`.
+///
+/// Attestation is split by cost and by what can actually drift
+/// (`ExternalPgRuntimeAttestationContext`): `after_connect` runs the full
+/// attestation once per physical connection — session policy **and** the
+/// control plane (trusted boundary, closed catalog, privilege matrix) — while
+/// `before_acquire` re-proves the shared lock hold and the session
+/// identity/policy boundary on every checkout. The control plane is not
+/// re-swept per checkout because mutating it requires the exclusive lock, which
+/// cannot be held while any runtime connection holds the shared form.
 ///
 /// Configuration, connection, or migration failure leaves DB-backed routes
 /// unavailable. External connection errors are deliberately not formatted
@@ -513,7 +556,7 @@ pub async fn connect_external(database_url: &str) -> Option<PgPool> {
         .before_acquire(move |connection, _metadata| {
             let context = before_acquire_context.clone();
             Box::pin(async move {
-                context.attest(connection).await?;
+                context.attest_session(connection).await?;
                 Ok(true)
             })
         });
