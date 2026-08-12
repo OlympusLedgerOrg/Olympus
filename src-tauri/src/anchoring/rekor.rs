@@ -546,7 +546,7 @@ mod set_verification_tests {
     //! shape or signature parsing.
     use super::*;
     use p256::ecdsa::{
-        signature::Signer, signature::Verifier, Signature, SigningKey, VerifyingKey,
+        signature::Signer, Signature, SigningKey, VerifyingKey,
     };
     use p256::pkcs8::EncodePublicKey;
     use rand::rngs::OsRng;

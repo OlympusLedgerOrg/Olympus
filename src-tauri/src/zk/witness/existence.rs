@@ -32,7 +32,7 @@
 //! `proofs/circuits/document_existence.circom` lines 72–82 for the comment.
 
 use ark_bn254::Fr;
-use ark_ff::{BigInteger, PrimeField, Zero};
+use ark_ff::{BigInteger, PrimeField};
 use num_bigint::BigInt;
 use thiserror::Error;
 
@@ -162,6 +162,7 @@ impl ExistenceWitness {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ark_ff::Zero;
 
     // Build a length-DEPTH sibling path of all zeros — every test that doesn't
     // care about path content can use this and supply its own indices.

@@ -12,10 +12,10 @@ use axum::{
     routing::{delete, get, post, put},
     Json, Router,
 };
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use uuid::Uuid;
 
-use super::checkpoint::{self, PeerCheckpoint};
+use super::checkpoint;
 use super::equivocation;
 use super::peer::{self, AddPeerError, AddPeerRequest, UpdateTrustRequest};
 use crate::api::admin_routes::{

@@ -1,6 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
-// Match lib.rs: the bin re-includes the same module tree, so without this
-// every item not reachable from `main` is reported as dead code.
+// The bin re-includes the lib's module tree via the `mod` declarations
+// below, so every item reachable only through the lib's public API would be
+// reported as dead code here. The lib target carries no such allow — real
+// dead code is caught there.
 #![allow(dead_code, unused_imports)]
 
 mod anchoring;

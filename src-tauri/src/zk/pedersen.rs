@@ -76,7 +76,6 @@ use zeroize::Zeroizing;
 
 use super::witness::baby_jubjub::{
     ark_fr_to_bigint, bigint_to_ark, bjj_affine, bjj_in_prime_subgroup, bjj_is_identity,
-    bjj_subgroup_order,
 };
 
 /// Baby Jubjub twisted-Edwards curve coefficient `a` (per circomlib /
@@ -400,6 +399,7 @@ pub fn random_blinding<R: RngCore + CryptoRng>(rng: &mut R) -> Fr {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::witness::baby_jubjub::bjj_subgroup_order;
     use proptest::prelude::*;
     // G coordinates live at module scope as G_X_DEC / G_Y_DEC since PD-2 —
     // reuse them here for the "H ≠ G" test rather than duplicating.

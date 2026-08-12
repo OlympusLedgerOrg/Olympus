@@ -16,7 +16,6 @@
 //! identical to snarkjs witness values.
 
 use ark_bn254::Fr;
-use ark_ff::{BigInteger, PrimeField};
 use light_poseidon::{Poseidon, PoseidonHasher};
 use thiserror::Error;
 
@@ -24,19 +23,6 @@ use thiserror::Error;
 pub enum PoseidonError {
     #[error("Poseidon error: {0}")]
     Internal(String),
-}
-
-// light_poseidon works on [u8; 32] big-endian field elements.
-
-fn fr_to_bytes(f: Fr) -> [u8; 32] {
-    let mut buf = [0u8; 32];
-    let b = f.into_bigint().to_bytes_be();
-    buf.copy_from_slice(&b);
-    buf
-}
-
-fn bytes_to_fr(b: &[u8; 32]) -> Fr {
-    Fr::from_be_bytes_mod_order(b)
 }
 
 /// Canonical internal-node domain tag (audit L-4 NODE=2 split). Re-exported
@@ -158,7 +144,7 @@ pub fn compute_merkle_root(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ark_ff::Zero;
+    use ark_ff::PrimeField;
 
     #[test]
     fn hash2_is_deterministic() {

@@ -40,7 +40,7 @@ on:
       release_tag:
         description: "Release tag used when publishing"
         required: true
-        default: "build-week-2026-demo-v2"
+        default: "build-week-2026-demo-v3"
         type: string
 
 concurrency:

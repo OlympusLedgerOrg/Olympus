@@ -38,9 +38,10 @@ use axum::{
     Router,
 };
 
+#[cfg(feature = "dev-signing-route")]
+use crate::api::admin_routes::KEY_SIGNING_DEV_GENERATE;
 use crate::api::admin_routes::{
-    KEY_ADMIN_GENERATE, KEY_ADMIN_RELOAD_KEYS, KEY_OPERATOR_ENROLL, KEY_SIGNING,
-    KEY_SIGNING_DEV_GENERATE, KEY_SIGNING_KEY,
+    KEY_ADMIN_GENERATE, KEY_ADMIN_RELOAD_KEYS, KEY_OPERATOR_ENROLL, KEY_SIGNING, KEY_SIGNING_KEY,
 };
 use crate::state::AppState;
 

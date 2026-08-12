@@ -320,10 +320,6 @@ impl CeremonyManifest {
         Ok(m)
     }
 
-    pub fn is_legacy_v1(&self) -> bool {
-        self.version == LEGACY_MANIFEST_VERSION
-    }
-
     /// True iff this manifest's coordinator signature covers `created_unix`
     /// (version ≥ 3), i.e. validity windows may be evaluated at the
     /// authenticated creation time rather than wall-clock now.

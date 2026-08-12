@@ -8,10 +8,8 @@ use std::path::Path;
 use std::str::FromStr;
 
 use ark_bn254::{Bn254, Fq, Fq2, G1Affine, G2Affine};
-use ark_ec::AffineRepr;
 use ark_ff::{BigInteger, PrimeField};
 use ark_groth16::VerifyingKey;
-use ark_serialize::CanonicalDeserialize;
 use num_bigint::BigUint;
 use serde::Deserialize;
 use thiserror::Error;

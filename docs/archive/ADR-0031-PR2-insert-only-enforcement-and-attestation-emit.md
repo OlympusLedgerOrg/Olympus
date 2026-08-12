@@ -1,3 +1,7 @@
+> **ARCHIVED (2026-08-12).** Shipped: ingest routes through the write-once guard,
+> `WriteOnceViolation` is typed, migration `0049` landed, and the attestation is
+> emitted on own-checkpoints (see CLAUDE.md Critical Invariants, ADR-0031).
+
 # PR2 brief — enforce insert-only + emit transition attestation
 
 > **Agent-ready.** Implements §2 of `docs/adr/ADR-0031-transition-attestations-insert-only-ledger.md`.

@@ -7,7 +7,7 @@ use std::path::Path;
 use std::sync::OnceLock;
 
 use ark_bn254::{Bn254, Fr};
-use ark_groth16::{prepare_verifying_key, Groth16, PreparedVerifyingKey, VerifyingKey};
+use ark_groth16::{prepare_verifying_key, Groth16, PreparedVerifyingKey};
 use ark_snark::SNARK;
 use thiserror::Error;
 

@@ -64,14 +64,6 @@ pub(super) fn err(status: StatusCode, detail: &str) -> ApiError {
     (status, Json(serde_json::json!({"detail": detail})))
 }
 
-#[allow(dead_code)]
-pub(super) fn err_code(status: StatusCode, detail: &str, code: &str) -> ApiError {
-    (
-        status,
-        Json(serde_json::json!({"detail": detail, "code": code})),
-    )
-}
-
 pub(super) fn db_err(e: sqlx::Error) -> ApiError {
     tracing::error!("database error: {e}");
     err(StatusCode::INTERNAL_SERVER_ERROR, "Database error.")

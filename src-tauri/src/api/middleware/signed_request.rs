@@ -15,7 +15,7 @@ use axum::{
 };
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use olympus_crypto::{
-    request_envelope::{signed_request_message, REQUEST_V1_DOMAIN_SEPARATOR, REQUEST_V1_PREFIX},
+    request_envelope::{signed_request_message, REQUEST_V1_DOMAIN_SEPARATOR},
     signature_envelope::{
         SignatureAlgorithm, SignatureEnvelopeError, SignatureEnvelopeV2, SignatureVerificationMode,
         VerifiedEnvelope,
@@ -23,7 +23,7 @@ use olympus_crypto::{
 };
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::json;
 
 use crate::api::admin_routes::SIGNED_ADMIN_MUTATION_ROUTES;
 use crate::state::AppState;
@@ -673,6 +673,7 @@ fn map_signature_error(e: SignatureEnvelopeError) -> SignedRequestRejection {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use olympus_crypto::request_envelope::REQUEST_V1_PREFIX;
     use ed25519_dalek::SigningKey;
     use olympus_crypto::signature_envelope::{
         DomainSeparator, SignatureComponent, SignatureEnvelopeV2, SignatureSuite,

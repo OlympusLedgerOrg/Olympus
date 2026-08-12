@@ -71,6 +71,10 @@ pub(super) struct CredentialRow {
     pub(super) quorum_threshold: Option<i32>,
     pub(super) quorum_signers: Option<serde_json::Value>,
     pub(super) quorum_proof: Option<serde_json::Value>,
+    // Written at issuance (migration 0032) and carried by `SELECT *`; the
+    // first reader is the `quorum-circuit` verify path (next-phase — the
+    // explicit BJJ signature set is authoritative until then).
+    #[allow(dead_code)]
     pub(super) quorum_proof_signals: Option<serde_json::Value>,
 }
 

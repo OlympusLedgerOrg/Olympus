@@ -3,8 +3,6 @@
 //! A checkpoint bundles this node's latest ledger state with a Groth16 proof
 //! and BJJ signature so peers can verify without seeing the data.
 
-use ark_bn254::Fr;
-use ark_ff::{BigInteger, PrimeField};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -134,7 +132,6 @@ pub fn canonical_checkpoint_bytes(cp: &PeerCheckpoint) -> Result<Vec<u8>, String
 
 /// Check if a peer's BJJ pubkey matches a given authority_pubkey_hash.
 pub fn peer_matches_authority_hash(peer: &super::peer::PeerNode, authority_hash: &str) -> bool {
-    use ark_bn254::Fr;
     let Ok(x) = crate::zk::proof::parse_fr(&peer.bjj_pubkey_x) else {
         return false;
     };

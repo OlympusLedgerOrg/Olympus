@@ -4,8 +4,10 @@ use axum::{
     middleware::{from_fn, from_fn_with_state, Next},
     response::Response,
     routing::get,
-    Extension, Router,
+    Router,
 };
+#[cfg(feature = "federation")]
+use axum::Extension;
 use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::net::TcpListener;
@@ -17,7 +19,9 @@ use crate::api::{
     smt_stats, user_auth, zk,
 };
 use crate::routes::public_stats;
-use crate::state::{AppState, RateLimitOrigin};
+use crate::state::AppState;
+#[cfg(feature = "federation")]
+use crate::state::RateLimitOrigin;
 
 mod handlers;
 

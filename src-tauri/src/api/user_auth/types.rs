@@ -18,7 +18,6 @@ pub(super) struct UserRow {
     pub(super) id: Uuid,
     pub(super) email: String,
     pub(super) password_hash: String,
-    pub(super) role: String,
     // `users.created_at` is TIMESTAMPTZ (migration 0010); sqlx 0.9 refuses
     // to decode TIMESTAMPTZ into `NaiveDateTime` and the whole query 500s
     // (same mismatch documented in `admin_users.rs::UserKeyRow`). Decode as
