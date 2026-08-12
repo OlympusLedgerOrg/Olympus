@@ -23,7 +23,7 @@ verifiers are Rust and JavaScript.
 
 ## Quick Start
 
-Use [`docs/quickstart.md`](docs/quickstart.md) for the complete prerequisite and
+Use [`docs/quickstart.md`](quickstart.md) for the complete prerequisite and
 platform instructions. The minimum contributor toolchain includes Rust 1.94 or
 newer, Node.js 22.12 or newer, pnpm 11.1.2, the Tauri CLI 2, and the native
 Tauri system dependencies for your operating system.
@@ -170,7 +170,7 @@ These are the non-negotiables. If you break one, security analysis breaks.
 
 ## Environment
 
-Common `.env` variables (full list in [AGENTS.md](AGENTS.md)):
+Common `.env` variables (full list in [AGENTS.md](../AGENTS.md)):
 
 | Variable | Purpose |
 |---|---|
@@ -186,7 +186,7 @@ Common `.env` variables (full list in [AGENTS.md](AGENTS.md)):
 | `OLYMPUS_ANCHOR_REKOR_URL` | Sigstore Rekor URL (enables Rekor anchoring) |
 | `OLYMPUS_ANCHOR_OTS_CALENDARS` | Comma-separated OpenTimestamps calendars |
 | `DATABASE_URL` | External PostgreSQL runtime role — skips `pg_embed`; production requires `sslmode=verify-full` |
-| `OLYMPUS_DATABASE_MIGRATION_URL` | Distinct migrated-object owner used only for startup migrations; Olympus retains the configured schema and installs the exact table/column matrix in [the external-role contract](docs/external-postgresql-roles.md) |
+| `OLYMPUS_DATABASE_MIGRATION_URL` | Distinct migrated-object owner used only for startup migrations; Olympus retains the configured schema and installs the exact table/column matrix in [the external-role contract](external-postgresql-roles.md) |
 | `OLYMPUS_DEV_ALLOW_SINGLE_DATABASE_URL=true` | Explicit local/CI compatibility mode that reuses `DATABASE_URL`; refused in production |
 | PostgreSQL `PG*` variables | All connection-shaping variables listed in the external-role contract must be unset; URL session/target overrides are also forbidden |
 | `CORS_ORIGINS` | Explicit comma-separated origins (no wildcards) |
@@ -246,14 +246,14 @@ There's no Docker requirement at runtime. Any historical `docker-compose.yml` re
 
 ## Where to Look Next
 
-- [CLAUDE.md](CLAUDE.md) — the source-of-truth file for working with Claude in this repo. Read this first.
-- [docs/architecture.md](docs/architecture.md) — deeper architecture notes.
-- [docs/court-evidence.md](docs/court-evidence.md) — how the anchoring stack maps to legal evidence requirements.
-- [docs/adr/](docs/adr/) — Architecture Decision Records.
-- [CHANGELOG.md](CHANGELOG.md) — what landed in each release.
+- [CLAUDE.md](../CLAUDE.md) — the source-of-truth file for working with Claude in this repo. Read this first.
+- [docs/architecture.md](architecture.md) — deeper architecture notes.
+- [docs/court-evidence.md](court-evidence.md) — how the anchoring stack maps to legal evidence requirements.
+- [docs/adr/](adr/) — Architecture Decision Records.
+- [CHANGELOG.md](../CHANGELOG.md) — what landed in each release.
 
 If you're reading this as a new contributor: start with
 `OLYMPUS_ENV=development OLYMPUS_API_PORT=3737 cargo tauri dev`, poke at the UI,
-then read [src-tauri/src/main.rs](src-tauri/src/main.rs) and
-[src-tauri/src/server/mod.rs](src-tauri/src/server/mod.rs) — those two files plus
+then read [src-tauri/src/main.rs](../src-tauri/src/main.rs) and
+[src-tauri/src/server/mod.rs](../src-tauri/src/server/mod.rs) — those two files plus
 the layout table above are enough to get oriented.

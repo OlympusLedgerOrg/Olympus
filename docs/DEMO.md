@@ -39,7 +39,7 @@ This walkthrough is a local verification path, not a production certification. A
    Both launchers default to development mode when `OLYMPUS_ENV` is unset,
    which is what this walkthrough needs: a fresh clone has placeholder ZK
    artifacts, and a production start refuses to launch until you run the
-   one-time setup in [`docs/quickstart.md`](docs/quickstart.md). If you set
+   one-time setup in [`docs/quickstart.md`](quickstart.md). If you set
    `OLYMPUS_ENV=production` yourself the launchers keep it, and that setup
    comes first. Nothing in the loop below depends on it.
 2. Open the public UI and land on Verify.
@@ -48,7 +48,7 @@ This walkthrough is a local verification path, not a production certification. A
 5. Verify the hash before commit and confirm Olympus reports `RECORD_NOT_FOUND`.
 6. Commit the file with a valid API key. On a first launch against an empty
    database, Olympus shows that key once in a "save these now" modal — see
-   [Where `<bootstrap_key>` comes from](docs/quickstart.md#where-bootstrap_key-comes-from)
+   [Where `<bootstrap_key>` comes from](quickstart.md#where-bootstrap_key-comes-from)
    for where it appears and why it is never written to a log.
 7. Verify the same file again and confirm the ledger reports a valid record.
 8. Download the proof bundle from the successful verification.

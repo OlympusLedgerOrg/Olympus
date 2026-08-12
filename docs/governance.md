@@ -6,17 +6,17 @@ the rules below are the ones we follow today — paired with an honest note abou
 the project's current maturity.
 
 Companion documents:
-- [`MAINTAINERS.md`](../MAINTAINERS.md) — roster, roles, and the contributor ladder.
+- [`MAINTAINERS.md`](MAINTAINERS.md) — roster, roles, and the contributor ladder.
 - [`CONTRIBUTING.md`](../CONTRIBUTING.md) — how to submit changes (DCO sign-off).
 - [`CODE_OF_CONDUCT.md`](../CODE_OF_CONDUCT.md) — expected behavior and enforcement.
 - [`docs/rfcs/README.md`](rfcs/README.md) — proposing substantial changes.
 - [`SECURITY.md`](../SECURITY.md) — coordinated disclosure.
-- [`ROADMAP.md`](../ROADMAP.md) — direction and milestones.
+- [`ROADMAP.md`](ROADMAP.md) — direction and milestones.
 
 > **Current maturity (honest disclosure).** Olympus is in a
 > maintainer-bootstrapping phase: the reference implementation has been driven
 > primarily by a small core team, and growing the maintainer pool is an
-> explicit, tracked goal (see [`ROADMAP.md`](../ROADMAP.md)). The process below
+> explicit, tracked goal (see [`ROADMAP.md`](ROADMAP.md)). The process below
 > is written so that authority is exercised by rule rather than by habit, and
 > so the transition to multi-maintainer steady state is mechanical rather than
 > improvised. Where a rule assumes several maintainers, it degrades gracefully
@@ -29,7 +29,7 @@ Companion documents:
 - **Transparency.** Decisions and releases are recorded via ADRs, RFCs, and
   signed tags. Discussion happens in the open on issues and pull requests.
 - **Fail-closed on the protocol.** Changes to the Critical Invariants in
-  [`CLAUDE.md`](../../CLAUDE.md) are migration-class events and never land
+  [`CLAUDE.md`](../CLAUDE.md) are migration-class events and never land
   without an ADR.
 - **Grow the bus factor.** We prefer to widen the maintainer pool over
   concentrating authority.
@@ -37,7 +37,7 @@ Companion documents:
 ## Roles
 
 Roles and the contributor ladder are defined in
-[`MAINTAINERS.md`](../MAINTAINERS.md): **Contributor → Reviewer → Maintainer**,
+[`MAINTAINERS.md`](MAINTAINERS.md): **Contributor → Reviewer → Maintainer**,
 plus a **Security Response** group drawn from maintainers. In governance terms:
 
 - **Maintainers** hold merge rights, release authority, and votes.
@@ -92,7 +92,7 @@ changes require one.
 ## Maintainer Election, Promotion & Removal
 
 **Promotion** (Contributor → Reviewer → Maintainer) follows the ladder in
-[`MAINTAINERS.md`](../MAINTAINERS.md#becoming-a-maintainer): nomination in a
+[`MAINTAINERS.md`](MAINTAINERS.md#becoming-a-maintainer): nomination in a
 `governance`-tagged issue, then lazy consensus (reviewer) or supermajority vote
 (maintainer). The same PR updates the roster and `.github/CODEOWNERS`.
 
@@ -152,7 +152,7 @@ remaining maintainers or designated stewards will:
    publish a signed notice + ADR documenting the change.
 2. Invite additional maintainers from active contributors to restore
    redundancy.
-3. Update [`MAINTAINERS.md`](../MAINTAINERS.md) and `.github/CODEOWNERS`.
+3. Update [`MAINTAINERS.md`](MAINTAINERS.md) and `.github/CODEOWNERS`.
 
 The persistence requirements for signing keys (Ed25519 and Baby Jubjub) in
 `CLAUDE.md` exist precisely so that historical signed roots remain verifiable
@@ -166,7 +166,7 @@ mandatory open review window (per the change-class table) during which any
 contributor may object, and **plus** the ADR/RFC paper trail. This keeps the
 process transparent and reversible even before the pool grows. Reaching two to
 three active maintainers — at which point these rules apply in full — is a
-tracked v1.0 milestone in [`ROADMAP.md`](../ROADMAP.md).
+tracked v1.0 milestone in [`ROADMAP.md`](ROADMAP.md).
 
 ## Licensing & Sustainability
 

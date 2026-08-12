@@ -42,7 +42,7 @@ Olympus is most useful if you are one of these:
 |-----------|-----------|
 | Journalist or investigator | [`docs/court-evidence.md`](docs/court-evidence.md) |
 | Lawyer or expert witness | [`docs/court-evidence.md`](docs/court-evidence.md) → [`verifiers/`](verifiers/) |
-| Grant reviewer or outside evaluator | [`GRANTS.md`](GRANTS.md) → [`DEMO.md`](DEMO.md) |
+| Grant reviewer or outside evaluator | [`GRANTS.md`](docs/GRANTS.md) → [`DEMO.md`](docs/DEMO.md) |
 | Security auditor | [`docs/audits/2026-07-26-security-audit-report-v6.md`](docs/audits/2026-07-26-security-audit-report-v6.md) → [`docs/threat-model.md`](docs/threat-model.md) |
 | Developer or contributor | [`docs/quickstart.md`](docs/quickstart.md) → [`CONTRIBUTING.md`](CONTRIBUTING.md) |
 | ZK or circuit reviewer | [`proofs/circuits/`](proofs/circuits/) → [`src-tauri/src/zk/`](src-tauri/src/zk/) |
@@ -72,13 +72,13 @@ Olympus is in active development at `v0.10`.
 - The core ledger and cryptographic proof system are live.
 - The remaining pre-launch milestone is a trusted-setup ceremony — a one-time step carried out by several independent parties so that no single one of them, including us, keeps the ability to forge proofs.
 
-This repository is intentionally **pre-v1**. In practice, that means development and review are active, but the system is still gated until the ceremony work is complete. See [`ROADMAP.md`](ROADMAP.md).
+This repository is intentionally **pre-v1**. In practice, that means development and review are active, but the system is still gated until the ceremony work is complete. See [`ROADMAP.md`](docs/ROADMAP.md).
 
 ---
 
 ## OpenAI Build Week 2026
 
-Olympus predates the July 13, 2026 submission window. What was added during Build Week, and how to run it, is in [`BUILD_WEEK.md`](BUILD_WEEK.md).
+Olympus predates the July 13, 2026 submission window. What was added during Build Week, and how to run it, is in [`BUILD_WEEK.md`](docs/BUILD_WEEK.md).
 
 ---
 
@@ -127,11 +127,11 @@ Olympus is open to contributors and is actively growing its maintainer pool.
 |-------|----------|
 | How to contribute (DCO sign-off) | [`CONTRIBUTING.md`](CONTRIBUTING.md) |
 | Expected behavior & enforcement | [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) |
-| Who maintains what & the contributor ladder | [`MAINTAINERS.md`](MAINTAINERS.md) |
+| Who maintains what & the contributor ladder | [`MAINTAINERS.md`](docs/MAINTAINERS.md) |
 | How decisions are made, voted, and released | [`docs/governance.md`](docs/governance.md) |
 | Proposing substantial changes | [`docs/rfcs/README.md`](docs/rfcs/README.md) |
-| Where the project is headed | [`ROADMAP.md`](ROADMAP.md) |
+| Where the project is headed | [`ROADMAP.md`](docs/ROADMAP.md) |
 | Reporting a vulnerability | [`SECURITY.md`](SECURITY.md) |
 
 Interested in a maintainer role? See
-[Becoming a maintainer](MAINTAINERS.md#becoming-a-maintainer).
+[Becoming a maintainer](docs/MAINTAINERS.md#becoming-a-maintainer).

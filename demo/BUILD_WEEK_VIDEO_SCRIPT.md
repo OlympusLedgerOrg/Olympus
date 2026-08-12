@@ -15,7 +15,7 @@ binary and repository. Do not add music.
 
 ## 0:18–0:38 — Honest Build Week boundary
 
-**On screen:** `BUILD_WEEK.md`, with PRs #1398 and #1409 visible.
+**On screen:** `docs/BUILD_WEEK.md`, with PRs #1398 and #1409 visible.
 
 > Olympus existed before Build Week. After July 13, I added two complementary
 > extensions with Codex and GPT-5.6: transactional, portable Merkle storage as
@@ -74,7 +74,7 @@ without exposing private data.
 
 ## 2:48–2:55 — Close
 
-**On screen:** `JUDGES.md`, public repository, and v2 release assets.
+**On screen:** `docs/JUDGES.md`, public repository, and v2 release assets.
 
 > The code, exact diffs, prebuilt binaries, checksums, and judge walkthrough are
 > public. Olympus turns trust in an operator into evidence anyone can verify.

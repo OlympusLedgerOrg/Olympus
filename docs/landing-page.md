@@ -45,7 +45,7 @@ needs to stay there.
 
 The "What Olympus does not promise" section mirrors
 [`docs/threat-model.md`](threat-model.md), and the status band mirrors
-[`ROADMAP.md`](../ROADMAP.md) — including that the trusted-setup ceremony has
+[`ROADMAP.md`](ROADMAP.md) — including that the trusted-setup ceremony has
 not happened yet. **If any of those change, this page changes with them.** A
 landing page that outlives its own accuracy is worse than no landing page.
 

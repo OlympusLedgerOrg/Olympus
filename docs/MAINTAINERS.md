@@ -2,8 +2,8 @@
 
 This file is the operational record of **who maintains Olympus, what each role
 can do, and how someone moves up the ladder**. It is the companion to
-[`docs/governance.md`](docs/governance.md) (the decision process) and
-[`CONTRIBUTING.md`](CONTRIBUTING.md) (how to submit changes).
+[`docs/governance.md`](governance.md) (the decision process) and
+[`CONTRIBUTING.md`](../CONTRIBUTING.md) (how to submit changes).
 
 > **Current state (honest disclosure).** Olympus is in its
 > maintainer-bootstrapping phase. The reference implementation has been driven
@@ -24,14 +24,14 @@ Olympus uses a three-rung ladder. Each rung is additive.
 | **Maintainer** | Everything a reviewer can, plus: merge rights, release authority, manage `CODEOWNERS`/labels/branch protection, vote on governance matters, participate in security response, approve new reviewers/maintainers. | Nomination + maintainer vote (see [Becoming a maintainer](#becoming-a-maintainer)). |
 
 A **Security Response Contact** is a maintainer (or delegate) who additionally
-owns coordinated disclosure under [`SECURITY.md`](SECURITY.md). The security
+owns coordinated disclosure under [`SECURITY.md`](../SECURITY.md). The security
 response group is a subset of maintainers, listed below.
 
 ## Current Maintainers
 
 Maintainers are listed by GitHub handle. The GitHub organization
 [`@OlympusLedgerOrg`](https://github.com/OlympusLedgerOrg) and the
-[`.github/CODEOWNERS`](.github/CODEOWNERS) entries are the machine-enforced
+[`.github/CODEOWNERS`](../.github/CODEOWNERS) entries are the machine-enforced
 source of truth for review/merge rights; this table is the human-readable
 roster.
 
@@ -60,7 +60,7 @@ re-confirmation rather than the full nomination process.
 ## Area Ownership
 
 Day-to-day review ownership is enforced by
-[`.github/CODEOWNERS`](.github/CODEOWNERS), which is the authoritative source of
+[`.github/CODEOWNERS`](../.github/CODEOWNERS), which is the authoritative source of
 truth. The table below is a **conceptual map**: the paths mirror the CODEOWNERS
 patterns, and any path not matched by a more specific pattern inherits the
 default owner (`* @OlympusLedgerOrg`). While the maintainer pool is small, every
@@ -91,7 +91,7 @@ maintainer pool than concentrate authority.
 
 **Reviewer → Maintainer**
 1. Demonstrate good judgment as a reviewer — sound merges, respect for the
-   [Critical Invariants](CLAUDE.md), and constructive collaboration.
+   [Critical Invariants](../CLAUDE.md), and constructive collaboration.
 2. A maintainer nominates you in a `governance` issue.
 3. Requires an affirmative maintainer vote per the voting rule in
    `docs/governance.md` (supermajority of active maintainers).
@@ -123,12 +123,12 @@ Being a maintainer is a duty, not just a permission set:
 ## Releases
 
 Release authority and the release process are defined in
-[`docs/governance.md`](docs/governance.md#releases). In short: any maintainer
+[`docs/governance.md`](governance.md#releases). In short: any maintainer
 may cut a release; tags are signed; `CHANGELOG.md` enumerates protocol-impacting
 changes; and protocol/ceremony changes additionally require an ADR.
 
 ## Decisions & Disputes
 
 Decision-making, voting thresholds, the RFC process, and dispute resolution are
-defined in [`docs/governance.md`](docs/governance.md). Conduct concerns are
-handled under [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md).
+defined in [`docs/governance.md`](governance.md). Conduct concerns are
+handled under [`CODE_OF_CONDUCT.md`](../CODE_OF_CONDUCT.md).
