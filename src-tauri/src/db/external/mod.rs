@@ -113,6 +113,19 @@ async fn prepare_external_pg_release_policy(
 /// another writer cannot slip into an unlocked interval. If another shared
 /// holder exists, this fails without changing CONNECT or object privileges and
 /// leaves recovery to the operator.
+///
+/// Same-session reacquisition is sound, and deliberately so. PostgreSQL's
+/// "a session never conflicts with its own advisory locks" rule excuses only
+/// conflicts against locks *this* session holds; a lock held by any **other**
+/// session still conflicts, so `pg_try_advisory_lock` here fails whenever
+/// another session holds the shared (or exclusive) form. Combined with this
+/// session's own shared hold — which no other session can upgrade past — a
+/// successful reacquisition is exactly global exclusivity. Issue #1613 item 2
+/// proposed replacing this with a separate verification session on the premise
+/// that the same-session attempt always succeeds; that premise is false, and
+/// acting on it would have required dropping the shared hold first, opening the
+/// unlocked interval this design exists to prevent. The semantics are pinned by
+/// `handoff_recovery_reacquisition_conflicts_with_other_sessions`.
 async fn recover_external_pg_handoff_failure(
     connection: &mut PgConnection,
     runtime_role: &str,
@@ -142,7 +155,16 @@ struct ExternalPgRuntimeAttestationContext {
 }
 
 impl ExternalPgRuntimeAttestationContext {
-    async fn attest(&self, connection: &mut PgConnection) -> Result<(), sqlx::Error> {
+    /// Per-checkout attestation: the shared lifecycle lock and the session
+    /// identity/policy boundary.
+    ///
+    /// These are the properties a *live session* can drift on — a lock dropped
+    /// out from under us, a `SET ROLE`/`search_path` change, a role-membership
+    /// grant — so they are re-verified on every pool checkout.
+    ///
+    /// The control-plane half (trusted boundary, closed catalog, privilege
+    /// matrix) is deliberately **not** repeated here; see [`Self::attest`].
+    async fn attest_session(&self, connection: &mut PgConnection) -> Result<(), sqlx::Error> {
         let runtime_lock_held =
             external_pg_runtime_lock_is_held(connection)
                 .await
@@ -185,6 +207,32 @@ impl ExternalPgRuntimeAttestationContext {
             self.shared_development_identity,
         )
         .map_err(session_policy_sqlx_error)?;
+        Ok(())
+    }
+
+    /// Per-physical-connection attestation: [`Self::attest_session`] plus the
+    /// control plane — trusted boundary, closed release catalog (a full
+    /// semantic-inventory materialisation), and the four runtime privilege
+    /// probes.
+    ///
+    /// Run from `after_connect` only, i.e. exactly once per physical
+    /// connection. It costs seven round trips beyond `attest_session`'s three —
+    /// one trusted-boundary probe, two closed-catalog probes (one of which
+    /// materialises the whole semantic inventory: measured at ~33 ms warm,
+    /// ~320 ms cold on a freshly migrated PostgreSQL 16 database), and four
+    /// privilege probes.
+    ///
+    /// Repeating that on every checkout (as this hook pair originally did) buys
+    /// no safety: schema and ACL state can only be mutated while holding the
+    /// **exclusive** maintenance lock, and every runtime connection holds the
+    /// **shared** form for its whole lifetime. A shared hold in one session
+    /// denies an exclusive acquisition in any other — verified against a real
+    /// server by `handoff_recovery_reacquisition_conflicts_with_other_sessions`
+    /// — so no maintenance mutation can occur while a runtime connection
+    /// exists, and that lock hold is exactly what `attest_session` re-proves on
+    /// each checkout (issue #1613 item 3).
+    async fn attest(&self, connection: &mut PgConnection) -> Result<(), sqlx::Error> {
+        self.attest_session(connection).await?;
         if !self.shared_development_identity {
             attest_external_pg_control_plane(
                 connection,
@@ -224,11 +272,19 @@ impl ExternalPgRuntimeAttestationContext {
 /// the closed release catalog is verified, exact grants are installed, and
 /// only then is runtime CONNECT restored. Before releasing the exclusive lock,
 /// that same session acquires the shared form; every physical runtime
-/// connection then acquires and attests that shared lifecycle lock exactly
-/// once. The migration session closes only after the pool has a shared-lock
-/// keeper, so there is no unlocked handoff window. Explicit development mode
-/// can reuse `DATABASE_URL` only when
-/// `OLYMPUS_DEV_ALLOW_SINGLE_DATABASE_URL=true`.
+/// connection then acquires that shared lifecycle lock once, on connect. The
+/// migration session closes only after the pool has a shared-lock keeper, so
+/// there is no unlocked handoff window. Explicit development mode can reuse
+/// `DATABASE_URL` only when `OLYMPUS_DEV_ALLOW_SINGLE_DATABASE_URL=true`.
+///
+/// Attestation is split by cost and by what can actually drift
+/// (`ExternalPgRuntimeAttestationContext`): `after_connect` runs the full
+/// attestation once per physical connection — session policy **and** the
+/// control plane (trusted boundary, closed catalog, privilege matrix) — while
+/// `before_acquire` re-proves the shared lock hold and the session
+/// identity/policy boundary on every checkout. The control plane is not
+/// re-swept per checkout because mutating it requires the exclusive lock, which
+/// cannot be held while any runtime connection holds the shared form.
 ///
 /// Configuration, connection, or migration failure leaves DB-backed routes
 /// unavailable. External connection errors are deliberately not formatted
@@ -500,7 +556,7 @@ pub async fn connect_external(database_url: &str) -> Option<PgPool> {
         .before_acquire(move |connection, _metadata| {
             let context = before_acquire_context.clone();
             Box::pin(async move {
-                context.attest(connection).await?;
+                context.attest_session(connection).await?;
                 Ok(true)
             })
         });
@@ -895,6 +951,69 @@ mod tests {
                 .expect("inventory query");
         println!("inventory rows: {}", rows.len());
         println!("digest: {}", external_pg_semantic_inventory_digest(&rows));
+    }
+
+    /// Concurrent-session proof of the advisory-lock semantics the handoff
+    /// recovery path and the per-checkout attestation split both rely on:
+    /// PostgreSQL's same-session reentrancy excuses only a session's **own**
+    /// locks, so an exclusive request still conflicts with a *different*
+    /// session's shared hold.
+    ///
+    /// This is what makes `recover_external_pg_handoff_failure`'s same-session
+    /// reacquisition a real exclusivity proof (issue #1613 item 2 assumed the
+    /// opposite), and what lets `attest_session` skip the control-plane sweep
+    /// per checkout (item 3): no maintenance mutation can occur while any
+    /// runtime connection holds the shared form.
+    ///
+    /// Requires a throwaway external PostgreSQL — advisory locks only, no
+    /// migrations:
+    ///
+    /// ```text
+    /// OLYMPUS_TEST_PG_URL=postgres://user:pass@host/db \
+    ///   cargo test -p olympus-desktop --lib \
+    ///   handoff_recovery_reacquisition -- --ignored --nocapture
+    /// ```
+    #[tokio::test]
+    #[ignore = "concurrent-session integration test — needs OLYMPUS_TEST_PG_URL"]
+    async fn handoff_recovery_reacquisition_conflicts_with_other_sessions() {
+        let url = std::env::var("OLYMPUS_TEST_PG_URL")
+            .expect("set OLYMPUS_TEST_PG_URL to a throwaway database");
+
+        // `keeper` stands in for the migration connection after the
+        // exclusive-to-shared handoff; `runtime` for a live pool member.
+        let mut keeper = PgConnection::connect(&url).await.expect("keeper connect");
+        let mut runtime = PgConnection::connect(&url).await.expect("runtime connect");
+        assert!(
+            acquire_external_pg_runtime_lock(&mut keeper).await,
+            "keeper must take the shared lifecycle lock"
+        );
+        assert!(
+            acquire_external_pg_runtime_lock(&mut runtime).await,
+            "a concurrent runtime session must also take the shared lock"
+        );
+
+        // The load-bearing assertion: the keeper already holds the shared form,
+        // yet its exclusive attempt is denied because *another* session holds
+        // shared. Same-session reentrancy does not extend to other sessions'
+        // locks, so this check cannot mistake a live runtime pool for an idle
+        // database.
+        assert!(
+            !acquire_external_pg_maintenance_lock(&mut keeper).await,
+            "exclusive reacquisition must fail while another session holds the \
+             shared lifecycle lock"
+        );
+
+        // With the only other shared holder gone (closing the session releases
+        // its advisory locks), the same call now proves exclusivity.
+        let _ = runtime.close().await;
+        assert!(
+            acquire_external_pg_maintenance_lock(&mut keeper).await,
+            "exclusive reacquisition must succeed once this session is the sole \
+             holder — its own shared hold does not block it"
+        );
+
+        assert!(release_external_pg_maintenance_lock(&mut keeper).await);
+        let _ = keeper.close().await;
     }
 
     #[test]

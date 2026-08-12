@@ -60,14 +60,27 @@ We follow a **coordinated disclosure** model:
 
 ---
 
-## External Audits and Bug Bounty
+## External Audits and Coordinated Disclosure
 
 We welcome independent audits of Olympus protocol and implementation layers
 (`crates/olympus-crypto/`, `src-tauri/`, `proofs/`, `verifiers/`).
 
+> **There is no bug bounty, and no payment of any kind.** Olympus is an
+> unfunded pre-v1 project. It pays no bounties, rewards, fees, or expenses for
+> vulnerability reports, and it operates no bounty platform program. Please do
+> not submit a report expecting payment, and do not treat anything in this
+> repository as an offer of compensation. We would still much rather hear about
+> a flaw than not — reports are genuinely welcome on those terms. If funded
+> bounties ever become possible, this file will say so and state the terms
+> before any claim can be made against them.
+
 - **Audit coordination:** Open a private GitHub Security Advisory first so we
   can share test vectors and scope details safely.
-- **Bug bounty intake (HackerOne):** <https://hackerone.com/olympus>
+- **What we can offer instead of money:** public credit in the advisory,
+  release notes, and commit history under whatever name or handle you choose
+  (or no credit, if you would rather stay anonymous); a coordinated disclosure
+  timeline you agree to; and the commitment above not to pursue researchers
+  acting in good faith.
 - **Audit scope baseline:** `docs/pentest-scope.md` (planned)
 
 Post-audit remediations are tracked as regular pull requests so fixes remain
