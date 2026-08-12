@@ -541,14 +541,27 @@ jobs:
           # when confined to prove.rs.
           unexplained_unviable=$(jq "${mutants_jq} | map(select(.summary == \"Unviable\" and (((.scenario.Mutant.file // \"\") != \"src-tauri/src/zk/prove.rs\") or (((.scenario.Mutant.replacement // \"\") | startswith(\"Ok(\")) | not)))) | length" \
                        mutants.out/outcomes.json 2>/dev/null || echo 0)
+          # Count the allowlist candidates, then require every one of them to
+          # be signature-verified through its build log. Comparing counts (not
+          # looping over whatever log paths exist) means a candidate with a
+          # missing or empty log_path field is unexplained by construction —
+          # it can never be verified, so it fails the shard.
+          allowlisted_jq="${mutants_jq} | map(select(.summary == \"Unviable\" and ((.scenario.Mutant.file // \"\") == \"src-tauri/src/zk/prove.rs\") and ((.scenario.Mutant.replacement // \"\") | startswith(\"Ok(\"))))"
+          allowlisted=$(jq "${allowlisted_jq} | length" mutants.out/outcomes.json 2>/dev/null || echo 0)
+          verified=0
           while IFS= read -r log_path; do
             [ -n "$log_path" ] || continue
-            if ! grep -qE 'E0599|E0283' "mutants.out/${log_path}" 2>/dev/null; then
-              echo "unviable prove.rs Ok(...) mutant log ${log_path} lacks the E0599/E0283 non-constructibility signature — counting as unexplained"
-              unexplained_unviable=$((unexplained_unviable + 1))
+            if grep -qE 'E0599|E0283' "mutants.out/${log_path}" 2>/dev/null; then
+              verified=$((verified + 1))
+            else
+              echo "unviable prove.rs Ok(...) mutant log ${log_path} lacks the E0599/E0283 non-constructibility signature"
             fi
-          done < <(jq -r "${mutants_jq} | map(select(.summary == \"Unviable\" and ((.scenario.Mutant.file // \"\") == \"src-tauri/src/zk/prove.rs\") and ((.scenario.Mutant.replacement // \"\") | startswith(\"Ok(\")))) | .[].log_path // empty" \
+          done < <(jq -r "${allowlisted_jq} | .[].log_path // empty" \
                        mutants.out/outcomes.json 2>/dev/null || true)
+          if [ "$verified" -lt "$allowlisted" ]; then
+            echo "$((allowlisted - verified)) of ${allowlisted} allowlist-candidate mutant(s) could not be signature-verified (missing log_path, missing log file, or wrong diagnostics) — counting as unexplained"
+            unexplained_unviable=$((unexplained_unviable + allowlisted - verified))
+          fi
           if [ "$total" -gt 0 ] && [ "$viable" -eq 0 ]; then
             if [ -n "${MUTANTS_IN_DIFF:-}" ] && [ "$unexplained_unviable" -eq 0 ]; then
               echo "all ${total} in-diff mutants in shard ${{ matrix.shard }}/8 are the documented non-constructible Ok(Proof<Bn254>) family in prove.rs, each with the E0599/E0283 signature in its build log — tolerated; their viable Err(...) siblings are tested by other shards"
