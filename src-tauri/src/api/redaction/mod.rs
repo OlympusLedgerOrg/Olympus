@@ -22,7 +22,15 @@
 
 mod bundle_v3;
 mod describe;
-mod issuer_key;
+/// `pub` (not just crate-visible) so DB-backed integration tests
+/// (`tests/api_db/ingest_signing_key_registry.rs`) can call `get_issuer_key`
+/// directly with a manually assembled `AppState` — the shared test harness's
+/// `AppState` (`tests/common/mod.rs::init`) does not resolve an ingest
+/// signing key the way `main.rs`/`bin/olympus-server.rs` do, so exercising
+/// `history` end-to-end against a real pool needs to bypass the harness's
+/// server and call the handler directly, same pattern as this module's own
+/// unit tests already use.
+pub mod issuer_key;
 mod manifest;
 mod redact;
 pub(crate) mod staging;

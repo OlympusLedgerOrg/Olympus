@@ -344,17 +344,17 @@ const EXTERNAL_PG_ENUM_TYPES: &[&str] = &[
 /// `external_pg_semantic_inventory_digest`. This is populated from the
 /// reviewed v0.10.0 migration result and pins executable write semantics.
 ///
-/// Regenerated for migration `0056_authority_key_registry`, which adds the
-/// `valid_from` / `valid_until` authority-window columns and the
-/// single-active-authority partial index — 671 inventory rows before, 674
-/// after. The previous value was
-/// `c0ed2338da1dfafaca148d46406f464e420f05a55cc805c6a1c1af05a391f1ce` (itself
-/// set by `0055_ots_verification_stage_index`, 670 -> 671). Each regeneration
+/// Regenerated for migration `0057_ingest_signing_key_registry`, which adds
+/// the single-active-ingest-key partial index (`purpose = 'ingest_signing'`,
+/// docs/key-rotation.md — historical redaction/ingest issuer keys) — 674
+/// inventory rows before, 675 after. The previous value was
+/// `3acd13debe1ec1ee801f782027e210e84142191958c7f1a90760533a6d46860e` (itself
+/// set by `0056_authority_key_registry`, 671 -> 674). Each regeneration
 /// is validated by re-applying the migration set *without* the new migration
 /// and confirming it still reproduces the prior constant exactly — see the
 /// `regen_semantic_inventory_digest` ignored maintenance test below.
 const EXTERNAL_PG_SEMANTIC_INVENTORY_BLAKE3: &str =
-    "3acd13debe1ec1ee801f782027e210e84142191958c7f1a90760533a6d46860e";
+    "09cf92379bc8ff74e67e9489c7cd3f4d8a6940b2240b12ff4186fc9a03cf77a5";
 const INSTANCE_LOCK_FILE: &str = "embedded-postgres.lock";
 
 static EMBEDDED_POSTGRES_REAPER: OnceLock<Mutex<Vec<ArmedPostgres>>> = OnceLock::new();

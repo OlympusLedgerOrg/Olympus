@@ -151,6 +151,22 @@ async fn main() {
         app_state.bjj_authority_pubkey = Some(br.bjj_authority_pubkey);
         app_state.ingest_signing_key =
             state::resolve_ingest_signing_key(state::secret_bytes(&app_state.bjj_authority_key));
+        // Historical redaction/ingest issuer keys (docs/key-rotation.md):
+        // mirrors main.rs — record the current Ed25519 verifying key so
+        // GET /redaction/issuer-key can serve prior keys too. Non-fatal.
+        if let (Some(pool), Some(signing_key)) = (
+            app_state.pool.as_ref(),
+            state::secret_bytes(&app_state.ingest_signing_key),
+        ) {
+            let pubkey_hex = hex::encode(
+                ed25519_dalek::SigningKey::from_bytes(signing_key)
+                    .verifying_key()
+                    .to_bytes(),
+            );
+            if let Err(e) = bootstrap::ensure_ingest_signing_key(pool, &pubkey_hex).await {
+                tracing::warn!("bootstrap: ingest signing key registry: {e}");
+            }
+        }
         app_state.redaction_blind_secret = state::resolve_redaction_blind_secret(
             state::secret_bytes(&app_state.bjj_authority_key),
         );

@@ -167,11 +167,22 @@ Set the new `OLYMPUS_INGEST_SIGNING_KEY` and restart. Consequences to handle:
 
 - **Checkpoints:** unaffected. Each `own_checkpoints` row pins the signing pubkey at emission;
   bundle verification uses the pinned key, never the live one.
-- **Redaction bundles:** `GET /redaction/issuer-key` serves **only the current key**
-  (`src-tauri/src/api/redaction/issuer_key.rs`). Bundles signed under the old key remain valid,
-  but verifiers who fetch the issuer key from the live endpoint will no longer obtain the key
-  that signed them. Archive the old public key and distribute it out-of-band alongside old
-  bundles (each bundle also embeds its issuer pubkey; the endpoint is the discovery path).
+- **Redaction bundles:** `GET /redaction/issuer-key` (`src-tauri/src/api/redaction/issuer_key.rs`)
+  now serves history, not just the current key. Every ingest signing pubkey this instance
+  successfully _registers_ is recorded in `account_signing_keys` (`purpose = 'ingest_signing'`,
+  migration 0057) by `bootstrap::ensure_ingest_signing_key`, which runs automatically at startup
+  whenever the resolved key changes — no confirmation flag needed, since the ingest key was
+  never protected against accidental swap to begin with (see below). The response's `history`
+  array lists every registered key with its `validFrom`/`validUntil` window, so a verifier who
+  only has the live endpoint (not an out-of-band archive) can still resolve which key signed an
+  older bundle. Each bundle also embeds its own `signer_pubkey`, which is what `bundle_v3::verify`
+  actually checks against — the registry is a discovery aid for verifiers, not part of the trust
+  decision. Registration is logged-and-non-fatal on failure, so `history` is not a guaranteed-
+  complete record: it is empty (not an error) on installs with no DB pool or that haven't
+  restarted since upgrading to this registry, and even the _current_ key can be absent from it if
+  its own startup registration call hit a transient error — treat any gap (missing entry, or an
+  empty array) as "unknown", never as "no prior keys existed" or "this cannot be the active key",
+  and still archive old keys out-of-band as a durability backstop.
 - **Anchoring:** if `OLYMPUS_ANCHOR_SIGN_KEY` is unset, anchoring falls back to the ingest key
   (`src-tauri/src/anchoring/own_checkpoint.rs`, `rekor.rs`) — rotating the ingest key then also
   rotates your anchoring identity. Set a dedicated `OLYMPUS_ANCHOR_SIGN_KEY` to decouple them.

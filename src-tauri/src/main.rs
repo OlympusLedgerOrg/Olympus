@@ -202,6 +202,30 @@ fn main() {
                                 state::resolve_ingest_signing_key(state::secret_bytes(
                                     &app_state.bjj_authority_key,
                                 ));
+                            // Historical redaction/ingest issuer keys
+                            // (docs/key-rotation.md): record this instance's
+                            // current Ed25519 verifying key in the registry so
+                            // GET /redaction/issuer-key can serve prior keys
+                            // too, not just the live one. Non-fatal — the
+                            // endpoint falls back to live-key-only if this
+                            // fails or there's no pool.
+                            if let (Some(pool), Some(signing_key)) = (
+                                app_state.pool.as_ref(),
+                                state::secret_bytes(&app_state.ingest_signing_key),
+                            ) {
+                                let pubkey_hex = hex::encode(
+                                    ed25519_dalek::SigningKey::from_bytes(signing_key)
+                                        .verifying_key()
+                                        .to_bytes(),
+                                );
+                                if let Err(e) =
+                                    bootstrap::ensure_ingest_signing_key(pool, &pubkey_hex).await
+                                {
+                                    tracing::warn!(
+                                        "bootstrap: ingest signing key registry: {e}"
+                                    );
+                                }
+                            }
                             // Server blinding secret for object-level redaction
                             // (ADR-0026): derived deterministically from the
                             // persisted BJJ authority (or an explicit override)
