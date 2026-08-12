@@ -92,9 +92,9 @@ on it in adversarial settings:
 ## Documents for Reviewers
 
 - [README.md](../../README.md) - high-level overview and developer entry point.
-- [DEMO.md](../../DEMO.md) - local demo path.
-- [ROADMAP.md](../../ROADMAP.md) - v0.10.x to v1.0 milestones.
-- [GRANTS.md](../../GRANTS.md) - grant brief and reviewer framing.
+- [DEMO.md](../DEMO.md) - local demo path.
+- [ROADMAP.md](../ROADMAP.md) - v0.10.x to v1.0 milestones.
+- [GRANTS.md](../GRANTS.md) - grant brief and reviewer framing.
 - [proofs/README.md](../../proofs/README.md) - active circuits, ceremony
   process, and redaction note.
 - [docs/threat-model.md](../threat-model.md) - plain-English threat model.

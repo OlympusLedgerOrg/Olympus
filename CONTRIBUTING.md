@@ -7,11 +7,11 @@ Thanks for your interest in contributing. Before you start:
 - **Governance & decisions** — how changes are reviewed, voted on, and released
   is documented in [`docs/governance.md`](docs/governance.md).
 - **Who maintains what / how to become a maintainer** —
-  [`MAINTAINERS.md`](MAINTAINERS.md).
+  [`MAINTAINERS.md`](docs/MAINTAINERS.md).
 - **Proposing substantial changes** — protocol, ZK, threat-model, or governance
   changes go through the [RFC process](docs/rfcs/README.md) (most PRs do not
   need one).
-- **Roadmap** — see [`ROADMAP.md`](ROADMAP.md) for direction and where help is
+- **Roadmap** — see [`ROADMAP.md`](docs/ROADMAP.md) for direction and where help is
   wanted.
 - **Reporting a vulnerability** — do not open a public issue; follow
   [`SECURITY.md`](SECURITY.md).

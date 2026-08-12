@@ -5,11 +5,11 @@ funders, and auditors can see where the project is going and where they can
 help. It is intentionally directional, not a contract — dates are targets, and
 priorities shift with security findings and community input.
 
-- **Decision process:** [`docs/governance.md`](docs/governance.md)
+- **Decision process:** [`docs/governance.md`](governance.md)
 - **How larger changes are proposed:** the RFC process in
-  [`docs/rfcs/README.md`](docs/rfcs/README.md)
-- **Release history & protocol changes:** [`CHANGELOG.md`](CHANGELOG.md)
-- **Architecture rationale:** [`docs/adr/`](docs/adr/)
+  [`docs/rfcs/README.md`](rfcs/README.md)
+- **Release history & protocol changes:** [`CHANGELOG.md`](../CHANGELOG.md)
+- **Architecture rationale:** [`docs/adr/`](adr/)
 
 Items below link to their tracking issue where one exists. To propose a change
 to this roadmap, open a GitHub issue tagged `roadmap`, or an RFC for anything
@@ -53,7 +53,7 @@ single-operator risk + external review**.
   review of `crates/olympus-crypto`, `src-tauri/`, `proofs/`, and `verifiers/`,
   with remediations tracked as public PRs (see `SECURITY.md`).
 - ☐ **In-band key rotation and revocation.** Procedures live in
-  [docs/key-rotation.md](docs/key-rotation.md). Landed: the authority-key
+  [docs/key-rotation.md](key-rotation.md). Landed: the authority-key
   registry in `account_signing_keys` (migration 0056 — validity windows + identity-immutable
   supersession via `OLYMPUS_AUTHORITY_ROTATION=confirm`), trusted
   issuers loaded from that registry, per-row-pinned checkpoint-bundle export,

@@ -29,7 +29,7 @@ Welcome to the Olympus docs. Start here based on your role.
 
 1. **[../CONTRIBUTING.md](../CONTRIBUTING.md)** — How to submit PRs (DCO sign-off required)
 2. **[Governance](governance.md)** — How Olympus makes decisions
-3. **[../MAINTAINERS.md](../MAINTAINERS.md)** — Roles and the contributor ladder
+3. **[MAINTAINERS.md](MAINTAINERS.md)** — Roles and the contributor ladder
 4. **[Coverage](coverage.md)** — Test coverage expectations (85% gate)
 
 ### I'm auditing the protocol
@@ -137,7 +137,13 @@ A: See [../SECURITY.md](../SECURITY.md) for coordinated disclosure.
 | [landing-page.md](landing-page.md)                 | Maintainers                | 5 min  | What the public landing page claims, and how Pages serves it |
 | [adr/](adr/)                                       | Architects, crypto experts | varies | Protocol design decisions                                    |
 | [../CONTRIBUTING.md](../CONTRIBUTING.md)           | Contributors               | 10 min | How to submit PRs                                            |
-| [../MAINTAINERS.md](../MAINTAINERS.md)             | Contributors               | 5 min  | Roles and ladder                                             |
+| [MAINTAINERS.md](MAINTAINERS.md)                   | Contributors               | 5 min  | Roles and ladder                                             |
+| [ONBOARDING.md](ONBOARDING.md)                     | New developers             | 20 min | Dev environment and first contribution                       |
+| [ROADMAP.md](ROADMAP.md)                           | Everyone                   | 10 min | Direction and v1.0 milestones                                |
+| [GRANTS.md](GRANTS.md)                             | Grant reviewers            | 10 min | Grant brief and reviewer framing                             |
+| [DEMO.md](DEMO.md)                                 | Evaluators                 | 15 min | Desktop commit / verify walkthrough                          |
+| [BUILD_WEEK.md](BUILD_WEEK.md)                     | Judges, evaluators         | 10 min | Build Week 2026 provenance boundary                          |
+| [JUDGES.md](JUDGES.md)                             | Judges                     | 5 min  | Five-minute judge walkthrough                                |
 | [../CLAUDE.md](../CLAUDE.md)                       | Developers                 | 5 min  | Critical invariants                                          |
 | [../SECURITY.md](../SECURITY.md)                   | Security researchers       | 5 min  | Coordinated disclosure                                       |
 

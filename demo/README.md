@@ -15,7 +15,7 @@ One executable demonstrates both Build Week extensions:
 
 Source: [`../src-tauri/src/bin/olympus_smt_demo.rs`](../src-tauri/src/bin/olympus_smt_demo.rs)
 
-Instructions and expected output: [`../JUDGES.md`](../JUDGES.md)
+Instructions and expected output: [`../docs/JUDGES.md`](../docs/JUDGES.md)
 
 Narrated demonstration script: [`BUILD_WEEK_VIDEO_SCRIPT.md`](BUILD_WEEK_VIDEO_SCRIPT.md)
 

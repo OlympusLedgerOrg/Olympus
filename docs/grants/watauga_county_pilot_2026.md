@@ -37,7 +37,7 @@ The repository currently demonstrates:
 - public stats polling
 - downloadable and re-checkable proof bundles
 
-The current demo release is documented in the root-level `DEMO.md` and `GRANTS.md`.
+The current demo release is documented in [`DEMO.md`](../DEMO.md) and [`GRANTS.md`](../GRANTS.md).
 
 ## 4. Proposed Pilot Workflow
 

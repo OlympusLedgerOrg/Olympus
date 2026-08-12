@@ -7,7 +7,7 @@
 | Five-minute judge walkthrough | [`JUDGES.md`](JUDGES.md) |
 | Standalone binaries, no rebuild required | [Build Week judge-demo v3 release](https://github.com/OlympusLedgerOrg/Olympus/releases/tag/build-week-2026-demo-v3) |
 | Qualifying-only change list | [`CHANGELOG_BUILD_WEEK.md`](CHANGELOG_BUILD_WEEK.md) |
-| Source for the standalone demo | [`src-tauri/src/bin/olympus_smt_demo.rs`](src-tauri/src/bin/olympus_smt_demo.rs) |
+| Source for the standalone demo | [`src-tauri/src/bin/olympus_smt_demo.rs`](../src-tauri/src/bin/olympus_smt_demo.rs) |
 | Feature and commit evidence | this document, below |
 
 In short: Olympus gained a faster and more reliable way of storing its records
@@ -55,7 +55,7 @@ storage**](https://github.com/OlympusLedgerOrg/Olympus/pull/1398):
    write-once conflicts, proof parity, and schema constraints.
 
 The governing design is
-[ADR-0039](docs/adr/ADR-0039-transactional-database-agnostic-smt-storage.md).
+[ADR-0039](adr/ADR-0039-transactional-database-agnostic-smt-storage.md).
 
 ### Cryptographic verification highlight — PR #1409
 

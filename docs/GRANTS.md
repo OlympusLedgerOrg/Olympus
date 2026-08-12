@@ -48,7 +48,7 @@ These steps are demonstrated end-to-end in the working prototype (see [DEMO.md](
 - successful ledger verification for committed files
 - downloadable proof bundles
 - proof bundle verification from JSON or a small proof package file
-- **independent offline verification** of a proof bundle via the standalone verifiers in [`verifiers/`](./verifiers/) (Rust and JavaScript), with no running app required
+- **independent offline verification** of a proof bundle via the standalone verifiers in [`verifiers/`](../verifiers/) (Rust and JavaScript), with no running app required
 
 This is the honest demonstrated surface. The demo does **not** exercise the ZK, federation, or anchoring layers below — those are covered by the automated test suite.
 
@@ -80,7 +80,7 @@ Olympus gives journalists, FOIA/open-records users, human-rights defenders, and 
 
 ### Civic transparency & public records
 
-The same machinery lets institutions publish cryptographic receipts that citizens, journalists, and auditors can verify independently. A municipal or county pilot could run Olympus as a notary sidecar beside an existing public-records portal — a clerk commits meeting minutes, budgets, agendas, or ordinances, and the public verifies the published file against the ledger. See [`docs/grants/watauga_county_pilot_2026.md`](./docs/grants/watauga_county_pilot_2026.md) for a concrete pilot concept note.
+The same machinery lets institutions publish cryptographic receipts that citizens, journalists, and auditors can verify independently. A municipal or county pilot could run Olympus as a notary sidecar beside an existing public-records portal — a clerk commits meeting minutes, budgets, agendas, or ordinances, and the public verifies the published file against the ledger. See [`docs/grants/watauga_county_pilot_2026.md`](grants/watauga_county_pilot_2026.md) for a concrete pilot concept note.
 
 ## Funding Would Unlock
 
@@ -102,7 +102,7 @@ To hand a reviewer something concrete, package these together:
 - one proof bundle JSON generated from that PDF
 - screenshots of commit, verify, duplicate rejection, and proof verification
 - this grant brief
-- [`docs/grants/otf_iff_2026_07_reviewer_packet.md`](./docs/grants/otf_iff_2026_07_reviewer_packet.md)
+- [`docs/grants/otf_iff_2026_07_reviewer_packet.md`](grants/otf_iff_2026_07_reviewer_packet.md)
 
 ## Current Status
 

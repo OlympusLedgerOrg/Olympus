@@ -8,7 +8,7 @@ with validity windows, loaded into the trusted-issuer set at startup), and trust
 entries carry role-scoped grants (an
 [ADR-0041](adr/ADR-0041-role-separated-trust-list-rotation.md) subset — see the
 role-scoped coordinator section below). Signed trust-list snapshots and quorum rotation per
-ADR-0041 remain roadmap work — see [ROADMAP.md](../ROADMAP.md).
+ADR-0041 remain roadmap work — see [ROADMAP.md](ROADMAP.md).
 
 Security assumptions behind every procedure here are the ones stated in
 [threat-model.md](threat-model.md), in particular its non-protections: key compromise itself is
