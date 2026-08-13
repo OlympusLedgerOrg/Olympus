@@ -176,7 +176,7 @@ async fn get_latest_checkpoint(State(state): State<AppState>) -> Result<Response
 
     let proofs_dir = state.proofs_dir.as_deref();
     match checkpoint::build_own_checkpoint(pool, bjj_key, bjj_pubkey, proofs_dir).await {
-        Ok(Some(cp)) => {
+        Ok(Some((cp, _id))) => {
             let bytes = checkpoint::canonical_checkpoint_bytes(&cp)
                 .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e))?;
             Response::builder()

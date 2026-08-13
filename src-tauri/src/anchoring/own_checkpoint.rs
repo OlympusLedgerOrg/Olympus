@@ -514,6 +514,10 @@ pub async fn build_and_persist(
 /// (`GET /api/admin/checkpoints/{id}/bundle`); the row's BJJ sig +
 /// Groth16 proof + Ed25519 sig are checked separately by the caller
 /// and a missing field surfaces as `409 Conflict` rather than `404`.
+/// Also used by `federation::checkpoint_cosign::collect_and_store_checkpoint_quorum`
+/// (issue #1633) to target the exact row a gossip round pushed, rather than
+/// independently re-deriving "latest gossipable" and risking a race against
+/// the anchor cron inserting a newer row mid-round.
 pub async fn fetch_by_id(pool: &PgPool, id: Uuid) -> Result<Option<OwnCheckpointRow>, String> {
     let row: Option<CheckpointDbRow> = sqlx::query_as(
         "SELECT id, format_version, checkpoint_scope, shard_id,
