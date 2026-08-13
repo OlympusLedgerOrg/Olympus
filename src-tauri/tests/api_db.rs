@@ -44,6 +44,8 @@ mod ledger;
 mod public_stats;
 #[path = "api_db/redaction.rs"]
 mod redaction;
+#[path = "api_db/redaction_blind_secret_registry.rs"]
+mod redaction_blind_secret_registry;
 #[path = "api_db/shards.rs"]
 mod shards;
 #[path = "api_db/signing_keys.rs"]

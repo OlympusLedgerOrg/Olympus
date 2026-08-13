@@ -6,6 +6,22 @@ All notable changes to the Olympus protocol are documented in this file.
 
 ### Added
 
+- **Redaction blind-secret rotation registry (key-rotation series, part 4.6).**
+  Follow-up to making `OLYMPUS_REDACTION_BLIND_SECRET` mandatory-and-independent
+  in production: rotating that secret (accidentally or otherwise) previously had
+  no error and no record — every previously-redacted object's blinding just
+  became silently unreproducible. `bootstrap::ensure_redaction_blind_secret_fingerprint`
+  now records a domain-separated BLAKE3 **fingerprint** of the resolved secret
+  (never the secret itself) in `account_signing_keys`
+  (`purpose = 'redaction_blind_secret'`, migration 0059) at startup, mirroring
+  the ingest-signing-key registry's supersession shape. Unlike that registry, a
+  fingerprint change is refused by default — the mismatched secret is discarded
+  (object-redaction ingest/issue then fail closed with 503) unless the operator
+  opts in with the new `OLYMPUS_BLIND_SECRET_ROTATION=confirm`, mirroring
+  `OLYMPUS_AUTHORITY_ROTATION`'s anti-accidental-swap posture. Production-only
+  (gated on `OLYMPUS_ENV=production` and a DB pool). See
+  `docs/key-rotation.md`'s "Avoid rotating `OLYMPUS_REDACTION_BLIND_SECRET`"
+  section for the full procedure.
 - **ADR-0037 object redaction selection/staging/commit flow, implemented.**
   The three-step `get_page_objects` / `stage_redaction` / `commit_redaction`
   flow the ADR specified is now live over HTTP for the two PDF object

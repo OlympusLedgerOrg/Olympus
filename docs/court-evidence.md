@@ -358,7 +358,8 @@ A defensible operational pattern (recommended; not enforced by the
 binary):
 
 1. **Key persistence.** The Ed25519 signing key
-   (`OLYMPUS_INGEST_SIGNING_KEY`) and the Baby Jubjub authority key
+   (`OLYMPUS_INGEST_SIGNING_KEY`), the independent object-redaction blinding
+   secret (`OLYMPUS_REDACTION_BLIND_SECRET`), and the Baby Jubjub authority key
    (`OLYMPUS_BJJ_AUTHORITY_KEY`) are generated once on dedicated
    hardware, the public keys are registered with the parties who will
    verify (e.g. the agency's CA, a notary, the journalist's editor),
