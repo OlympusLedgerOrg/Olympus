@@ -226,10 +226,10 @@ mod tests {
     /// silently accept any well-formed signature — a bogus (but
     /// subgroup-valid) signature over the pinned attestation above must be
     /// rejected. This module holds no signing key (by design — it shares no
-    /// code with the producer), so it cannot mint a genuine signature and
-    /// then tamper it the way the JavaScript verifier's smoke test does; this
-    /// asserts the wiring to `crate::eddsa::verify` actually rejects instead
-    /// of always returning `Ok`.
+    /// code with the producer), so this uses a synthetic non-conforming
+    /// signature rather than a genuine one; this asserts the wiring to
+    /// `crate::eddsa::verify` actually rejects instead of always returning
+    /// `Ok`. See the two tests below for genuine-signature tamper coverage.
     #[test]
     fn verify_smt_root_attestation_rejects_a_bogus_signature() {
         let curve = crate::pedersen::Curve::baby_jubjub();
@@ -247,6 +247,88 @@ mod tests {
         };
         assert_eq!(
             verify_smt_root_attestation(&curve, &curve.g, &bogus_signature, &attestation),
+            Err(crate::eddsa::EddsaError::Rejected)
+        );
+    }
+
+    /// Genuine (pubkey, attestation, signature) fixture, produced once by the
+    /// real BJJ-EdDSA producer (`src-tauri`'s `zk::witness::baby_jubjub::sign`
+    /// over `olympus_crypto::smt_root_attest_message`, private key `[7u8; 32]`)
+    /// and pinned here as plain data — this module still contains no signing
+    /// code. Matches the JavaScript verifier's happy-path + two-tamper-case
+    /// coverage for the same attestation type.
+    fn genuine_fixture() -> (
+        crate::pedersen::Point,
+        SmtRootAttestation,
+        crate::eddsa::Signature,
+    ) {
+        fn dec(s: &str) -> num_bigint::BigUint {
+            s.parse()
+                .expect("pinned fixture value is a valid decimal integer")
+        }
+        let pubkey = crate::pedersen::Point {
+            x: dec("14422859473778768188622151430526693594403470008420308922992775064941455773685"),
+            y: dec("7592518773672929099542717438998516546396504563265155469693554058278098107299"),
+        };
+        let attestation = SmtRootAttestation {
+            shard_id: b"files".to_vec(),
+            ledger_root: root(0x33),
+            tree_size: 9,
+            blake3_smt_root: root(0x44),
+        };
+        let signature = crate::eddsa::Signature {
+            r8: crate::pedersen::Point {
+                x: dec(
+                    "20069816947797448869171952793975540217024623179960118538392660810512356536184",
+                ),
+                y: dec(
+                    "6357899055424092766723256414564298127564181824816560087207254137527185865180",
+                ),
+            },
+            s: dec("1488754064771152364600831135054823219859885137052683072438419879824678276595"),
+        };
+        (pubkey, attestation, signature)
+    }
+
+    /// Sanity check: the pinned fixture is genuinely valid before the tamper
+    /// tests below rely on "flip one thing, verification fails" meaning
+    /// something — a fixture that never verified in the first place would
+    /// make both tamper tests vacuous.
+    #[test]
+    fn genuine_fixture_verifies() {
+        let curve = crate::pedersen::Curve::baby_jubjub();
+        let (pubkey, attestation, signature) = genuine_fixture();
+        assert_eq!(
+            verify_smt_root_attestation(&curve, &pubkey, &signature, &attestation),
+            Ok(())
+        );
+    }
+
+    /// A tampered signature over the exact same (valid) attestation must be
+    /// rejected — unlike the bogus-signature test above, this starts from a
+    /// genuine signature and perturbs it, matching the JavaScript verifier's
+    /// tamper-the-signature smoke test.
+    #[test]
+    fn tampered_signature_over_genuine_attestation_is_rejected() {
+        let curve = crate::pedersen::Curve::baby_jubjub();
+        let (pubkey, attestation, mut signature) = genuine_fixture();
+        signature.s += num_bigint::BigUint::from(1u32);
+        assert_eq!(
+            verify_smt_root_attestation(&curve, &pubkey, &signature, &attestation),
+            Err(crate::eddsa::EddsaError::Rejected)
+        );
+    }
+
+    /// The genuine signature must not verify against a tampered statement —
+    /// a peer cannot re-attribute a signed BLAKE3 root to a different
+    /// (shard, ledger_root, tree_size, root) claim.
+    #[test]
+    fn genuine_signature_over_tampered_attestation_is_rejected() {
+        let curve = crate::pedersen::Curve::baby_jubjub();
+        let (pubkey, mut attestation, signature) = genuine_fixture();
+        attestation.blake3_smt_root = root(0x45);
+        assert_eq!(
+            verify_smt_root_attestation(&curve, &pubkey, &signature, &attestation),
             Err(crate::eddsa::EddsaError::Rejected)
         );
     }
