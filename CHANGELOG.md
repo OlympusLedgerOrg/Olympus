@@ -6,7 +6,7 @@ All notable changes to the Olympus protocol are documented in this file.
 
 ### Added
 
-- **ADR-0021 Monitor API + Maximum Merge Delay evidence, implemented.**
+- **ADR-0021 Monitor API + Maximum Merge Delay policy, implemented.**
   Of ADR-0021's four CT-inspired operational controls, witness cosigning
   (ADR-0033) and gossip/equivocation detection (`federation::gossip`) were
   already implemented under later ADRs; this closes the remaining two:
@@ -24,14 +24,17 @@ All notable changes to the Olympus protocol are documented in this file.
       `POST /ingest/proofs/verify` already used server-side (factored into
       the new `api::ingest::snapshot_evidence`) so the two endpoints can
       never disagree about what a stored witness means.
-    - `GET /monitor/mmd/{content_hash}` — Maximum Merge Delay evidence: how
+    - `GET /monitor/mmd/{content_hash}` — Maximum Merge Delay status: how
       long after ingest a record's first covering signed checkpoint
       appeared (or has been waiting, if none yet), classified against the
       new `OLYMPUS_MMD_SECONDS` policy (default 24h,
       `src-tauri/src/mmd.rs`) as `covered_within_policy` /
-      `covered_late_breach` / `pending_within_policy` / `pending_breach` —
-      the last two are exactly "a submitter can prove delayed inclusion
-      breaches."
+      `covered_late_breach` / `pending_within_policy` / `pending_breach`.
+      The covering checkpoint half of this is signed and independently
+      verifiable; the ingest-timestamp half (`ingest_records.ts`) is an
+      unsigned server column, so the endpoint is a server-reported policy
+      classification and audit signal, not a non-repudiable proof — see the
+      module doc comment and ADR-0021 for the full reasoning.
   - **Known, documented limitation**: the proof/MMD endpoints serve
     inclusion witnesses against the Poseidon ledger-snapshot tree (the tree
     `own_checkpoints` actually signs), not the separate BLAKE3 CD-HS-ST

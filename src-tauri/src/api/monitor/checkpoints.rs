@@ -59,10 +59,19 @@ pub struct CheckpointSummary {
     pub anchor_hash: String,
     pub ed25519_pubkey_hex: Option<String>,
     pub ed25519_signature_hex: Option<String>,
-    /// ADR-0031 transition attestation binding this checkpoint back to the
-    /// immediately preceding root — the field an MMD or continuity check
-    /// anchors to. `None` only for pre-migration-0049 rows.
+    /// ADR-0031 §2 signed `TransitionAttestation` binding
+    /// `transition_original_root → ledger_root` over `tree_size`,
+    /// BJJ-signed over `olympus_crypto::persist_message(...)` reduced mod l
+    /// — verifiable offline against that primitive without trusting this
+    /// server. All five fields are `None` together only for pre-migration-
+    /// 0049 rows or a keyless dev checkpoint (see CLAUDE.md's insert-only
+    /// ledger invariant); production checkpoints always carry all five.
     pub transition_original_root: Option<String>,
+    pub transition_leaf: Option<String>,
+    pub transition_path: Option<serde_json::Value>,
+    pub transition_sig_r8x: Option<String>,
+    pub transition_sig_r8y: Option<String>,
+    pub transition_sig_s: Option<String>,
 }
 
 impl From<OwnCheckpointRow> for CheckpointSummary {
@@ -85,6 +94,11 @@ impl From<OwnCheckpointRow> for CheckpointSummary {
             ed25519_pubkey_hex: r.ed25519_pubkey_hex,
             ed25519_signature_hex: r.ed25519_signature_hex,
             transition_original_root: r.transition_original_root,
+            transition_leaf: r.transition_leaf,
+            transition_path: r.transition_path,
+            transition_sig_r8x: r.transition_sig_r8x,
+            transition_sig_r8y: r.transition_sig_r8y,
+            transition_sig_s: r.transition_sig_s,
         }
     }
 }

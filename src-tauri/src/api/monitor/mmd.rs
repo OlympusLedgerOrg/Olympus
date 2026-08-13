@@ -6,9 +6,24 @@
 //! CT's MMD promise: a submitted record appears in a published, signed
 //! checkpoint within a bounded time (`crate::mmd::MmdPolicy`,
 //! `OLYMPUS_MMD_SECONDS`). This endpoint answers, for one committed record,
-//! "how long did that actually take, and did it meet policy" — the evidence
-//! ADR-0021 calls out as letting "submitters prove delayed inclusion
-//! breaches."
+//! "how long did that actually take, and did it meet policy."
+//!
+//! **What is, and isn't, independently verifiable here.** The *covering
+//! checkpoint* side is real evidence: `first_covering_checkpoint` (when
+//! present) is a BJJ/Ed25519-signed `own_checkpoints` row a caller can verify
+//! offline against the authority pubkey, exactly like `/monitor/checkpoints`.
+//! The *ingest-time* side is not: `ingested_at_unix` is read straight from
+//! `ingest_records.ts`, an unsigned server-clock timestamp with no
+//! cryptographic receipt binding it — nothing here stops the operator of
+//! this node from having back- or post-dated that column before a caller
+//! ever asks. This endpoint is therefore a **server-reported policy
+//! classification**, not a non-repudiable proof a submitter can hand to a
+//! third party the way they could hand over a signed checkpoint or a signed
+//! inclusion witness: it establishes "this server currently claims X",
+//! useful as a diagnostic and a first-pass audit signal, not as
+//! court-grade non-repudiation. Real non-repudiation would need an
+//! authenticated submission receipt issued *at* ingest time (an RFC-6962-style
+//! SCT) — not implemented here; see ADR-0021's "Known limitation".
 //!
 //! The record's own `snapshot_index`/`snapshot_size` (frozen at ingest,
 //! migration 0029) place it in its shard's Poseidon ledger-snapshot tree;
@@ -43,17 +58,22 @@ fn err(status: StatusCode, detail: &str) -> ApiError {
 #[serde(rename_all = "snake_case")]
 pub enum MmdStatus {
     /// A signed checkpoint covering this record was published within the
-    /// configured MMD.
+    /// configured MMD (measured from this server's own unsigned
+    /// `ingested_at_unix` — see this module's doc comment).
     CoveredWithinPolicy,
-    /// A signed checkpoint covering this record exists, but it was
-    /// published later than the configured MMD allows — a provable breach.
+    /// A signed checkpoint covering this record exists, but its
+    /// `checkpoint_timestamp` is later than `ingested_at_unix + mmd_seconds`
+    /// — a policy breach *by this server's own account of when it received
+    /// the record*. The checkpoint side is independently verifiable; the
+    /// ingest-time side is not (see this module's doc comment).
     CoveredLateBreach,
     /// No covering checkpoint exists yet, but the MMD window has not
     /// elapsed since ingest — not (yet) a breach.
     PendingWithinPolicy,
     /// No covering checkpoint exists yet and the MMD window has already
-    /// elapsed since ingest — a provable breach (absence-of-publication
-    /// evidence, not just lateness).
+    /// elapsed since ingest, again by this server's own unsigned
+    /// `ingested_at_unix` — a policy breach on the same basis as
+    /// `CoveredLateBreach`.
     PendingBreach,
 }
 
@@ -76,6 +96,10 @@ pub struct MmdResponse {
     pub content_hash: String,
     pub proof_id: String,
     pub shard_id: String,
+    /// `ingest_records.ts`, unsigned. This is this server's own claim of
+    /// when it received the record — see this module's doc comment for why
+    /// that makes `status`/`elapsed_seconds` a policy classification, not a
+    /// non-repudiable proof.
     pub ingested_at_unix: i64,
     pub snapshot_index: u64,
     pub snapshot_size: u64,

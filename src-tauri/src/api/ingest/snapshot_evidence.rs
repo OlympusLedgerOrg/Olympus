@@ -100,10 +100,15 @@ pub(crate) fn parse_stored_snapshot(
     let path_elements_hex: Vec<String> = path_obj
         .get("path_elements")
         .and_then(|v| v.as_array())
-        .map(|a| {
+        .and_then(|a| {
+            // A non-string element must fail closed, not be silently
+            // dropped: `filter_map` here would parse a corrupted witness
+            // "successfully" with a shortened path, and this server would
+            // then hand that truncated path to third parties as if it were
+            // real evidence.
             a.iter()
-                .filter_map(|e| e.as_str().map(|s| s.to_owned()))
-                .collect()
+                .map(|e| e.as_str().map(|s| s.to_owned()))
+                .collect::<Option<Vec<String>>>()
         })
         .ok_or("Stored snapshot_path.path_elements is missing or malformed.")?;
     let path_indices: Vec<u8> = path_obj
@@ -123,6 +128,9 @@ pub(crate) fn parse_stored_snapshot(
                 .collect::<Option<Vec<u8>>>()
         })
         .ok_or("Stored snapshot_path.path_indices is missing or malformed.")?;
+    if path_elements_hex.len() != path_indices.len() {
+        return Err("Stored snapshot_path elements/indices length mismatch.");
+    }
 
     let sig_json: serde_json::Value =
         serde_json::from_str(snapshot_sig).map_err(|_| "Stored snapshot_sig is not valid JSON.")?;
@@ -224,6 +232,32 @@ mod tests {
         assert_eq!(
             parse_stored_snapshot("aa".repeat(32).as_str(), 0, 1, &path, &sig_json("")),
             Err("Stored snapshot_path.path_indices is missing or malformed.")
+        );
+    }
+
+    #[test]
+    fn rejects_non_string_path_element_instead_of_dropping_it() {
+        // A `null` in position 1 must fail closed, not silently produce a
+        // shortened (and therefore wrong) one-element path.
+        let path = serde_json::json!({
+            "path_elements": ["11".repeat(32), null],
+            "path_indices": [0, 1],
+        });
+        assert_eq!(
+            parse_stored_snapshot("aa".repeat(32).as_str(), 0, 1, &path, &sig_json("")),
+            Err("Stored snapshot_path.path_elements is missing or malformed.")
+        );
+    }
+
+    #[test]
+    fn rejects_path_elements_indices_length_mismatch() {
+        let path = serde_json::json!({
+            "path_elements": ["11".repeat(32), "22".repeat(32)],
+            "path_indices": [0],
+        });
+        assert_eq!(
+            parse_stored_snapshot("aa".repeat(32).as_str(), 0, 1, &path, &sig_json("")),
+            Err("Stored snapshot_path elements/indices length mismatch.")
         );
     }
 

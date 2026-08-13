@@ -25,6 +25,12 @@ The missing deployment hardening is CT-grade operational practice around signed 
 
 Keep the **SMT (CD-HS-ST)** as the only ledger commitment tree and add **RFC-6962-inspired operational controls** around signed roots.
 
+**Implementation note (2026-08-13):** the operational controls this decision
+calls for — signed roots, witness cosigning, gossip, the Monitor API, MMD —
+ended up implemented against a **second tree**, the Poseidon ledger-snapshot
+tree, not the CD-HS-ST SMT this section names. See "Known limitation" below
+for the full explanation and why that gap was not closed in this revision.
+
 ### Why SMT over an RFC-6962 history tree
 
 - **Non-inclusion proofs are first-class** (critical for proving keyed absence vs hidden records).
@@ -36,7 +42,10 @@ Keep the **SMT (CD-HS-ST)** as the only ledger commitment tree and add **RFC-696
 
 - **Witness cosigning:** independent parties co-sign roots to reduce single-operator trust.
 - **Gossip:** independent monitors compare envelopes and detect split-view evidence.
-- **Maximum Merge Delay (MMD):** submitters can prove delayed inclusion breaches.
+- **Maximum Merge Delay (MMD):** a policy on how quickly a submitted record must
+  appear in a published, signed checkpoint, with a way to check whether that
+  held for a given record. (Implemented as a server-reported classification,
+  not non-repudiable proof — see "Implementation status" below.)
 - **Monitor API:** public read-only surfaces for root/proof/evidence verification.
 
 ## Explicit non-goals
@@ -86,13 +95,23 @@ shapes):
   timestamp), reusing exactly the parse/lookup `POST /ingest/proofs/verify`
   already used server-side (`src-tauri/src/api/ingest/snapshot_evidence.rs`)
   so the two can never disagree about what a stored witness means.
-- `GET /monitor/mmd/{content_hash}` — MMD evidence: how long after ingest a
+- `GET /monitor/mmd/{content_hash}` — MMD status: how long after ingest a
   record's first covering signed checkpoint appeared (or, if none exists
   yet, how long it has been waiting), classified against the
   `OLYMPUS_MMD_SECONDS` policy (`src-tauri/src/mmd.rs`, default 24 h) as one
   of `covered_within_policy` / `covered_late_breach` /
-  `pending_within_policy` / `pending_breach`. The last two are exactly "a
-  submitter can prove delayed inclusion breaches."
+  `pending_within_policy` / `pending_breach` (the latter two of those four
+  are the breach states — `pending_within_policy` is explicitly not one).
+  **Only half of this is independently verifiable**: the covering
+  checkpoint is a signed, offline-checkable `own_checkpoints` row, but the
+  ingest timestamp it's measured against (`ingest_records.ts`) is an
+  unsigned server-clock column with no cryptographic receipt. This endpoint
+  is a server-reported policy classification a submitter or a monitor can
+  use as a diagnostic and audit signal, not a non-repudiable proof they can
+  hand to a third party — see the module's own doc comment
+  (`src-tauri/src/api/monitor/mmd.rs`) for the full reasoning. Closing that
+  gap would need an authenticated submission receipt issued at ingest time
+  (an RFC-6962-style SCT), which this revision does not add.
 
 All three routes are unauthenticated (rate-limited only) and mounted on both
 the default loopback listener and, when the `federation` feature is
@@ -144,7 +163,7 @@ Olympus does **not** implement RFC-6962 prefix consistency proofs. The SMT-nativ
 | Signed roots | Silent state rewrites without detectable root change | Base cryptographic checkpointing |
 | Witness cosigning | Single-operator unilateral root claims | Operator-set M-of-N threshold (`OLYMPUS_FEDERATION_QUORUM_THRESHOLD`, clamped ≥ 1); no fixed default ratio — this is a deployment policy choice, not a protocol constant |
 | Gossip comparison | Split-view/equivocation across auditors | Detects same-`checkpoint_timestamp`-or-`tree_size` conflicting signed roots from one signing identity, over Tor |
-| MMD evidence | Hidden records / delayed publication after receipt | `GET /monitor/mmd/{content_hash}` — submitter can present timing evidence, or the absence of any covering checkpoint after the policy window |
+| MMD status | Hidden records / delayed publication after receipt | `GET /monitor/mmd/{content_hash}` — a server-reported classification, not signed timing evidence (the covering checkpoint is signed; the ingest timestamp it's measured against is not) — see "Monitor API and MMD" above |
 | Inclusion/non-inclusion proofs | Hidden records and denial of committed records | `GET /monitor/proof/{content_hash}` — anchored to signed checkpoint roots (Poseidon snapshot tree; see "Known limitation" above) |
 
 ## Consequences
