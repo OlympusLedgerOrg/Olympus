@@ -65,16 +65,28 @@ pub const CHECKPOINT_QUORUM_THRESHOLD_ENV: &str = "OLYMPUS_CHECKPOINT_QUORUM_THR
 /// [`CHECKPOINT_QUORUM_THRESHOLD_ENV`].
 ///
 /// Defaults to `1` (single-signer — the collector then never needs a peer
-/// co-signature) when unset or unparseable, and clamps `0` up to `1` for the
-/// same reason [`super::configured_threshold`] does: a zero threshold is
-/// never vacuously satisfied by [`verify_checkpoint_quorum`], so pinning one
-/// would just produce a checkpoint quorum that can never be satisfied.
+/// co-signature) when unset, and clamps `0` up to `1` for the same reason
+/// [`super::configured_threshold`] does: a zero threshold is never vacuously
+/// satisfied by [`verify_checkpoint_quorum`], so pinning one would just
+/// produce a checkpoint quorum that can never be satisfied. An unparseable
+/// (but present) value also falls back to `1` — fail-open on the weakest
+/// policy, matching `configured_threshold` — but logs a warning, since `1`
+/// silently downgrades an intended M-of-N to 1-of-N with no other signal an
+/// operator's env var has a typo.
 pub fn configured_checkpoint_threshold() -> u32 {
-    std::env::var(CHECKPOINT_QUORUM_THRESHOLD_ENV)
-        .ok()
-        .and_then(|v| v.trim().parse::<u32>().ok())
-        .map(|m| m.max(1))
-        .unwrap_or(1)
+    let Ok(raw) = std::env::var(CHECKPOINT_QUORUM_THRESHOLD_ENV) else {
+        return 1;
+    };
+    match raw.trim().parse::<u32>() {
+        Ok(m) => m.max(1),
+        Err(_) => {
+            tracing::warn!(
+                "{CHECKPOINT_QUORUM_THRESHOLD_ENV}={raw:?} is not a valid non-negative integer; \
+                 defaulting the checkpoint-quorum threshold to 1"
+            );
+            1
+        }
+    }
 }
 
 /// Derive the checkpoint-quorum co-sign message (a BN254 `Fr`) every signer

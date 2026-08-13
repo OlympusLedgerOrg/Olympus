@@ -1,3 +1,6 @@
+-- SPDX-FileCopyrightText: 2026 Olympus Contributors
+-- SPDX-License-Identifier: Apache-2.0
+
 -- 0061_own_checkpoints_quorum_params.sql
 --
 -- ADR-0033 "Remaining producer work": pin the M-of-N checkpoint-quorum

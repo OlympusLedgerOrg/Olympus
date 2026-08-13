@@ -871,7 +871,12 @@ pub async fn set_checkpoint_quorum_params(
     threshold: u32,
     signers: &[crate::quorum::QuorumSigner],
 ) -> Result<u64, sqlx::Error> {
-    let signers_json = serde_json::to_value(signers).unwrap_or_else(|_| serde_json::json!([]));
+    // Fail closed: `QuorumSigner` is two plain strings, so this can't
+    // realistically fail, but a silent `[]` fallback would pin `threshold >=
+    // 1` against an empty signer set — an unsatisfiable quorum locked in by
+    // the one-shot guard above. Propagate instead.
+    let signers_json = serde_json::to_value(signers)
+        .map_err(|e| sqlx::Error::Protocol(format!("serialize quorum signers: {e}")))?;
     let result = sqlx::query(
         "UPDATE own_checkpoints
             SET checkpoint_quorum_threshold = $1,

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Olympus Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 //! Checkpoint-quorum co-signing protocol (ADR-0033 "Remaining producer work").
 //!
 //! Mirrors [`super::cosign`] (the SBT-credential quorum co-sign protocol)
@@ -17,14 +20,18 @@
 //!     `(chain_id, epoch, root)` triple a requester cared to ask for.
 //!
 //!   * [`collect_and_store_checkpoint_quorum`] — the per-round entry point the
-//!     gossip loop calls after pushing this node's checkpoint to every trusted
-//!     peer (so, by the time collection runs, an honest peer's synchronous
-//!     `receive_checkpoint` handler has already verified-and-stored it — see
-//!     [`super::verify::verify_and_store`]). Self-signs first (that signature
-//!     both authenticates the request and is one of the quorum signers),
-//!     collects remaining co-signatures from trusted peers up to the pinned
-//!     threshold, pins `(threshold, signers)` on the `own_checkpoints` row on
-//!     first success, and persists every collected signature.
+//!     gossip loop calls after attempting to push this node's checkpoint to
+//!     every trusted peer (so, for any peer the push reached, an honest
+//!     peer's synchronous `receive_checkpoint` handler has already verified-
+//!     and-stored it before collection asks it for a co-signature — see
+//!     [`super::verify::verify_and_store`]; a peer the push failed to reach
+//!     just rejects this round's request and the next round tries again).
+//!     Self-signs first (that signature both authenticates the request and
+//!     is one of the quorum signers), collects remaining co-signatures from
+//!     trusted peers up to the pinned threshold, pins `(threshold, signers)`
+//!     on the `own_checkpoints` row on the **first attempt** (not the first
+//!     time the threshold is met — see the function doc for why), and
+//!     persists every collected signature.
 //!
 //! The endpoint requires NO API key — same posture as `/federation/cosign` and
 //! `/federation/checkpoint`: peer-facing, authenticated cryptographically by
@@ -51,6 +58,13 @@ use crate::zk::witness::baby_jubjub::{self, BabyJubJubPubKey, BabyJubJubSignatur
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// Cap on a peer's co-sign response body.
 pub(crate) const MAX_CHECKPOINT_COSIGN_BYTES: usize = 64 * 1024;
+/// Upper bound on a requester-supplied signer set, checked before any
+/// authentication runs. A checkpoint quorum is an operator-curated peer set
+/// (in practice single digits); without this bound, `MAX_CHECKPOINT_COSIGN_BYTES`
+/// of JSON alone still fits thousands of `QuorumSigner` entries, letting an
+/// unauthenticated caller on the Tor route force `checkpoint_quorum_message`
+/// to fold a large set before the signature/trust checks below ever run.
+const MAX_REQUEST_SIGNERS: usize = 64;
 const LOOPBACK_HOST: &str = "127.0.0.1";
 
 type ApiError = (StatusCode, Json<serde_json::Value>);
@@ -129,6 +143,9 @@ pub async fn checkpoint_cosign(
         )
     })?;
 
+    if req.signers.len() > MAX_REQUEST_SIGNERS {
+        return Err(err(StatusCode::BAD_REQUEST, "signer set too large"));
+    }
     let chain_id = parse_fr(&req.chain_id_dec)
         .map_err(|_| err(StatusCode::BAD_REQUEST, "malformed chain_id"))?;
     let root =
@@ -205,7 +222,7 @@ async fn requester_is_trusted_peer(
     let (nx, ny) =
         normalize_pair(x, y).ok_or_else(|| err(StatusCode::BAD_REQUEST, "malformed pubkey"))?;
     let row: Option<(i64,)> = sqlx::query_as(
-        "SELECT 1 FROM peer_nodes
+        "SELECT 1::bigint FROM peer_nodes
           WHERE trust_status = 'trusted'
             AND removed_at IS NULL
             AND bjj_pubkey_x = $1
@@ -235,7 +252,7 @@ async fn requester_has_verified_matching_checkpoint(
     let (nx, ny) = normalize_pair(requester_x, requester_y)
         .ok_or_else(|| err(StatusCode::BAD_REQUEST, "malformed requester pubkey"))?;
     let row: Option<(i64,)> = sqlx::query_as(
-        "SELECT 1 FROM peer_checkpoints
+        "SELECT 1::bigint FROM peer_checkpoints
           WHERE signer_pubkey_x = $1
             AND signer_pubkey_y = $2
             AND authority_pubkey_hash = $3
@@ -381,14 +398,27 @@ async fn request_checkpoint_cosign(
 /// Per-round entry point: collect and pin checkpoint-quorum co-signatures for
 /// this node's latest gossipable checkpoint.
 ///
-/// Called by the gossip loop after pushing our checkpoint to every trusted
-/// peer, so an honest peer's synchronous `receive_checkpoint` handler has
-/// already verified-and-stored it by the time this asks for a co-signature
-/// (see the module doc). No-ops (not an error) when: there is no gossipable
-/// checkpoint yet, there are fewer than two pinned signers (no trusted peers
-/// — a 1-of-1 "quorum" would be a self-satisfied no-op not worth persisting),
-/// or the checkpoint's quorum is already satisfied by previously-collected
-/// signatures.
+/// Called by the gossip loop after attempting to push our checkpoint to every
+/// trusted peer, so for any peer that push reached, its synchronous
+/// `receive_checkpoint` handler has already verified-and-stored it by the
+/// time this asks for a co-signature (see the module doc). No-ops (not an
+/// error) when: there is no gossipable checkpoint yet, there are fewer than
+/// two pinned signers (no trusted peers — a 1-of-1 "quorum" would be a
+/// self-satisfied no-op not worth persisting), the configured threshold
+/// exceeds the signer set (mathematically unsatisfiable — logged, not
+/// pinned, so a later signer-set change gets a fresh attempt instead of a
+/// permanently-stuck pin), or the checkpoint's quorum is already satisfied
+/// by previously-collected signatures.
+///
+/// Pins `(threshold, signers)` on the **first attempt**, not the first time
+/// the threshold is met. This is deliberate, not a shortcut: pinning is what
+/// lets signatures accumulate ACROSS gossip rounds against the same signed
+/// message (a later round reuses the pinned values instead of recomputing
+/// fresh ones from `trusted_signer_set`, which could legitimately drift if a
+/// peer is added/removed between rounds). Deferring the pin until success
+/// would mean each unsatisfied round signs a *different* message — nothing
+/// from an earlier round would ever count toward a later one, i.e. the
+/// checkpoint could never accumulate its way to quorum at all.
 pub async fn collect_and_store_checkpoint_quorum(
     pool: &sqlx::PgPool,
     bjj_key: &[u8; 32],
@@ -407,25 +437,45 @@ pub async fn collect_and_store_checkpoint_quorum(
 
     // Reuse the already-pinned (threshold, signers) if this checkpoint has
     // been attempted before; otherwise compute fresh ones. Pinning happens
-    // once, below, via `set_checkpoint_quorum_params`'s one-shot guard.
-    let (threshold, signers): (u32, Vec<QuorumSigner>) =
-        match (row.checkpoint_quorum_threshold, &row.checkpoint_quorum_signers) {
-            (Some(t), Some(s)) => (
-                t.max(1) as u32,
-                serde_json::from_value(s.clone()).unwrap_or_default(),
-            ),
-            _ => {
-                let threshold = crate::quorum::checkpoint::configured_checkpoint_threshold();
-                let signers = quorum::trusted_signer_set(pool, bjj_pubkey)
-                    .await
-                    .map_err(|e| format!("trusted signer set: {e}"))?;
-                (threshold, signers)
-            }
-        };
+    // once, below, via `set_checkpoint_quorum_params`'s one-shot guard. Fail
+    // closed on a corrupt pinned value rather than silently treating it as
+    // "no signers" — that would fall through the `signers.len() < 2` no-op
+    // below and mask the corruption as ordinary no-peers-configured.
+    let (threshold, signers): (u32, Vec<QuorumSigner>) = match (
+        row.checkpoint_quorum_threshold,
+        &row.checkpoint_quorum_signers,
+    ) {
+        (Some(t), Some(s)) => (
+            t.max(1) as u32,
+            serde_json::from_value(s.clone())
+                .map_err(|e| format!("pinned checkpoint_quorum_signers is corrupt: {e}"))?,
+        ),
+        _ => {
+            let threshold = crate::quorum::checkpoint::configured_checkpoint_threshold();
+            let signers = quorum::trusted_signer_set(pool, bjj_pubkey)
+                .await
+                .map_err(|e| format!("trusted signer set: {e}"))?;
+            (threshold, signers)
+        }
+    };
 
     // No trusted peers: a 1-of-1 "quorum" is self-satisfied and not worth
     // persisting every round.
     if signers.len() < 2 {
+        return Ok(());
+    }
+    // A threshold above the signer set can never be satisfied
+    // (`verify_checkpoint_quorum` requires `valid_signatures >= threshold`,
+    // bounded above by `signers.len()`). Skip rather than pin an
+    // unsatisfiable configuration — the one-shot guard would lock it in
+    // until an operator manually intervenes.
+    if threshold as usize > signers.len() {
+        tracing::warn!(
+            "federation: checkpoint quorum threshold {threshold} exceeds the {} pinned \
+             signers; skipping collection for checkpoint {} until the signer set grows",
+            signers.len(),
+            row.id
+        );
         return Ok(());
     }
 
