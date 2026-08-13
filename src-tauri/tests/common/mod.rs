@@ -64,7 +64,7 @@ use olympus_tauri_lib::api::middleware::auth::derive_api_key_from_bjj;
 use olympus_tauri_lib::api::trusted_issuers::load_trusted_issuers;
 use olympus_tauri_lib::bootstrap;
 use olympus_tauri_lib::server;
-use olympus_tauri_lib::state::AppState;
+use olympus_tauri_lib::state::{self, AppState};
 
 /// Everything a test needs to reach the shared server. Plain, `Send +
 /// Sync` data only — the pool and the `PgEmbed` handle deliberately live
@@ -293,6 +293,14 @@ async fn init() -> Booted {
     )));
     state.bjj_authority_pubkey = Some(bootstrap_result.bjj_authority_pubkey);
     state.bjj_trusted_issuers = trusted;
+    // Mirrors startup.rs / bin/olympus-server.rs: without this, every
+    // redactable upload (any valid-UTF-8 text, PDF, or OOXML body —
+    // `zk::segment::detect_format`) 503s under `requires_redaction_blind_secret`
+    // because `AppState::new` defaults `redaction_blind_secret` to `None`, and
+    // `OLYMPUS_ENV=test` above never gets a chance to fall back to the
+    // BJJ-derived dev secret unless this is wired up explicitly.
+    state.redaction_blind_secret =
+        state::resolve_redaction_blind_secret(state::secret_bytes(&state.bjj_authority_key));
 
     let addr = server::start(state)
         .await

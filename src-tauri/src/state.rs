@@ -222,6 +222,17 @@ pub fn secret_bytes(secret: &Option<SharedSecret32>) -> Option<&[u8; 32]> {
     secret.as_deref().map(std::ops::Deref::deref)
 }
 
+/// Public wrapper around the crate-private fail-closed `OLYMPUS_ENV`
+/// classifier (`env::is_production`), so callers outside the lib crate — the
+/// `olympus-server` headless binary is a separate crate and cannot reach
+/// `crate::env::is_production` directly — use the same unset/invalid/
+/// unrecognized-treated-as-production semantics as every in-lib call site
+/// (e.g. [`resolve_redaction_blind_secret`], [`resolve_ingest_signing_key`])
+/// instead of a narrower ad hoc literal match.
+pub fn is_production() -> bool {
+    crate::env::is_production()
+}
+
 /// Resolve the Ed25519 ingest/redaction signing key once at startup.
 ///
 /// Precedence:

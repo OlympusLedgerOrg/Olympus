@@ -171,21 +171,18 @@ async fn main() {
             state::secret_bytes(&app_state.bjj_authority_key),
         );
         // Blind-secret rotation registry (migration 0059, docs/key-rotation.md):
-        // mirrors main.rs. Gated on the same literal `OLYMPUS_ENV=production`/
-        // `prod` this binary already refuses to start under (see the exit(2)
-        // guard above) — NOT `env::is_production`'s fail-closed-on-unset
-        // semantics (that helper is crate-private anyway), because unset here
-        // always means "this is the dev/audit-harness binary", never a real
-        // production deployment. Since literal production is refused before
-        // this point, this check is always false in practice; kept for parity
-        // with main.rs if that refusal is ever relaxed.
-        let is_production = std::env::var("OLYMPUS_ENV").is_ok_and(|v| {
-            matches!(
-                v.trim().to_ascii_lowercase().as_str(),
-                "production" | "prod"
-            )
-        });
-        if is_production {
+        // mirrors main.rs. Uses the same fail-closed classifier
+        // `resolve_redaction_blind_secret` itself gates on
+        // (`state::is_production`, a public wrapper around the crate-private
+        // `env::is_production` this bin can't reach directly) rather than a
+        // literal `production`/`prod` match. The literal exit(2) guard above
+        // only refuses that exact value — an operator running this binary
+        // with e.g. `OLYMPUS_ENV=staging` and an explicit
+        // `OLYMPUS_REDACTION_BLIND_SECRET` would have the secret resolved
+        // under production rules (no BJJ-derived fallback) but, under a
+        // literal-only check here, skip the rotation-safety net entirely.
+        // Keeping the two checks in sync closes that gap.
+        if state::is_production() {
             if let (Some(pool), Some(secret)) = (
                 app_state.pool.as_ref(),
                 state::secret_bytes(&app_state.redaction_blind_secret),
@@ -198,7 +195,12 @@ async fn main() {
                         app_state.redaction_blind_secret = None;
                     }
                     Err(e) => {
+                        // Fail closed here too — a registry error must not
+                        // authorize use of the secret (see
+                        // `ensure_redaction_blind_secret_fingerprint`'s doc
+                        // comment and the mirrored `startup.rs` call site).
                         tracing::warn!("bootstrap: redaction blind secret registry: {e}");
+                        app_state.redaction_blind_secret = None;
                     }
                 }
             }

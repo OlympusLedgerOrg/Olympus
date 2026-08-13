@@ -904,7 +904,14 @@ pub(crate) async fn run_server_bringup(
                         app_state.redaction_blind_secret = None;
                     }
                     Err(e) => {
+                        // Fail closed here too: a registry error means the
+                        // fingerprint could not be confirmed, so the caller
+                        // must not treat the secret as authorized — same
+                        // reasoning as the `Ok(false)` arm above (see
+                        // `ensure_redaction_blind_secret_fingerprint`'s doc
+                        // comment).
                         tracing::warn!("bootstrap: redaction blind secret registry: {e}");
+                        app_state.redaction_blind_secret = None;
                     }
                 }
             }
