@@ -6,6 +6,34 @@ All notable changes to the Olympus protocol are documented in this file.
 
 ### Added
 
+- **ADR-0037 object redaction selection/staging/commit flow, implemented.**
+  The three-step `get_page_objects` / `stage_redaction` / `commit_redaction`
+  flow the ADR specified is now live over HTTP for the two PDF object
+  commitment formats (`pdf-object`, `pdf-xref-stream`):
+  - `POST /redaction/page-objects` — selectable objects on one page in
+    ADR-0037's normalized coordinate contract (bottom-left origin,
+    `/Rotate` applied, zero-based `page_num`, every rect finite and
+    clipped to the page extent). New `crate::zk::pdf_page_objects`.
+  - `POST /redaction/stage` — canonicalizes a proposed selection against
+    the live manifest and computes backend-derived, severity-bearing
+    warnings (new `crate::zk::pdf_redaction_warnings`): `SharedXObject`
+    and `SharedStream` (an XObject or content stream referenced from more
+    than one page/form) as `Warning`, and `AnnotationAppearanceStream` (an
+    annotation selected without its `/AP` appearance stream) as
+    `Blocking`. `AmbiguousTextSpan` stays UI-surfaced/Info-only by design —
+    it names a frontend click ambiguity, not a backend-observable object
+    relationship. Wires the previously-dead-code `RedactionStagingTable`
+    (in-memory, 15-minute TTL, already present for a prior PR) to HTTP.
+  - `POST /redaction/commit` — re-validates the staging entry against the
+    *live* manifest (drift, expiry, warning-digest, blocking severity) and
+    produces the redacted artifact + V3 bundle via the same
+    `perform_redaction` core `POST /redaction/redact` uses, so both paths
+    are byte-identical for the same selection.
+
+  OOXML and text-line commitments are unaffected — they redact directly via
+  `POST /redaction/redact` (there is no per-page object geometry to stage
+  against for those formats).
+
 - **Historical redaction/ingest issuer keys (key-rotation series, part 4.5).**
   `GET /redaction/issuer-key` now serves every Ed25519 signing key this
   instance has successfully _registered_, not just the live one. Every

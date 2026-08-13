@@ -35,7 +35,7 @@ use crate::zk::pdf_syntax::{
     decoded_stream, dict_region, int_after, name_after, refs_after, PREVIEW_INFLATE_CAP,
 };
 use crate::zk::segment::pdf_xref::logical_objects;
-use crate::zk::segment::SegmentError;
+use crate::zk::segment::{SegmentError, SegmentFormat};
 
 /// Max characters of extracted text returned as a content-stream preview.
 const PREVIEW_CHARS: usize = 200;
@@ -304,6 +304,55 @@ pub fn describe_objects_xref_stream(
     Ok(describe_regions(&regions))
 }
 
+/// Recover each committed indirect object's bytes for whichever PDF **object**
+/// scheme the manifest pins, as owned buffers keyed by object id.
+///
+/// The two schemes recover bytes differently ([`extract_object_spans`] borrows
+/// slices of the file; [`logical_objects`] must decode object-stream members
+/// into fresh buffers), so a caller that wants to be format-agnostic has to own
+/// the result. That is what this returns: the traditional scheme's slices are
+/// copied so both arms have the same type and lifetime.
+///
+/// The regions are exactly what the matching segmenter committed — the framed
+/// `N G obj … endobj` span for `pdf-object`, the trimmed logical body for
+/// `pdf-xref-stream` — so the recovered object set is the committed object set.
+///
+/// `Err` for a structurally unparseable PDF, and for any non-object format
+/// (`text-line`, `ooxml-part`, `pdf-textrun`): those commit something other than
+/// whole PDF objects, so there is no object region to return. The error is a
+/// message string because the two arms fail with unrelated error types and every
+/// caller so far only renders the text.
+pub(crate) fn committed_object_regions(
+    pdf_bytes: &[u8],
+    format: SegmentFormat,
+) -> Result<BTreeMap<u32, Vec<u8>>, String> {
+    match format {
+        SegmentFormat::PdfObject => Ok(extract_object_spans(pdf_bytes)
+            .map_err(|e| e.to_string())?
+            .iter()
+            .map(|s| (s.obj_id, pdf_bytes[s.byte_start..s.byte_end].to_vec()))
+            .collect()),
+        SegmentFormat::PdfXrefStream => Ok(logical_objects(pdf_bytes)
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .map(|(id, (_generation, body))| (id, body))
+            .collect()),
+        other => Err(format!(
+            "{} does not commit whole PDF objects",
+            other.as_tag()
+        )),
+    }
+}
+
+/// Borrow an owned region map as the slice map the describe/placement helpers
+/// take. Split out so callers do not each re-spell the `as_slice` map.
+pub(crate) fn borrow_regions(regions: &BTreeMap<u32, Vec<u8>>) -> BTreeMap<u32, &[u8]> {
+    regions
+        .iter()
+        .map(|(&id, region)| (id, region.as_slice()))
+        .collect()
+}
+
 /// Classify + label a set of PDF indirect objects given each one's committed
 /// byte region, in obj-id-ascending order.
 ///
@@ -317,7 +366,7 @@ pub fn describe_objects_xref_stream(
 /// Infallible: an object that resists classification degrades to `kind ==
 /// "other"` rather than failing the whole listing (a partial listing would hide
 /// objects the operator then could not select to redact).
-fn describe_regions(regions: &BTreeMap<u32, &[u8]>) -> Vec<ObjectDescription> {
+pub(crate) fn describe_regions(regions: &BTreeMap<u32, &[u8]>) -> Vec<ObjectDescription> {
     let dicts: BTreeMap<u32, &[u8]> = regions
         .iter()
         .map(|(&id, &region)| (id, dict_region(region)))
