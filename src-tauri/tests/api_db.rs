@@ -40,6 +40,8 @@ mod external_pg_roles;
 mod ingest_signing_key_registry;
 #[path = "api_db/ledger.rs"]
 mod ledger;
+#[path = "api_db/monitor.rs"]
+mod monitor;
 #[path = "api_db/public_stats.rs"]
 mod public_stats;
 #[path = "api_db/redaction.rs"]

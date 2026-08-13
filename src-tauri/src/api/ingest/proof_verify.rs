@@ -3,6 +3,7 @@
 
 use axum::{extract::State, http::StatusCode, Json};
 
+use super::snapshot_evidence::{fetch_snapshot_row, parse_stored_snapshot, pending_detail};
 use super::*;
 use crate::api::middleware::auth::RateLimit;
 use crate::state::AppState;
@@ -49,7 +50,7 @@ pub(super) async fn verify_proof_bundle(
     _rl: RateLimit,
     Json(body): Json<ProofVerifyRequest>,
 ) -> Result<Json<ProofVerifyResponse>, ApiError> {
-    use olympus_crypto::ledger_snapshot::{verify_snapshot, LedgerSnapshot as CryptoSnapshot};
+    use olympus_crypto::ledger_snapshot::verify_snapshot;
 
     let content_hash = body.content_hash.trim().to_lowercase();
     if content_hash.len() != 64 || !content_hash.chars().all(|c| c.is_ascii_hexdigit()) {
@@ -64,35 +65,14 @@ pub(super) async fn verify_proof_bundle(
         .as_ref()
         .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable."))?;
 
-    // Pull the row + every snapshot column in one go. NULL snapshot columns
-    // mean the record exists but the inclusion witness hasn't been built
-    // (legacy rows from pre-migration-0029 or the removed pre-H-5 JSON
-    // commit path — new ingests through /ingest/files always populate the
-    // snapshot atomically with the row INSERT). That's `Pending`, NOT
-    // `Invalid`.
-    #[derive(sqlx::FromRow)]
-    struct Row {
-        proof_id: String,
-        record_type: String,
-        original_root: Option<String>,
-        snapshot_root: Option<String>,
-        snapshot_index: Option<i64>,
-        snapshot_size: Option<i64>,
-        snapshot_path: Option<serde_json::Value>,
-        snapshot_sig: Option<String>,
-        snapshot_sig_legacy: bool,
-    }
-    let row_opt: Option<Row> = sqlx::query_as::<_, Row>(
-        // Audit A1: earliest-wins — content_hash is per-shard unique only.
-        "SELECT proof_id, record_type, original_root, snapshot_root, snapshot_index, \
-                snapshot_size, snapshot_path, snapshot_sig, snapshot_sig_legacy \
-         FROM ingest_records WHERE content_hash = $1 \
-         ORDER BY ts ASC, proof_id ASC LIMIT 1",
-    )
-    .bind(&content_hash)
-    .fetch_optional(pool)
-    .await
-    .map_err(db_err)?;
+    // NULL snapshot columns mean the record exists but the inclusion witness
+    // hasn't been built (legacy rows from pre-migration-0029 or the removed
+    // pre-H-5 JSON commit path — new ingests through /ingest/files always
+    // populate the snapshot atomically with the row INSERT). That's
+    // `Pending`, NOT `Invalid`.
+    let row_opt = fetch_snapshot_row(pool, &content_hash)
+        .await
+        .map_err(db_err)?;
 
     let row = match row_opt {
         Some(r) => r,
@@ -158,15 +138,7 @@ pub(super) async fn verify_proof_bundle(
             sg.to_owned(),
         ),
         _ => {
-            let detail = if row.record_type != "file" && row.record_type != "redaction" {
-                "Record exists but has no Poseidon snapshot — non-file records \
-                     (legacy JSON commits from the pre-H-5 route) are not anchored \
-                     in the chunked ledger tree."
-            } else {
-                "Record exists but has no Poseidon snapshot yet — legacy row from \
-                     before atomic-ingest. Re-upload the original bytes through \
-                     /ingest/files to back-fill the snapshot columns."
-            };
+            let detail = pending_detail(&row.record_type);
             return Ok(Json(build(
                 body.proof_id,
                 Some(row.proof_id),
@@ -180,166 +152,31 @@ pub(super) async fn verify_proof_bundle(
         }
     };
 
-    // Parse the stored snapshot_path JSON shape produced by
-    // `build_snapshot_in_tx`: { path_elements: [hex…], path_indices: [u8…] }.
-    let path_obj = match snapshot_path_json.as_object() {
-        Some(o) => o,
-        None => {
-            return Ok(Json(build(
-                body.proof_id,
-                Some(row.proof_id),
-                content_hash,
-                SnapshotVerifyStatus::Invalid,
-                "Stored snapshot_path is not a JSON object.",
-                Some(snapshot_root_str),
-                Some(snapshot_index_i as u64),
-                Some(snapshot_size_i as u64),
-            )))
-        }
-    };
-    let path_elements_hex: Vec<String> = match path_obj
-        .get("path_elements")
-        .and_then(|v| v.as_array())
-        .map(|a| {
-            a.iter()
-                .filter_map(|e| e.as_str().map(|s| s.to_owned()))
-                .collect()
-        }) {
-        Some(v) => v,
-        None => {
-            return Ok(Json(build(
-                body.proof_id,
-                Some(row.proof_id),
-                content_hash,
-                SnapshotVerifyStatus::Invalid,
-                "Stored snapshot_path.path_elements is missing or malformed.",
-                Some(snapshot_root_str),
-                Some(snapshot_index_i as u64),
-                Some(snapshot_size_i as u64),
-            )))
-        }
-    };
-    let path_indices: Vec<u8> = match path_obj
-        .get("path_indices")
-        .and_then(|v| v.as_array())
-        .and_then(|a| {
-            // Each index is a binary-tree direction bit (0 or 1). Reject
-            // non-integers and out-of-domain values instead of silently
-            // truncating with `as u8` (e.g. 256 -> 0) or dropping bad
-            // elements — corruption must surface as `Invalid`, below.
-            a.iter()
-                .map(|e| match e.as_u64() {
-                    Some(n) if n <= 1 => Some(n as u8),
-                    _ => None,
-                })
-                .collect::<Option<Vec<u8>>>()
-        }) {
-        Some(v) => v,
-        None => {
-            return Ok(Json(build(
-                body.proof_id,
-                Some(row.proof_id),
-                content_hash,
-                SnapshotVerifyStatus::Invalid,
-                "Stored snapshot_path.path_indices is missing or malformed.",
-                Some(snapshot_root_str),
-                Some(snapshot_index_i as u64),
-                Some(snapshot_size_i as u64),
-            )))
-        }
-    };
-
-    // The stored `snapshot_sig` is a JSON object — see
-    // `build_snapshot_in_tx` for the producer shape.
-    let sig_json: serde_json::Value = match serde_json::from_str(&snapshot_sig_hex) {
-        Ok(v) => v,
-        Err(_) => {
-            return Ok(Json(build(
-                body.proof_id,
-                Some(row.proof_id),
-                content_hash,
-                SnapshotVerifyStatus::Invalid,
-                "Stored snapshot_sig is not valid JSON.",
-                Some(snapshot_root_str),
-                Some(snapshot_index_i as u64),
-                Some(snapshot_size_i as u64),
-            )))
-        }
-    };
-    // Algorithm discriminator MUST match the producer (`build_snapshot_in_tx`).
-    // Without this gate, an attacker who can write to `snapshot_sig` could swap in
-    // r8x/r8y/s values from a different signature scheme and the verifier would
-    // happily attempt BJJ verification on them — a confused-deputy on the sig
-    // family. The discriminator binds the on-disk payload to this verifier.
-    match sig_json.get("alg").and_then(|v| v.as_str()) {
-        Some(SNAPSHOT_SIG_ALG) => {}
-        _ => {
-            return Ok(Json(build(
-                body.proof_id,
-                Some(row.proof_id),
-                content_hash,
-                SnapshotVerifyStatus::Invalid,
-                "Stored snapshot_sig has wrong or missing alg discriminator.",
-                Some(snapshot_root_str),
-                Some(snapshot_index_i as u64),
-                Some(snapshot_size_i as u64),
-            )))
-        }
-    }
-    let (sig_r8x, sig_r8y, sig_s) = match (
-        sig_json.get("r8x").and_then(|v| v.as_str()),
-        sig_json.get("r8y").and_then(|v| v.as_str()),
-        sig_json.get("s").and_then(|v| v.as_str()),
+    // Parse the stored snapshot_path/snapshot_sig JSON shapes produced by
+    // `build_snapshot_in_tx` — shared with `api::monitor::proof`, see
+    // `snapshot_evidence::parse_stored_snapshot`'s doc comment.
+    let snapshot = match parse_stored_snapshot(
+        &snapshot_root_str,
+        snapshot_index_i,
+        snapshot_size_i,
+        &snapshot_path_json,
+        &snapshot_sig_hex,
     ) {
-        (Some(x), Some(y), Some(s)) => (x.to_owned(), y.to_owned(), s.to_owned()),
-        _ => {
+        Ok(s) => s,
+        Err(detail) => {
             return Ok(Json(build(
                 body.proof_id,
                 Some(row.proof_id),
                 content_hash,
                 SnapshotVerifyStatus::Invalid,
-                "Stored snapshot_sig is missing r8x/r8y/s.",
+                detail,
                 Some(snapshot_root_str),
                 Some(snapshot_index_i as u64),
                 Some(snapshot_size_i as u64),
             )))
         }
     };
-    // Optional authenticated signing time (V2 snapshots). Present → the V2
-    // signing digest covers it; absent → legacy V1 row. A present-but-non-
-    // integer value is corruption, not legacy — fail as Invalid rather than
-    // silently downgrading to the V1 digest (which the signature would then
-    // reject with a misleading "signature check did not pass" detail).
-    let signed_at_unix: Option<i64> = match sig_json.get("signed_at") {
-        None => None,
-        Some(v) => match v.as_i64() {
-            Some(t) => Some(t),
-            None => {
-                return Ok(Json(build(
-                    body.proof_id,
-                    Some(row.proof_id),
-                    content_hash,
-                    SnapshotVerifyStatus::Invalid,
-                    "Stored snapshot_sig.signed_at is not an integer.",
-                    Some(snapshot_root_str),
-                    Some(snapshot_index_i as u64),
-                    Some(snapshot_size_i as u64),
-                )))
-            }
-        },
-    };
-
-    let snapshot = CryptoSnapshot {
-        snapshot_root: snapshot_root_str.clone(),
-        snapshot_index: snapshot_index_i as u64,
-        snapshot_size: snapshot_size_i as u64,
-        path_elements_hex,
-        path_indices,
-        signature_r8x: sig_r8x,
-        signature_r8y: sig_r8y,
-        signature_s: sig_s,
-        signed_at_unix,
-    };
+    let signed_at_unix = snapshot.signed_at_unix;
 
     // Trust anchor: try every entry in the trusted-issuer set that grants
     // the `CheckpointAuthority` role (ADR-0041 role separation — e.g. a

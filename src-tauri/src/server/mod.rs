@@ -15,8 +15,8 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::timeout::TimeoutLayer;
 
 use crate::api::{
-    admin, admin_users, checkpoint_bundle, credentials, ingest, keys, ledger, redaction, shards,
-    smt_stats, user_auth, zk,
+    admin, admin_users, checkpoint_bundle, credentials, ingest, keys, ledger, monitor, redaction,
+    shards, smt_stats, user_auth, zk,
 };
 use crate::routes::public_stats;
 use crate::state::AppState;
@@ -310,6 +310,7 @@ fn build_router(state: AppState) -> Router {
         .merge(keys::router())
         .merge(ingest::router())
         .merge(ledger::router())
+        .merge(monitor::router())
         .merge(redaction::router())
         .merge(admin::router())
         .merge(admin_users::router())
@@ -372,6 +373,7 @@ fn build_tor_router(state: AppState) -> Router {
         .route("/v1/public/stats", get(public_stats::get_public_stats))
         .merge(zk::public_router())
         .merge(ledger::public_router())
+        .merge(monitor::public_router())
         .merge(credentials::public_router())
         .merge(ingest::public_router())
         .merge(crate::federation::api::tor_router())

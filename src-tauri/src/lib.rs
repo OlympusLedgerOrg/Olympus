@@ -7,6 +7,7 @@ pub(crate) mod env;
 pub mod federation;
 pub mod ingest_provenance;
 pub mod integrity;
+pub mod mmd;
 pub mod quorum;
 pub mod routes;
 pub mod server;
