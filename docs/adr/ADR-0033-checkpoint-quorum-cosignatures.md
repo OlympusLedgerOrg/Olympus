@@ -139,19 +139,25 @@ checkpoint analogue of `federation::cosign`:
   gate a peer would blindly co-sign any `(chain_id, epoch, root)` triple a
   requester cared to ask for.
 - **`collect_and_store_checkpoint_quorum`** — the gossip loop's per-round
-  entry point, called from `federation::gossip::sync_round` after this node's
-  checkpoint has been *attempted* to push to every trusted peer (so, for any
-  peer the push actually reached, its synchronous `receive_checkpoint`
-  handler has already verified-and-stored it before collection asks for a
-  co-signature; a peer the push missed just rejects this round's request and
-  the next round tries again). Self-signs first, collects remaining
-  co-signatures up to the pinned threshold, and is a no-op (not an error)
-  when: there is no gossipable checkpoint yet, fewer than two pinned signers
-  (no trusted peers — a 1-of-1 "quorum" would be a self-satisfied no-op not
-  worth persisting every round), the configured threshold exceeds the signer
-  set (mathematically unsatisfiable — skipped and logged rather than pinned,
-  so a later signer-set change gets a fresh attempt), or the checkpoint's
-  quorum is already satisfied by previously-collected signatures.
+  entry point, called from `federation::gossip::sync_round` with the exact
+  `own_checkpoints` row `id` that round's push loop just *attempted* to push
+  to every trusted peer (so, for any peer the push actually reached, its
+  synchronous `receive_checkpoint` handler has already verified-and-stored it
+  before collection asks for a co-signature; a peer the push missed just
+  rejects this round's request and the next round tries again). The
+  collector fetches that row **by id** (`own_checkpoint::fetch_by_id`) rather
+  than independently re-deriving "latest gossipable" — closing issue #1633:
+  the anchor cron is an independent producer, and re-deriving "latest" a
+  second time could, in the window between the push loop and this call, pick
+  up a newer row no peer has actually received yet. Self-signs first,
+  collects remaining co-signatures up to the pinned threshold, and is a
+  no-op (not an error) when: the id no longer resolves to a row, fewer than
+  two pinned signers (no trusted peers — a 1-of-1 "quorum" would be a
+  self-satisfied no-op not worth persisting every round), the configured
+  threshold exceeds the signer set (mathematically unsatisfiable — skipped
+  and logged rather than pinned, so a later signer-set change gets a fresh
+  attempt), or the checkpoint's quorum is already satisfied by
+  previously-collected signatures.
 
 The signer set is sourced from `quorum::trusted_signer_set` (the trusted-peer
 registry), and the threshold from `OLYMPUS_CHECKPOINT_QUORUM_THRESHOLD`

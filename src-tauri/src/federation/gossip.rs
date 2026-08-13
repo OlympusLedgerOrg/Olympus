@@ -120,7 +120,7 @@ async fn sync_round(
 
     for p in &peers {
         // Push our checkpoint to the peer.
-        if let Some(ref cp) = own_checkpoint {
+        if let Some((ref cp, _)) = own_checkpoint {
             if let Err(e) = push_checkpoint(client, &p.onion_address, cp).await {
                 tracing::debug!("federation: push to {} failed: {e}", p.onion_address);
             }
@@ -166,9 +166,21 @@ async fn sync_round(
     // unlike a single peer's push/pull failure (routine, expected), a
     // whole-function collection failure (DB error, corrupt pinned state) is
     // not something the retry-next-round loop self-heals on its own.
-    if own_checkpoint.is_some() {
+    //
+    // Issue #1633: pass the exact row `id` the push loop just attempted
+    // delivery for, rather than letting the collector independently re-query
+    // "latest gossipable". The anchor cron is an independent producer — if it
+    // inserts a newer row in the window between the push loop above and this
+    // call, an identity-less re-query would target a checkpoint no peer has
+    // actually received yet. Collecting by this exact id is unaffected by
+    // that race: it always targets what was just pushed.
+    if let Some((_, checkpoint_id)) = own_checkpoint {
         if let Err(e) = super::checkpoint_cosign::collect_and_store_checkpoint_quorum(
-            pool, bjj_key, bjj_pubkey, client,
+            pool,
+            bjj_key,
+            bjj_pubkey,
+            client,
+            checkpoint_id,
         )
         .await
         {

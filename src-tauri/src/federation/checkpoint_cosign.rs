@@ -20,18 +20,21 @@
 //!     `(chain_id, epoch, root)` triple a requester cared to ask for.
 //!
 //!   * [`collect_and_store_checkpoint_quorum`] — the per-round entry point the
-//!     gossip loop calls after attempting to push this node's checkpoint to
-//!     every trusted peer (so, for any peer the push reached, an honest
-//!     peer's synchronous `receive_checkpoint` handler has already verified-
-//!     and-stored it before collection asks it for a co-signature — see
-//!     [`super::verify::verify_and_store`]; a peer the push failed to reach
-//!     just rejects this round's request and the next round tries again).
-//!     Self-signs first (that signature both authenticates the request and
-//!     is one of the quorum signers), collects remaining co-signatures from
-//!     trusted peers up to the pinned threshold, pins `(threshold, signers)`
-//!     on the `own_checkpoints` row on the **first attempt** (not the first
-//!     time the threshold is met — see the function doc for why), and
-//!     persists every collected signature.
+//!     gossip loop calls, by row id, after attempting to push that exact
+//!     checkpoint to every trusted peer (so, for any peer the push reached,
+//!     an honest peer's synchronous `receive_checkpoint` handler has already
+//!     verified-and-stored it before collection asks it for a co-signature —
+//!     see [`super::verify::verify_and_store`]; a peer the push failed to
+//!     reach just rejects this round's request and the next round tries
+//!     again). Taking the id as a parameter rather than re-deriving "latest
+//!     gossipable" internally is what keeps this immune to the anchor cron
+//!     inserting a newer row mid-round (issue #1633). Self-signs first (that
+//!     signature both authenticates the request and is one of the quorum
+//!     signers), collects remaining co-signatures from trusted peers up to
+//!     the pinned threshold, pins `(threshold, signers)` on the
+//!     `own_checkpoints` row on the **first attempt** (not the first time
+//!     the threshold is met — see the function doc for why), and persists
+//!     every collected signature.
 //!
 //! The endpoint requires NO API key — same posture as `/federation/cosign` and
 //! `/federation/checkpoint`: peer-facing, authenticated cryptographically by
@@ -396,15 +399,25 @@ async fn request_checkpoint_cosign(
 }
 
 /// Per-round entry point: collect and pin checkpoint-quorum co-signatures for
-/// this node's latest gossipable checkpoint.
+/// the checkpoint identified by `checkpoint_id`.
 ///
-/// Called by the gossip loop after attempting to push our checkpoint to every
-/// trusted peer, so for any peer that push reached, its synchronous
-/// `receive_checkpoint` handler has already verified-and-stored it by the
-/// time this asks for a co-signature (see the module doc). No-ops (not an
-/// error) when: there is no gossipable checkpoint yet, there are fewer than
-/// two pinned signers (no trusted peers — a 1-of-1 "quorum" would be a
-/// self-satisfied no-op not worth persisting), the configured threshold
+/// Called by the gossip loop with the exact row `id` its push loop just
+/// attempted delivery for (issue #1633) — NOT re-derived by independently
+/// querying "latest gossipable" here. The anchor cron is an independent
+/// producer: if it inserted a newer gossipable row in the window between the
+/// push loop and this call, an identity-less re-query would target a
+/// checkpoint no peer has actually received yet, so every peer would reject
+/// the co-sign request at the independent-verification gate while this
+/// function still pinned that (unpushed) row's quorum parameters. Fetching
+/// by the exact pushed id sidesteps the race entirely rather than needing to
+/// detect and recover from it.
+///
+/// For any peer the push loop's delivery attempt reached, its synchronous
+/// `receive_checkpoint` handler has already verified-and-stored this exact
+/// checkpoint by the time this asks for a co-signature (see the module doc).
+/// No-ops (not an error) when: the id no longer resolves to a row, there are
+/// fewer than two pinned signers (no trusted peers — a 1-of-1 "quorum" would
+/// be a self-satisfied no-op not worth persisting), the configured threshold
 /// exceeds the signer set (mathematically unsatisfiable — logged, not
 /// pinned, so a later signer-set change gets a fresh attempt instead of a
 /// permanently-stuck pin), or the checkpoint's quorum is already satisfied
@@ -424,8 +437,10 @@ pub async fn collect_and_store_checkpoint_quorum(
     bjj_key: &[u8; 32],
     bjj_pubkey: &BabyJubJubPubKey,
     client: &super::tor::TorHttpClient,
+    checkpoint_id: uuid::Uuid,
 ) -> Result<(), String> {
-    let Some(row) = crate::anchoring::own_checkpoint::fetch_latest_gossipable(pool).await? else {
+    let Some(row) = crate::anchoring::own_checkpoint::fetch_by_id(pool, checkpoint_id).await?
+    else {
         return Ok(());
     };
     let Some(authority_pubkey_hash) = row.authority_pubkey_hash.as_deref() else {

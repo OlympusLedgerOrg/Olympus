@@ -158,7 +158,11 @@ pub fn peer_matches_authority_hash(peer: &super::peer::PeerNode, authority_hash:
 /// PR E unifies: the always-built `anchoring::own_checkpoint::build_and_persist`
 /// (driven by the anchor cron) is the sole producer. Federation reads
 /// the latest row whose Groth16 proof + BJJ signature are both present
-/// and wraps it as a `PeerCheckpoint` for the wire.
+/// and wraps it as a `PeerCheckpoint` for the wire, alongside the source
+/// row's `id` — callers that go on to request checkpoint-quorum
+/// co-signatures for this exact envelope (issue #1633) need that identity
+/// rather than re-deriving "latest gossipable" a second time, which could
+/// by then point at a different row the anchor cron has since inserted.
 ///
 /// Returns `None` if (a) the database has no row in `own_checkpoints`
 /// yet — typical on a fresh node before the cron has ticked, or in a
@@ -173,10 +177,17 @@ pub async fn build_own_checkpoint(
     bjj_key: &[u8; 32],
     bjj_pubkey: &crate::zk::witness::baby_jubjub::BabyJubJubPubKey,
     proofs_dir: Option<&std::path::Path>,
-) -> Result<Option<PeerCheckpoint>, String> {
+) -> Result<Option<(PeerCheckpoint, Uuid)>, String> {
     let Some(row) = crate::anchoring::own_checkpoint::fetch_latest_gossipable(pool).await? else {
         return Ok(None);
     };
+    // Captured before the row's other fields are moved out below. Issue
+    // #1633: callers that go on to request checkpoint-quorum co-signatures
+    // for this exact envelope need its row identity, not just its content —
+    // `collect_and_store_checkpoint_quorum` fetches by this id rather than
+    // re-querying "latest gossipable" a second time, which could by then
+    // point at a different (unpushed) row.
+    let checkpoint_id = row.id;
 
     // The gossipable predicate guarantees the four sig fields and the
     // proof are present; unwrap defensively.
@@ -229,23 +240,26 @@ pub async fn build_own_checkpoint(
         .shard_id
         .ok_or_else(|| "v2 own checkpoint missing shard_id".to_owned())?;
 
-    Ok(Some(PeerCheckpoint {
-        wire_version: PeerCheckpoint::current_version(),
-        checkpoint_scope,
-        shard_id,
-        ledger_root: row.ledger_root,
-        tree_size: row.tree_size,
-        checkpoint_timestamp: row.checkpoint_timestamp,
-        authority_pubkey_hash,
-        groth16_proof,
-        public_signals,
-        bjj_signature: Some(BjjSignatureWire {
-            r8x: sig_r8x,
-            r8y: sig_r8y,
-            s: sig_s,
-        }),
-        append_transition,
-    }))
+    Ok(Some((
+        PeerCheckpoint {
+            wire_version: PeerCheckpoint::current_version(),
+            checkpoint_scope,
+            shard_id,
+            ledger_root: row.ledger_root,
+            tree_size: row.tree_size,
+            checkpoint_timestamp: row.checkpoint_timestamp,
+            authority_pubkey_hash,
+            groth16_proof,
+            public_signals,
+            bjj_signature: Some(BjjSignatureWire {
+                r8x: sig_r8x,
+                r8y: sig_r8y,
+                s: sig_s,
+            }),
+            append_transition,
+        },
+        checkpoint_id,
+    )))
 }
 
 /// Submit a checkpoint to every configured external anchor (RFC 3161 / Rekor
