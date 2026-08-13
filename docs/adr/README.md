@@ -36,6 +36,7 @@ are valid history; new ADRs use the `ADR-NNNN-` form.
 | [ADR-0041](ADR-0041-role-separated-trust-list-rotation.md)             | Role-separated trust-list rotation, quorum enforcement, and signer activation      | Proposed (2026-07-21)                                        |
 | [ADR-0042](ADR-0042-realm-identity-authority-epochs.md)                | Realm identity and authority epochs                                                | Proposed (2026-07-21; revised 2026-07-23)                    |
 | [ADR-0043](ADR-0043-local-secret-storage-and-recovery.md)              | Local secret storage and recovery — OS-keychain-first with encrypted-blob fallback | Proposed (2026-08-11; research/design only)                  |
+| [ADR-0044](ADR-0044-smt-root-attestation.md)                           | BLAKE3 CD-HS-ST SMT root attestation                                               | Accepted, implemented (2026-08-13)                            |
 
 When adding an ADR: pick the next unused number, use the `ADR-NNNN-slug.md`
 naming form, include a Status line near the top, and add a row here in the

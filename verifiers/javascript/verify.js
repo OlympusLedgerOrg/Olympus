@@ -266,7 +266,11 @@ function validateBundleEncoding(bundle) {
   if (smtRoot.scheme !== "BLAKE3-CD-HS-ST-root + BabyJubJub-EdDSA") {
     throw new Error(`unsupported SMT root attestation scheme: ${JSON.stringify(smtRoot.scheme)}`);
   }
-  requireLowerHex(smtRoot.blake3_smt_root_hex, "bundle.smt_root_attestation.blake3_smt_root_hex", 64);
+  requireLowerHex(
+    smtRoot.blake3_smt_root_hex,
+    "bundle.smt_root_attestation.blake3_smt_root_hex",
+    64,
+  );
   requireCanonicalFr(smtRootSig.r8x, "bundle.smt_root_attestation.signature.r8x");
   requireCanonicalFr(smtRootSig.r8y, "bundle.smt_root_attestation.signature.r8y");
   requireCanonicalUnsignedDecimal(
@@ -472,7 +476,10 @@ async function verifySmtRootAttestation(block, checkpoint, pubkey) {
   );
   const message = bigEndianBigInt(digest) % BABYJUBJUB_SUBGROUP_ORDER;
   if (message.toString() !== block.message) {
-    return { ok: false, detail: "SMT root attestation message does not match reconstructed digest" };
+    return {
+      ok: false,
+      detail: "SMT root attestation message does not match reconstructed digest",
+    };
   }
   const eddsa = await buildEddsa();
   const A = [eddsa.F.e(BigInt(pubkey.x)), eddsa.F.e(BigInt(pubkey.y))];
@@ -600,7 +607,9 @@ async function main() {
     console.error(`FAIL [5/6 SMT root attestation]: ${smtRootCheck.detail}`);
     process.exit(1);
   }
-  console.log(`OK   [5/6 SMT root attestation] BLAKE3 CD-HS-ST subtree root reconstructed + signed`);
+  console.log(
+    `OK   [5/6 SMT root attestation] BLAKE3 CD-HS-ST subtree root reconstructed + signed`,
+  );
 
   // ── Check 6: bind Groth16 public signals to the checkpoint, then print the
   //             Rust groth16 invocation ────────────────────────────────────
