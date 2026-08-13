@@ -323,11 +323,27 @@ pub(crate) fn pdf_object_type_name(body: &[u8]) -> PdfObjectType {
             b'(' | b')' | b'<' | b'>' | b'[' | b']' | b'{' | b'}' | b'/' | b'%'
         )
     }
-    fn skip_ws(b: &[u8], mut i: usize) -> usize {
-        while i < b.len() && is_ws(b[i]) {
-            i += 1;
+    /// Index of the next token byte, skipping whitespace AND `%` comments.
+    ///
+    /// Comments are legal anywhere a token may appear, including between a key
+    /// and its value inside a dictionary. Skipping whitespace only (the former
+    /// behaviour of this helper) left the walk pointing at the `%`, where
+    /// [`skip_value`]'s fallback arm consumed a single byte and resumed INSIDE
+    /// the comment text — so comment bytes were parsed as dictionary structure.
+    /// The sibling tokenizers in `pdf_objects.rs` and `segment/pdf_xref.rs`
+    /// have always skipped comments here; this one was the outlier.
+    fn skip_ws_comments(b: &[u8], mut i: usize) -> usize {
+        loop {
+            while i < b.len() && is_ws(b[i]) {
+                i += 1;
+            }
+            if b.get(i) != Some(&b'%') {
+                return i;
+            }
+            while i < b.len() && !matches!(b[i], b'\r' | b'\n') {
+                i += 1;
+            }
         }
-        i
     }
     /// Index just past a name token whose `/` is at `i-1` (i.e. `i` points at the
     /// first name char). Runs until whitespace or a delimiter.
@@ -426,7 +442,7 @@ pub(crate) fn pdf_object_type_name(body: &[u8]) -> PdfObjectType {
     /// Index just past ONE dictionary value object beginning at `i`. `None` when
     /// the value nests past [`MAX_PDF_DICT_DEPTH`].
     fn skip_value(b: &[u8], i: usize) -> Option<usize> {
-        let i = skip_ws(b, i);
+        let i = skip_ws_comments(b, i);
         if i >= b.len() {
             return Some(i);
         }
@@ -454,10 +470,10 @@ pub(crate) fn pdf_object_type_name(body: &[u8]) -> PdfObjectType {
                     i
                 };
                 let e = num(b, i);
-                let g = skip_ws(b, e);
+                let g = skip_ws_comments(b, e);
                 if g < b.len() && b[g].is_ascii_digit() {
                     let g2 = num(b, g);
-                    let r = skip_ws(b, g2);
+                    let r = skip_ws_comments(b, g2);
                     if b.get(r) == Some(&b'R')
                         && (r + 1 >= b.len() || is_ws(b[r + 1]) || is_delim(b[r + 1]))
                     {
@@ -491,7 +507,7 @@ pub(crate) fn pdf_object_type_name(body: &[u8]) -> PdfObjectType {
     };
     let mut i = open;
     loop {
-        i = skip_ws(body, i);
+        i = skip_ws_comments(body, i);
         if i >= body.len() {
             return PdfObjectType::Absent;
         }
@@ -507,7 +523,7 @@ pub(crate) fn pdf_object_type_name(body: &[u8]) -> PdfObjectType {
                 let ks = i + 1;
                 let ke = name_end(body, ks);
                 if decode_pdf_name(&body[ks..ke]).as_deref() == Some(b"Type") {
-                    let vi = skip_ws(body, ke);
+                    let vi = skip_ws_comments(body, ke);
                     if vi < body.len() && body[vi] == b'/' {
                         let vs = vi + 1;
                         return match decode_pdf_name(&body[vs..name_end(body, vs)]) {
@@ -1151,5 +1167,63 @@ mod tests {
         }
         assert_eq!(variable_depth_fold_root(&leaves).unwrap(), level[0]);
         assert_eq!(variable_geometry(1024), (10, 1024));
+    }
+
+    /// `pdf_object_type_name`'s doc comment claims a `/Type` inside "a literal
+    /// string, a hex string, a comment ... is skipped by `skip_value` / never
+    /// reached". Comments in KEY position are handled by the walk loop's `%`
+    /// arm, but `skip_value` calls `skip_ws`, which skips whitespace ONLY — so
+    /// a comment in VALUE position is not skipped, and the walk resumes INSIDE
+    /// the comment body.
+    #[test]
+    fn type_inside_a_value_position_comment_is_not_read_as_the_object_type() {
+        // Control: the same dict with the comment removed is genuinely Absent.
+        let no_comment = b"<< /Foo 1 /Bar 2 >>";
+        assert_eq!(pdf_object_type_name(no_comment), PdfObjectType::Absent);
+
+        // Control: a comment in KEY position is skipped correctly (the `%` arm).
+        let key_position = b"<< %/Type /Page\n /Foo 1 >>";
+        assert_eq!(pdf_object_type_name(key_position), PdfObjectType::Absent);
+
+        // The claim under test: `/Type /Page` appears ONLY inside a comment that
+        // sits where a value is expected. Per the doc comment it must not be
+        // reached.
+        let value_position = b"<< /Foo %/Type /Page\n 1 /Bar 2 >>";
+        assert_eq!(
+            pdf_object_type_name(value_position),
+            PdfObjectType::Absent,
+            "a /Type inside a value-position comment was read as the object's type"
+        );
+    }
+
+    /// The dangerous direction of the same defect. A GENUINE `/Page` object
+    /// whose dictionary contains a comment in value position *before* `/Type`
+    /// derails the walk inside the comment body, so the real `/Type /Page` is
+    /// never reached and the object reports `Absent`.
+    ///
+    /// `pdf_structural_object_type` maps `Absent` to `None` = "not structural",
+    /// which lets a redaction through on a real page object — the exact
+    /// artifact-corrupting outcome that gate documents itself as preventing.
+    #[test]
+    fn a_real_page_object_with_a_comment_is_still_refused_as_structural() {
+        // Control: without the comment the gate correctly refuses.
+        let plain = b"<< /Foo 1 /Type /Page >>";
+        assert_eq!(
+            pdf_object_type_name(plain),
+            PdfObjectType::Named(b"Page".to_vec())
+        );
+        assert_eq!(
+            pdf_structural_object_type(plain),
+            Some("Page — a whole page")
+        );
+
+        // Same object, with a comment sitting in value position before /Type.
+        let with_comment = b"<< /Foo %note\n 1 /Type /Page >>";
+        assert_eq!(
+            pdf_structural_object_type(with_comment),
+            Some("Page — a whole page"),
+            "a real /Page object was not recognised as structural, so redaction \
+             would be allowed on it"
+        );
     }
 }
