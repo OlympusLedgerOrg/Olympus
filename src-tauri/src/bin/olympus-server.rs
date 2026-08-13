@@ -170,7 +170,7 @@ async fn main() {
         app_state.redaction_blind_secret = state::resolve_redaction_blind_secret(
             state::secret_bytes(&app_state.bjj_authority_key),
         );
-        // Blind-secret rotation registry (migration 0058, docs/key-rotation.md):
+        // Blind-secret rotation registry (migration 0059, docs/key-rotation.md):
         // mirrors main.rs. Gated on the same literal `OLYMPUS_ENV=production`/
         // `prod` this binary already refuses to start under (see the exit(2)
         // guard above) — NOT `env::is_production`'s fail-closed-on-unset

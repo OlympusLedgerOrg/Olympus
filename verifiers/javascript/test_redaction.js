@@ -1110,7 +1110,10 @@ function verifyV3(bundle, crypto, issuerPubkey, format, opts = {}) {
   const th = tableHash(segs);
   const payload = signingPayload(bundle.original_root, format, n, bundle.recipient_id, th);
   const sig = hexToBuf(bundle.signature_hex);
-  if (!ed25519.verify(sig, payload, issuerPubkey)) throw new Error("Ed25519 signature invalid");
+  // Strict RFC 8032 acceptance (`zip215: false`) to match the Rust side's
+  // `verify_strict` — the @noble/curves default is cofactored/ZIP-215.
+  if (!ed25519.verify(sig, payload, issuerPubkey, { zip215: false }))
+    throw new Error("Ed25519 signature invalid");
 
   const rootRaw = hexToBuf(bundle.original_root);
   const nf = nullifier(rootRaw, th, bundle.recipient_id);
@@ -1326,7 +1329,8 @@ async function main() {
       "byte_dump payload",
     );
     assert.ok(
-      ed25519.verify(hexToBuf(bd.signature_hex), payload, issuerPubkey),
+      // Strict RFC 8032 acceptance (`zip215: false`) to match Rust `verify_strict`.
+      ed25519.verify(hexToBuf(bd.signature_hex), payload, issuerPubkey, { zip215: false }),
       "byte_dump signature",
     );
     const nf = nullifier(hexToBuf(bd.original_root), th, bd.recipient_id);

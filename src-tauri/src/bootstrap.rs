@@ -715,7 +715,7 @@ fn blind_secret_rotation_confirmed() -> bool {
 
 /// Reconcile the resolved redaction-blind-secret's fingerprint
 /// (`state::fingerprint_redaction_blind_secret`) against the registry
-/// (migration 0058), superseding the active row if the fingerprint changed
+/// (migration 0059), superseding the active row if the fingerprint changed
 /// **and** the operator opted in with `OLYMPUS_BLIND_SECRET_ROTATION=confirm`.
 ///
 /// Unlike [`ensure_ingest_signing_key`], a fingerprint change here IS gated —
@@ -747,7 +747,7 @@ fn blind_secret_rotation_confirmed() -> bool {
 /// Holds `pg_advisory_xact_lock` across the whole read-then-branch, same
 /// reasoning as [`ensure_ingest_signing_key`]: a bare SELECT-then-INSERT
 /// would let two concurrent callers both observe "no active row" and race the
-/// migration-0058 partial unique index.
+/// migration-0059 partial unique index.
 pub async fn ensure_redaction_blind_secret_fingerprint(
     pool: &PgPool,
     fingerprint_hex: &str,

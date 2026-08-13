@@ -208,7 +208,7 @@ like the BJJ key it defaults to being derived from.
 
 Unlike the ingest signing key above, a change here is not silently adopted. At startup, if a pool
 is available and `OLYMPUS_ENV=production`, `bootstrap::ensure_redaction_blind_secret_fingerprint`
-(migration `0058`) compares a domain-separated BLAKE3 **fingerprint** of the resolved secret
+(migration `0059`) compares a domain-separated BLAKE3 **fingerprint** of the resolved secret
 against the fingerprint recorded in `account_signing_keys`
 (`purpose = 'redaction_blind_secret'`) for the active row:
 

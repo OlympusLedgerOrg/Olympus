@@ -312,7 +312,7 @@ fn derive_redaction_blind_secret(bjj_authority_key: &[u8; 32]) -> [u8; 32] {
 /// [`resolve_redaction_blind_secret`] value — **not** a way to recover the
 /// secret. Used to detect "did the operator's configured secret change since
 /// last boot" (`bootstrap::ensure_redaction_blind_secret_fingerprint`,
-/// migration 0058) without ever persisting the secret itself, encrypted or
+/// migration 0059) without ever persisting the secret itself, encrypted or
 /// otherwise: the blind secret must remain non-recoverable from anything the
 /// registry stores, unlike the ingest signing key (whose registry stores the
 /// full public verifying key, because it is not a secret).

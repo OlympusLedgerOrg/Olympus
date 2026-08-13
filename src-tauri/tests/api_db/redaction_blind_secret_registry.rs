@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Olympus Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Redaction blind-secret fingerprint registry (migration 0058,
+//! Redaction blind-secret fingerprint registry (migration 0059,
 //! docs/key-rotation.md — follow-up to "Require independent redaction blind
 //! secret in production").
 //!
@@ -14,7 +14,7 @@
 //!
 //! Deliberately ONE `#[tokio::test]`, same reasoning as
 //! `ingest_signing_key_registry.rs`: `ensure_redaction_blind_secret_fingerprint`
-//! enforces a single-active-row invariant (migration 0058's partial unique
+//! enforces a single-active-row invariant (migration 0059's partial unique
 //! index) across the whole shared-cluster database, and `cargo test` runs
 //! every test function in this binary concurrently against that one
 //! cluster. Two test functions each independently driving their own
@@ -155,7 +155,7 @@ async fn ensure_redaction_blind_secret_fingerprint_registers_gates_and_supersede
 
     // Rotate again to C (still confirmed) — the chain must stay append-only
     // across multiple supersessions, and the single-active-row partial
-    // unique index (migration 0058) must never be violated.
+    // unique index (migration 0059) must never be violated.
     {
         let _guard = RotationConfirmGuard::set("confirm");
         let adopted = ensure_redaction_blind_secret_fingerprint(&pool, &fp_c)
