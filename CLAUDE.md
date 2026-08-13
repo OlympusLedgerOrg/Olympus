@@ -128,7 +128,7 @@ Key files:
 - `src-tauri/src/quorum/` — M-of-N quorum signer set + domain-separated co-sign digest + offline verifier (always compiled, not feature-gated); see `docs/federation-quorum-credentials.md`
 - `src-tauri/src/api/middleware/auth.rs` — `AuthenticatedKey`, `RateLimit`, `derive_api_key_from_bjj`, SBT-driven scope resolver
 - `src-tauri/src/state.rs` — `AppState` (pool, BJJ keys, `proofs_dir`, …)
-- `src-tauri/src/federation/` — Tor hidden service + checkpoint gossip + quorum co-sign (`cosign.rs`) (feature-gated)
+- `src-tauri/src/federation/` — Tor hidden service + checkpoint gossip + quorum co-sign for SBT credentials (`cosign.rs`, `OLY:SBT:QUORUM:V2`) and for checkpoint roots (`checkpoint_cosign.rs`, `OLY:CHECKPOINT:QUORUM:V2`, ADR-0033) (feature-gated)
 - `src-tauri/src/anchoring/` — external anchors (RFC 3161 / Sigstore Rekor / OpenTimestamps); see `docs/court-evidence.md`
 - `src-tauri/src/bin/export_ark_zkey.rs` — snarkjs `.zkey` → arkworks `.ark.zkey`
 - `src-tauri/src/bin/generate_manifest.rs` — writes per-circuit signed ceremony manifest (audit CEREMONY_INTEGRITY.md)

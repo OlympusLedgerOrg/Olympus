@@ -41,6 +41,7 @@
 
 pub mod api;
 pub mod checkpoint;
+pub mod checkpoint_cosign;
 pub mod cosign;
 pub mod equivocation;
 pub mod gossip;

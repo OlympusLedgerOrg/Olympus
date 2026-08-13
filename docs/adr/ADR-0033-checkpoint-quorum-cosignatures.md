@@ -1,10 +1,12 @@
 # ADR-0033: Checkpoint-quorum co-signatures (`OLY:CHECKPOINT:QUORUM:V2`)
 
-- **Status:** **Accepted; amended in implementation — 2026-06-16.** The live
+- **Status:** Accepted; implemented — 2026-08-13. The live
   helper/verifier/signing primitive and persistence format are implemented in
   `src-tauri/src/quorum/checkpoint.rs` as V2. V2 binds `chain_id` + epoch in
   addition to the checkpoint root. The earlier V1 root-only format had no
-  producer and minted no live signatures.
+  producer and minted no live signatures. The producer (peer co-sign
+  collection over Tor) landed in `src-tauri/src/federation/checkpoint_cosign.rs`
+  — see "Producer — implemented" below.
 - **Builds on:**
   - ADR-0032 (retire witness-over-root) — chose to provide institutional root
     co-signing by reusing the SBT-quorum primitive under a new domain tag rather
@@ -121,12 +123,67 @@ tampered signature, threshold downgrade, and the zero-threshold invariant.
 - The scheme is disjoint from, and does not replace, the single-signer checkpoint
   signature; a node can carry both.
 
-## Remaining producer work
+## Producer — implemented
 
-- **Producer.** Co-sign real `own_checkpoints` roots and collect peer
-  co-signatures over Tor (the checkpoint analogue of `federation::cosign`), with
-  the signer set sourced from the trusted-peer registry and the threshold from an
-  env default (clamped `≥ 1`) with a per-checkpoint override — mirroring
-  `OLYMPUS_FEDERATION_QUORUM_THRESHOLD`. Persist the collected signatures with the
-  pinned signer set + threshold for reproducible offline verification using the
-  table from migration `0048_checkpoint_quorum_signatures.sql`.
+`src-tauri/src/federation/checkpoint_cosign.rs` (feature `federation`) is the
+checkpoint analogue of `federation::cosign`:
+
+- **`checkpoint_cosign`** — the Tor-exposed `POST /federation/checkpoint-cosign`
+  endpoint. Authenticates the requester as a trusted peer via its own quorum
+  signature over the checkpoint-quorum message (mirroring the SBT co-sign
+  path), then — the one property this protocol needs beyond the credential
+  path, since there is no local computation that independently recomputes a
+  `ledger_root` — requires that this node has **already independently
+  received and verified** a matching checkpoint from that exact requester via
+  ordinary gossip pull (`peer_checkpoints`, `verified = TRUE`). Without this
+  gate a peer would blindly co-sign any `(chain_id, epoch, root)` triple a
+  requester cared to ask for.
+- **`collect_and_store_checkpoint_quorum`** — the gossip loop's per-round
+  entry point, called from `federation::gossip::sync_round` after this node's
+  checkpoint has been *attempted* to push to every trusted peer (so, for any
+  peer the push actually reached, its synchronous `receive_checkpoint`
+  handler has already verified-and-stored it before collection asks for a
+  co-signature; a peer the push missed just rejects this round's request and
+  the next round tries again). Self-signs first, collects remaining
+  co-signatures up to the pinned threshold, and is a no-op (not an error)
+  when: there is no gossipable checkpoint yet, fewer than two pinned signers
+  (no trusted peers — a 1-of-1 "quorum" would be a self-satisfied no-op not
+  worth persisting every round), the configured threshold exceeds the signer
+  set (mathematically unsatisfiable — skipped and logged rather than pinned,
+  so a later signer-set change gets a fresh attempt), or the checkpoint's
+  quorum is already satisfied by previously-collected signatures.
+
+The signer set is sourced from `quorum::trusted_signer_set` (the trusted-peer
+registry), and the threshold from `OLYMPUS_CHECKPOINT_QUORUM_THRESHOLD`
+(clamped `≥ 1`, defaulting to `1`) — a dedicated env var, distinct from
+`OLYMPUS_FEDERATION_QUORUM_THRESHOLD` (which scopes SBT credential quorums),
+so an operator can run different M-of-N policies for the two. Migration
+`0061_own_checkpoints_quorum_params.sql` adds `checkpoint_quorum_threshold` /
+`checkpoint_quorum_signers` to `own_checkpoints`, pinned **once**, on the
+**first attempt** (not the first time the threshold is *met* — see below),
+via `own_checkpoint::set_checkpoint_quorum_params`'s one-shot `WHERE
+checkpoint_quorum_threshold IS NULL` guard — so a later env change or
+trusted-peer-list edit cannot silently re-scope an already-pinned
+checkpoint's quorum out from under its stored signatures. Collected
+signatures persist via `store_checkpoint_quorum_signatures` (migration
+`0048_checkpoint_quorum_signatures.sql`), giving reproducible offline
+verification against the pinned `(threshold, signer-set)` on the row.
+
+**Why pin on first attempt, not first success.** Pinning is what lets
+signatures accumulate *across* gossip rounds against the same signed
+message: a later round reuses the pinned `(threshold, signers)` instead of
+recomputing fresh ones (which could legitimately drift if a peer is
+added/removed between rounds — `checkpoint_quorum_message` binds both into
+the signed digest, so a different signer set is a different message).
+Deferring the pin until the threshold is met would mean every unsatisfied
+round signs a *different* message, so nothing collected in an earlier round
+would ever count toward a later one — the checkpoint could never accumulate
+its way to quorum at all. The one real failure mode this trades in — a
+threshold pinned above the live signer count — is closed separately, above:
+that specific case is refused before it is ever pinned.
+
+Deliberately **not** implemented here: a per-checkpoint threshold override
+(the credential path's `quorum_threshold` request field has no checkpoint
+analogue, since checkpoints are produced by the cron/gossip loop, not a
+per-call API request) — the env default is the only lever. A future revision
+can add one if an operational need for it appears.

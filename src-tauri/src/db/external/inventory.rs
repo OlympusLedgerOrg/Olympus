@@ -38,15 +38,20 @@ use sqlx::postgres::PgConnection;
 ///   columns to `own_checkpoints` (`blake3_smt_root`, `blake3_smt_sig_r8x`,
 ///   `blake3_smt_sig_r8y`, `blake3_smt_sig_s`) — 676 inventory rows before,
 ///   680 after.
+/// - `0061_own_checkpoints_quorum_params` (ADR-0033 producer) adds two
+///   nullable columns to `own_checkpoints` (`checkpoint_quorum_threshold`,
+///   `checkpoint_quorum_signers`) plus the guarded
+///   `ck_own_checkpoints_quorum_threshold_positive` CHECK constraint — 680
+///   inventory rows before, 683 after.
 ///
 /// The previous value was
-/// `4be5dfc9570a5f2c0508319d7d9a368137144983b6dd2938c8e6713cc5230a19` (itself
-/// set by `0059_redaction_blind_secret_registry`, 675 -> 676). Regenerated
+/// `4003b21f835994121415146f0d1dca5ae17363f77a145bda0d63e8f70b867407` (itself
+/// set by `0060_own_checkpoints_smt_root_attestation`, 676 -> 680). Regenerated
 /// 2026-08-13 by applying the full migration set against a real PostgreSQL
 /// 16.13 database and running `regen_semantic_inventory_digest` — see the
 /// ignored maintenance test below.
 const EXTERNAL_PG_SEMANTIC_INVENTORY_BLAKE3: &str =
-    "4003b21f835994121415146f0d1dca5ae17363f77a145bda0d63e8f70b867407";
+    "d552c8ced722cec672e1c71ad698c12b3aeaeaa8298d643eab708349aaeb0572";
 
 #[derive(Clone, Debug, PartialEq, Eq, sqlx::FromRow)]
 pub(super) struct ExternalPgTrustedBoundaryProbe {
