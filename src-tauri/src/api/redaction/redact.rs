@@ -45,11 +45,7 @@ pub(crate) async fn redact_redaction(
     // content_hash = BLAKE3 of the raw bytes. It resolves the manifest and keys
     // the per-segment blinding derivation, but is NOT shipped in the V3 bundle
     // (SR-DEC-1 — it was a whole-document confirmation oracle).
-    // `derive_blinding_decimal` takes the same raw 32-byte digest the ingest
-    // segmenters used and reveals only the selected segment's opening.
-    let content_digest = blake3::hash(&original);
-    let content_hash = content_digest.to_hex().to_string();
-    let content_hash_raw = content_digest.as_bytes();
+    let content_hash = blake3::hash(&original).to_hex().to_string();
 
     let manifest = load_object_manifest(
         &state,
@@ -64,11 +60,41 @@ pub(crate) async fn redact_redaction(
     let redacted_set: HashSet<u32> = body.redacted_obj_ids.iter().copied().collect();
     validate_redaction_selection(&manifest, &redacted_set)?;
 
+    perform_redaction(
+        &state,
+        &original,
+        &manifest,
+        &redacted_set,
+        &body.recipient_id,
+    )
+    .await
+}
+
+/// The shared core of `POST /redaction/redact` and the ADR-0037
+/// `commit_redaction` step: apply the committed format's redaction transform
+/// and assemble + sign the V3 bundle bound to it.
+///
+/// Callers own selection validation (`validate_redaction_selection` and, for
+/// the staged flow, the staging table's warning/version checks) — this
+/// function assumes `redacted_set` is already a validated, non-empty,
+/// non-total subset of `manifest`'s segments.
+pub(crate) async fn perform_redaction(
+    state: &AppState,
+    original: &[u8],
+    manifest: &crate::zk::segment::SegmentManifest,
+    redacted_set: &HashSet<u32>,
+    recipient_id: &str,
+) -> Result<Json<RedactionRedactResponse>, ApiError> {
+    let content_digest = blake3::hash(original);
+    let content_hash = content_digest.to_hex().to_string();
+    let content_hash_raw = content_digest.as_bytes();
+
+    let redacted_obj_ids: Vec<u32> = redacted_set.iter().copied().collect();
+
     // Apply the committed format's redaction transform and capture each segment's
     // byte span in the produced artifact (ADR-0030 §2a).
-    let (artifact, spans) =
-        apply_redaction_with_spans(&original, &manifest, &body.redacted_obj_ids)
-            .map_err(|e| err(StatusCode::UNPROCESSABLE_ENTITY, &format!("redact: {e}")))?;
+    let (artifact, spans) = apply_redaction_with_spans(original, manifest, &redacted_obj_ids)
+        .map_err(|e| err(StatusCode::UNPROCESSABLE_ENTITY, &format!("redact: {e}")))?;
     let span_by_id: std::collections::HashMap<u32, (u64, u64)> = spans
         .iter()
         .map(|s| (s.segment_id, (s.artifact_offset, s.artifact_length)))
@@ -125,7 +151,7 @@ pub(crate) async fn redact_redaction(
         });
     }
 
-    let recipient_id = body.recipient_id.trim().to_string();
+    let recipient_id = recipient_id.trim().to_string();
     let bundle = bundle_v3::assemble_and_sign(
         &manifest.original_root_hex,
         manifest.format.as_tag(),

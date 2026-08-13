@@ -14,7 +14,13 @@ pub mod pedersen;
 // variable-depth Poseidon commitment the V3 signed-Merkle bundle proves over.
 pub mod pdf_describe;
 pub mod pdf_objects;
+// ADR-0037's coordinate contract: `pdf_placement`'s user-space rects normalized
+// into one stable, rotation-applied, zero-based-page frame for object selection.
+pub(crate) mod pdf_page_objects;
 pub mod pdf_placement;
+// ADR-0037's backend-derived warnings ("dangerous object relationships") for
+// the object redaction staging flow.
+pub(crate) mod pdf_redaction_warnings;
 pub(crate) mod pdf_syntax;
 pub mod poseidon;
 pub mod proof;

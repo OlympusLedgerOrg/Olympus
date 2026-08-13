@@ -199,6 +199,30 @@ impl RedactionStagingTable {
         Ok(StagedRedaction { staging_id, entry })
     }
 
+    /// The `object_ids` of a still-`Pending` staging entry, with **no**
+    /// expiry, version, or warning validation — just enough to know what to
+    /// recompute warnings for before calling [`Self::prepare_commit`], which
+    /// performs the real checks. Callers MUST still call `prepare_commit`
+    /// (with the warnings this makes possible to compute) before treating the
+    /// selection as authorized; this alone proves nothing.
+    pub fn peek_pending_object_ids(
+        &self,
+        doc_id: &str,
+        staging_id: &str,
+    ) -> Result<Vec<String>, RedactionError> {
+        let records = self.records.lock();
+        match records.get(staging_id) {
+            Some(StagingRecord::Pending(entry)) if entry.doc_id == doc_id => {
+                Ok(entry.object_ids.clone())
+            }
+            Some(StagingRecord::Pending(_)) => Err(RedactionError::StagingNotFound),
+            Some(StagingRecord::Consumed(consumed)) if consumed.doc_id == doc_id => {
+                Err(RedactionError::StagingAlreadyConsumed)
+            }
+            Some(StagingRecord::Consumed(_)) | None => Err(RedactionError::StagingNotFound),
+        }
+    }
+
     pub fn prepare_commit(
         &self,
         doc_id: &str,

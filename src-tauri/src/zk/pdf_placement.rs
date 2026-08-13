@@ -34,7 +34,7 @@ use serde::Serialize;
 
 use crate::zk::pdf_syntax::{
     decoded_stream, dict_region, find_top_level, is_delim, is_ws, name_after, reals_after,
-    refs_after, CONTENT_INFLATE_CAP,
+    refs_after, signed_int_after, CONTENT_INFLATE_CAP,
 };
 
 /// Deepest form-XObject nesting followed. Forms can legally nest; a cyclic or
@@ -139,7 +139,7 @@ fn transform_rect(rect: [f32; 4], m: Matrix, page: u32) -> Option<Placement> {
 ///
 /// Returns the slice **including** the outer `<<`/`>>` so the result can be fed
 /// straight back in for the next level of nesting.
-fn dict_value<'a>(
+pub(crate) fn dict_value<'a>(
     region: &'a [u8],
     key: &[u8],
     regions: &BTreeMap<u32, &'a [u8]>,
@@ -200,7 +200,7 @@ fn dict_value<'a>(
 
 /// The `/Name → object id` entries at the top level of an XObject dictionary
 /// (`<< /Im0 6 0 R /Fm1 7 0 R >>`).
-fn name_to_ref(region: &[u8]) -> HashMap<Vec<u8>, u32> {
+pub(crate) fn name_to_ref(region: &[u8]) -> HashMap<Vec<u8>, u32> {
     let mut out = HashMap::new();
     let mut depth = 0i32;
     let mut i = 0;
@@ -235,7 +235,11 @@ fn name_to_ref(region: &[u8]) -> HashMap<Vec<u8>, u32> {
 
 /// A page's `/MediaBox`, inheriting through the `/Parent` chain as the PDF spec
 /// requires (most real documents declare it once on the root `/Pages`).
-fn media_box(page_id: u32, dicts: &BTreeMap<u32, &[u8]>) -> Option<[f32; 4]> {
+///
+/// Returned as `[x0, y0, width, height]` — the lower-left corner plus extent, so
+/// a caller that needs page-relative coordinates (ADR-0037's coordinate
+/// contract) can subtract the origin without re-deriving it.
+pub(crate) fn media_box(page_id: u32, dicts: &BTreeMap<u32, &[u8]>) -> Option<[f32; 4]> {
     let mut id = page_id;
     let mut seen = HashSet::new();
     for _ in 0..MAX_PARENT_DEPTH {
@@ -255,6 +259,41 @@ fn media_box(page_id: u32, dicts: &BTreeMap<u32, &[u8]>) -> Option<[f32; 4]> {
         id = *refs_after(dict, b"/Parent").first()?;
     }
     None
+}
+
+/// A page's `/Rotate`, inheriting through the `/Parent` chain exactly as
+/// `/MediaBox` does, normalized to one of `0 | 90 | 180 | 270`.
+///
+/// `/Rotate` is "the number of degrees by which the page shall be rotated
+/// **clockwise** when displayed" and must be a multiple of 90. Negative and
+/// out-of-range multiples are legal in the wild, so reduce modulo 360 into the
+/// positive range. A value that is *not* a multiple of 90 is malformed; treat it
+/// as absent (`0`) rather than guessing a quarter turn.
+///
+/// Absent everywhere in the chain is `0` — the spec's own default — so this
+/// returns a plain `u32`, not an `Option`.
+pub(crate) fn page_rotate(page_id: u32, dicts: &BTreeMap<u32, &[u8]>) -> u32 {
+    let mut id = page_id;
+    let mut seen = HashSet::new();
+    for _ in 0..MAX_PARENT_DEPTH {
+        if !seen.insert(id) {
+            return 0; // cyclic /Parent chain
+        }
+        let Some(dict) = dicts.get(&id) else {
+            return 0;
+        };
+        if let Some(degrees) = signed_int_after(dict, b"/Rotate") {
+            if degrees % 90 != 0 {
+                return 0; // malformed — do not guess a quarter turn
+            }
+            return degrees.rem_euclid(360) as u32;
+        }
+        let Some(&parent) = refs_after(dict, b"/Parent").first() else {
+            return 0;
+        };
+        id = parent;
+    }
+    0
 }
 
 // ── content-stream walking ────────────────────────────────────────────────────
