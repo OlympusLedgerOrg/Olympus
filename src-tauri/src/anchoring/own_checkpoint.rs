@@ -856,15 +856,17 @@ async fn fetch_existing_for_snapshot(
 }
 
 /// Pin the M-of-N checkpoint-quorum parameters a row was co-signed under
-/// (ADR-0033 "Remaining producer work"). One-shot: the `WHERE
+/// (ADR-0033 "Producer — implemented"). One-shot: the `WHERE
 /// checkpoint_quorum_threshold IS NULL` guard means a checkpoint's `(M, N)`
-/// is set exactly once, at first successful collection — a later env-var
+/// is set exactly once, on the first *viable* collection attempt (not the
+/// first time threshold is satisfied) — see the ADR's "Why pin on first
+/// attempt, not first success" section: reusing the pinned set is what lets
+/// signatures accumulate across gossip rounds, since `checkpoint_quorum_message`
+/// binds threshold + signer set into the signed digest, so a later env-var
 /// change or trusted-peer-list edit cannot silently re-scope an
-/// already-pinned checkpoint's quorum out from under its stored signatures
-/// (the same rationale [`checkpoint_quorum_message`](crate::quorum::checkpoint::checkpoint_quorum_message)
-/// binds threshold + signer set into the signed digest for). Returns the
-/// number of rows updated (0 if the row was already pinned or doesn't
-/// exist) so the caller can tell "pinned now" from "already pinned".
+/// already-pinned checkpoint's quorum out from under its stored signatures.
+/// Returns the number of rows updated (0 if the row was already pinned or
+/// doesn't exist) so the caller can tell "pinned now" from "already pinned".
 pub async fn set_checkpoint_quorum_params(
     pool: &PgPool,
     checkpoint_id: Uuid,
