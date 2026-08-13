@@ -466,7 +466,22 @@ pub async fn collect_and_store_checkpoint_quorum(
                 .map_err(|e| format!("pinned checkpoint_quorum_signers is corrupt: {e}"))?,
         ),
         _ => {
-            let threshold = crate::quorum::checkpoint::configured_checkpoint_threshold();
+            // ADR-0033 per-shard checkpoint-quorum threshold override: a shard
+            // with `shards.checkpoint_quorum_threshold_override` set pins that
+            // value instead of the env default on this — the checkpoint's
+            // first, unpinned — collection attempt. `None` (no `shard_id` on
+            // the row, an unregistered shard, or no override set) falls back
+            // to the env default, matching this function's existing
+            // no-op-on-missing-data posture rather than erroring.
+            let override_threshold = match row.shard_id.as_deref() {
+                Some(shard_id) => {
+                    crate::api::shards::checkpoint_quorum_threshold_override(pool, shard_id)
+                        .await
+                        .map_err(|e| format!("load shard quorum override: {e}"))?
+                }
+                None => None,
+            };
+            let threshold = resolve_checkpoint_quorum_threshold(override_threshold);
             let signers = quorum::trusted_signer_set(pool, bjj_pubkey)
                 .await
                 .map_err(|e| format!("trusted signer set: {e}"))?;
@@ -532,6 +547,15 @@ pub async fn collect_and_store_checkpoint_quorum(
         .await
         .map_err(|e| format!("store checkpoint quorum signatures: {e}"))?;
     Ok(())
+}
+
+/// Resolve the checkpoint-quorum threshold for a fresh (unpinned) collection
+/// attempt: the shard's ADR-0033 override if one is set, else the env
+/// default (`configured_checkpoint_threshold`). Pulled out as a pure
+/// function so the "override wins, `None` falls back to the env default"
+/// contract is unit-testable without a DB.
+fn resolve_checkpoint_quorum_threshold(shard_override: Option<u32>) -> u32 {
+    shard_override.unwrap_or_else(crate::quorum::checkpoint::configured_checkpoint_threshold)
 }
 
 fn parse_pubkey(x: &str, y: &str) -> Option<BabyJubJubPubKey> {
@@ -609,5 +633,28 @@ mod tests {
         let via_wire = checkpoint_quorum_message(&reparsed_chain, 42, &reparsed_root, 2, &signers);
 
         assert_eq!(direct, via_wire);
+    }
+
+    // ── ADR-0033 per-shard checkpoint-quorum threshold override ────────────
+
+    #[test]
+    fn resolve_checkpoint_quorum_threshold_prefers_override_over_env_default() {
+        // Independent of whatever OLYMPUS_CHECKPOINT_QUORUM_THRESHOLD is set
+        // to in this process (never mutated here — env vars are process-wide
+        // and this binary's tests run concurrently): an explicit shard
+        // override must always win.
+        assert_eq!(resolve_checkpoint_quorum_threshold(Some(5)), 5);
+        assert_eq!(resolve_checkpoint_quorum_threshold(Some(1)), 1);
+    }
+
+    #[test]
+    fn resolve_checkpoint_quorum_threshold_falls_back_to_env_default_when_unset() {
+        // `None` (no override set) must delegate to configured_checkpoint_threshold
+        // rather than hardcoding a value of its own — this is what keeps the
+        // existing env-only behaviour unchanged for shards with no override.
+        assert_eq!(
+            resolve_checkpoint_quorum_threshold(None),
+            crate::quorum::checkpoint::configured_checkpoint_threshold()
+        );
     }
 }
