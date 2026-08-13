@@ -570,10 +570,7 @@ async function main() {
   // checkpoint is a verification failure (exit 1).
   const signals = bundle.groth16.public_signals;
   if (!Array.isArray(signals) || signals.length !== 3) {
-    die(
-      2,
-      "bundle.groth16.public_signals must be a 3-element [root, leafIndex, treeSize] array",
-    );
+    die(2, "bundle.groth16.public_signals must be a 3-element [root, leafIndex, treeSize] array");
   }
   let signalRoot;
   let signalTreeSize;
@@ -606,9 +603,7 @@ async function main() {
     );
     process.exit(1);
   }
-  console.log(
-    "OK   [5a/5 Groth16 binding] public signals bound to checkpoint (root + tree_size)",
-  );
+  console.log("OK   [5a/5 Groth16 binding] public signals bound to checkpoint (root + tree_size)");
 
   // Writing the snapshot files lets the operator run the cargo command verbatim.
   const tmpDir = fs.mkdtempSync(path.join(require("os").tmpdir(), "olympus-bundle-"));
