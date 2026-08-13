@@ -6,6 +6,45 @@ All notable changes to the Olympus protocol are documented in this file.
 
 ### Added
 
+- **ADR-0021 Monitor API + Maximum Merge Delay policy, implemented.**
+  Of ADR-0021's four CT-inspired operational controls, witness cosigning
+  (ADR-0033) and gossip/equivocation detection (`federation::gossip`) were
+  already implemented under later ADRs; this closes the remaining two:
+  - New unauthenticated (rate-limited only) `src-tauri/src/api/monitor/`
+    surface, mounted on both the loopback listener and, under the
+    `federation` feature, the Tor-facing listener:
+    - `GET /monitor/checkpoints` / `GET /monitor/checkpoints/latest` — recent
+      / latest signed `own_checkpoints` rows for a shard (a CT
+      get-sth/get-sth-history equivalent), with every field needed to
+      independently recompute and check the checkpoint's BJJ/Ed25519
+      signatures.
+    - `GET /monitor/proof/{content_hash}` — the raw, offline-verifiable
+      Poseidon ledger-snapshot inclusion witness for a committed record (a
+      get-proof-by-hash equivalent), reusing the exact parse/lookup
+      `POST /ingest/proofs/verify` already used server-side (factored into
+      the new `api::ingest::snapshot_evidence`) so the two endpoints can
+      never disagree about what a stored witness means.
+    - `GET /monitor/mmd/{content_hash}` — Maximum Merge Delay status: how
+      long after ingest a record's first covering signed checkpoint
+      appeared (or has been waiting, if none yet), classified against the
+      new `OLYMPUS_MMD_SECONDS` policy (default 24h,
+      `src-tauri/src/mmd.rs`) as `covered_within_policy` /
+      `covered_late_breach` / `pending_within_policy` / `pending_breach`.
+      The covering checkpoint half of this is signed and independently
+      verifiable; the ingest-timestamp half (`ingest_records.ts`) is an
+      unsigned server column, so the endpoint is a server-reported policy
+      classification and audit signal, not a non-repudiable proof — see the
+      module doc comment and ADR-0021 for the full reasoning.
+  - **Known, documented limitation**: the proof/MMD endpoints serve
+    inclusion witnesses against the Poseidon ledger-snapshot tree (the tree
+    `own_checkpoints` actually signs), not the separate BLAKE3 CD-HS-ST
+    parser-bound SMT ADR-0003/0004/0005 describe as the canonical per-leaf
+    commitment — nothing in this codebase signs that tree's root today. See
+    ADR-0021's "Known limitation" section.
+  - `docs/adr/ADR-0021-smt-with-ct-operational-hardening.md` updated from
+    "Proposed (scaffold)" to "Accepted; implemented", cross-linking
+    ADR-0032/ADR-0033 and the federation gossip module for the two pieces
+    that were already done.
 - **Redaction blind-secret rotation registry (key-rotation series, part 4.6).**
   Follow-up to making `OLYMPUS_REDACTION_BLIND_SECRET` mandatory-and-independent
   in production: rotating that secret (accidentally or otherwise) previously had

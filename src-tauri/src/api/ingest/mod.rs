@@ -29,6 +29,11 @@ use crate::state::AppState;
 mod files;
 mod proof_verify;
 mod read;
+/// `pub(crate)` (not just module-private) so `api::monitor::proof` (ADR-0021
+/// Monitor API) can reuse the exact same stored-snapshot row-fetch and JSON
+/// parsing this module's own `proof_verify` uses, instead of maintaining a
+/// second copy that could drift from `files::snapshot`'s producer shape.
+pub(crate) mod snapshot_evidence;
 mod zk_bundle;
 
 use files::ingest_file;
