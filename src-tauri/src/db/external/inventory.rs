@@ -21,8 +21,8 @@ use sqlx::postgres::PgConnection;
 /// which is why the pinned value did not change with the query hardening.
 ///
 /// Regenerated for the merged migration set ending in
-/// `0059_redaction_blind_secret_registry`, applied on top of
-/// `0058_peer_checkpoints_v3_indexes`:
+/// `0060_own_checkpoints_smt_root_attestation`, applied on top of
+/// `0059_redaction_blind_secret_registry`:
 ///
 /// - `0058_peer_checkpoints_v3_indexes` drops the three `wire_version = 2`
 ///   partial indexes on `peer_checkpoints` (`peer_checkpoints_v2_statement_unique`,
@@ -34,15 +34,19 @@ use sqlx::postgres::PgConnection;
 ///   single-active-redaction-blind-secret partial index
 ///   (`purpose = 'redaction_blind_secret'`, docs/key-rotation.md — redaction
 ///   blind-secret rotation registry) — 675 inventory rows before, 676 after.
+/// - `0060_own_checkpoints_smt_root_attestation` (ADR-0044) adds four nullable
+///   columns to `own_checkpoints` (`blake3_smt_root`, `blake3_smt_sig_r8x`,
+///   `blake3_smt_sig_r8y`, `blake3_smt_sig_s`) — 676 inventory rows before,
+///   680 after.
 ///
 /// The previous value was
-/// `09cf92379bc8ff74e67e9489c7cd3f4d8a6940b2240b12ff4186fc9a03cf77a5` (itself
-/// set by `0057_ingest_signing_key_registry`, 674 -> 675). Regenerated
+/// `4be5dfc9570a5f2c0508319d7d9a368137144983b6dd2938c8e6713cc5230a19` (itself
+/// set by `0059_redaction_blind_secret_registry`, 675 -> 676). Regenerated
 /// 2026-08-13 by applying the full migration set against a real PostgreSQL
 /// 16.13 database and running `regen_semantic_inventory_digest` — see the
 /// ignored maintenance test below.
 const EXTERNAL_PG_SEMANTIC_INVENTORY_BLAKE3: &str =
-    "4be5dfc9570a5f2c0508319d7d9a368137144983b6dd2938c8e6713cc5230a19";
+    "4003b21f835994121415146f0d1dca5ae17363f77a145bda0d63e8f70b867407";
 
 #[derive(Clone, Debug, PartialEq, Eq, sqlx::FromRow)]
 pub(super) struct ExternalPgTrustedBoundaryProbe {

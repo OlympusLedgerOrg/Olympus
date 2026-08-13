@@ -135,6 +135,16 @@ pub const SBT_COMMIT_BIND_PREFIX: &[u8] = b"OLY:SBT:COMMIT:V1";
 /// role cannot be replayed in another. See ADR-0031 §1.
 pub const SNAPSHOT_PERSIST_PREFIX: &[u8] = b"OLY:SNAPSHOT:PERSIST:V1";
 
+/// Domain prefix for the BLAKE3 CD-HS-ST SMT root attestation.
+///
+/// Signs the relation "for `shard_id`, at the ledger snapshot `(ledger_root,
+/// tree_size)`, the shard's BLAKE3 parser-bound SMT subtree root is
+/// `blake3_smt_root`". Binding the Poseidon `ledger_root`/`tree_size` into this
+/// digest ties the attestation to one specific checkpoint instant, so it cannot
+/// be replayed against a different snapshot. Disjoint from `SNAPSHOT_PERSIST_PREFIX`
+/// and every other domain prefix in this crate. See ADR-0044.
+pub const SMT_ROOT_ATTEST_PREFIX: &[u8] = b"OLY:SMT:ROOT:V1";
+
 /// Encode `data` with a 4-byte big-endian length prefix.
 ///
 /// Panics if `data.len()` exceeds `u32::MAX`, matching the prior behavior in
@@ -339,6 +349,63 @@ impl TransitionAttestation {
     /// The 32-byte BLAKE3 digest to sign (before reduction mod l).
     pub fn message(&self) -> [u8; 32] {
         persist_message(&self.original_root, &self.snapshot_root, self.snapshot_size)
+    }
+}
+
+/// Digest signed by an [`SmtRootAttestation`].
+///
+/// ```text
+/// BLAKE3(
+///     SMT_ROOT_ATTEST_PREFIX ||
+///     lp(shard_id) || lp(ledger_root) ||
+///     lp(tree_size as u64 big-endian) || lp(blake3_smt_root)
+/// )
+/// ```
+///
+/// `lp` is [`length_prefixed`]. `ledger_root` is the Poseidon snapshot root the
+/// same checkpoint already signs (see [`persist_message`]); folding it and
+/// `tree_size` in here is what ties the two attestations to the same instant.
+/// See ADR-0044.
+pub fn smt_root_attest_message(
+    shard_id: &[u8],
+    ledger_root: &[u8; 32],
+    tree_size: i64,
+    blake3_smt_root: &[u8; 32],
+) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(SMT_ROOT_ATTEST_PREFIX);
+    hasher.update(&length_prefixed(shard_id));
+    hasher.update(&length_prefixed(ledger_root));
+    hasher.update(&length_prefixed(&(tree_size as u64).to_be_bytes()));
+    hasher.update(&length_prefixed(blake3_smt_root));
+    *hasher.finalize().as_bytes()
+}
+
+/// The joint statement a checkpoint witnesses about the BLAKE3 CD-HS-ST SMT:
+/// at ledger snapshot `(ledger_root, tree_size)` for `shard_id`, the shard's
+/// BLAKE3 subtree root is `blake3_smt_root`.
+///
+/// The signature (BJJ-EdDSA over [`Self::message`] reduced mod l, the same
+/// recipe [`TransitionAttestation`] uses) is attached by the caller in
+/// `src-tauri`; this type only binds the data and the signing digest. See
+/// ADR-0044.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SmtRootAttestation {
+    pub shard_id: Vec<u8>,
+    pub ledger_root: [u8; 32],
+    pub tree_size: i64,
+    pub blake3_smt_root: [u8; 32],
+}
+
+impl SmtRootAttestation {
+    /// The 32-byte BLAKE3 digest to sign (before reduction mod l).
+    pub fn message(&self) -> [u8; 32] {
+        smt_root_attest_message(
+            &self.shard_id,
+            &self.ledger_root,
+            self.tree_size,
+            &self.blake3_smt_root,
+        )
     }
 }
 
@@ -640,6 +707,131 @@ mod tests {
         assert_eq!(
             att.message(),
             persist_message(&att.original_root, &att.snapshot_root, att.snapshot_size)
+        );
+    }
+
+    // ── smt_root_attest_message / SmtRootAttestation (ADR-0044) ──────────────
+
+    #[test]
+    fn smt_root_attest_message_is_deterministic_golden_vector() {
+        // Cross-impl conformance anchor: the Rust/JS verifiers must reproduce
+        // this exact digest. Do not change without updating every verifier.
+        let shard_id = b"files".as_slice();
+        let ledger_root = [0x33u8; 32];
+        let tree_size: i64 = 9;
+        let blake3_smt_root = [0x44u8; 32];
+        let m = smt_root_attest_message(shard_id, &ledger_root, tree_size, &blake3_smt_root);
+        assert_eq!(
+            m,
+            smt_root_attest_message(shard_id, &ledger_root, tree_size, &blake3_smt_root),
+            "must be deterministic"
+        );
+        assert_eq!(
+            hex_lower(&m),
+            "41c42858816b0938b8f3d6530988a5c48f5609b8e5ff9a8c6dd3fe94d3a76a33"
+        );
+    }
+
+    #[test]
+    fn smt_root_attest_message_prefix_participates() {
+        let shard_id = b"files".as_slice();
+        let ledger_root = [0x33u8; 32];
+        let tree_size: i64 = 9;
+        let blake3_smt_root = [0x44u8; 32];
+        // Same framed body without the domain prefix must differ.
+        let without_prefix = {
+            let mut h = blake3::Hasher::new();
+            h.update(&length_prefixed(shard_id));
+            h.update(&length_prefixed(&ledger_root));
+            h.update(&length_prefixed(&(tree_size as u64).to_be_bytes()));
+            h.update(&length_prefixed(&blake3_smt_root));
+            *h.finalize().as_bytes()
+        };
+        assert_ne!(
+            smt_root_attest_message(shard_id, &ledger_root, tree_size, &blake3_smt_root),
+            without_prefix
+        );
+        // And it must not collide with a SNAPSHOT_PERSIST-prefixed digest over
+        // the same-shaped framed body.
+        let persist_prefixed = {
+            let mut h = blake3::Hasher::new();
+            h.update(SNAPSHOT_PERSIST_PREFIX);
+            h.update(&length_prefixed(shard_id));
+            h.update(&length_prefixed(&ledger_root));
+            h.update(&length_prefixed(&(tree_size as u64).to_be_bytes()));
+            h.update(&length_prefixed(&blake3_smt_root));
+            *h.finalize().as_bytes()
+        };
+        assert_ne!(
+            smt_root_attest_message(shard_id, &ledger_root, tree_size, &blake3_smt_root),
+            persist_prefixed
+        );
+    }
+
+    #[test]
+    fn smt_root_attest_message_field_sensitivity() {
+        let shard_id = b"files".as_slice();
+        let ledger_root = [0x33u8; 32];
+        let tree_size: i64 = 9;
+        let blake3_smt_root = [0x44u8; 32];
+        let base = smt_root_attest_message(shard_id, &ledger_root, tree_size, &blake3_smt_root);
+
+        assert_ne!(
+            base,
+            smt_root_attest_message(b"other", &ledger_root, tree_size, &blake3_smt_root),
+            "shard_id matters"
+        );
+
+        let mut ledger_root2 = ledger_root;
+        ledger_root2[0] ^= 0x01;
+        assert_ne!(
+            base,
+            smt_root_attest_message(shard_id, &ledger_root2, tree_size, &blake3_smt_root),
+            "ledger_root matters"
+        );
+
+        assert_ne!(
+            base,
+            smt_root_attest_message(shard_id, &ledger_root, tree_size + 1, &blake3_smt_root),
+            "tree_size matters"
+        );
+
+        let mut blake3_root2 = blake3_smt_root;
+        blake3_root2[31] ^= 0x01;
+        assert_ne!(
+            base,
+            smt_root_attest_message(shard_id, &ledger_root, tree_size, &blake3_root2),
+            "blake3_smt_root matters"
+        );
+    }
+
+    #[test]
+    fn smt_root_attest_message_size_is_folded_as_big_endian_u64() {
+        let shard_id = b"files".as_slice();
+        let ledger_root = [0x33u8; 32];
+        let blake3_smt_root = [0x44u8; 32];
+        assert_ne!(
+            smt_root_attest_message(shard_id, &ledger_root, 1, &blake3_smt_root),
+            smt_root_attest_message(shard_id, &ledger_root, -1, &blake3_smt_root)
+        );
+    }
+
+    #[test]
+    fn smt_root_attestation_message_matches_smt_root_attest_message() {
+        let att = SmtRootAttestation {
+            shard_id: b"files".to_vec(),
+            ledger_root: [0xccu8; 32],
+            tree_size: 3,
+            blake3_smt_root: [0xddu8; 32],
+        };
+        assert_eq!(
+            att.message(),
+            smt_root_attest_message(
+                &att.shard_id,
+                &att.ledger_root,
+                att.tree_size,
+                &att.blake3_smt_root
+            )
         );
     }
 

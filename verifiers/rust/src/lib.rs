@@ -25,6 +25,10 @@ pub mod empty_root;
 /// the `OLY:SNAPSHOT:PERSIST:V1` signing digest.
 pub mod transition;
 
+/// ADR-0044 BLAKE3 CD-HS-ST SMT root attestations — independent re-derivation
+/// of the `OLY:SMT:ROOT:V1` signing digest.
+pub mod smt_root;
+
 /// Baby Jubjub EdDSA-Poseidon signature verification, so the signed digests
 /// this crate re-derives can also be authenticated rather than trusted.
 pub mod eddsa;

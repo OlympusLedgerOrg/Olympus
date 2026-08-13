@@ -18,6 +18,15 @@
 //! builds whenever `OLYMPUS_ANCHOR_*` env vars are configured. The
 //! federation feature only controls whether the row is then gossiped
 //! over Tor.
+//!
+//! ADR-0044: the same row also BJJ-signs the shard's BLAKE3 CD-HS-ST
+//! parser-bound SMT subtree root (`olympus_crypto::SmtRootAttestation`),
+//! bound to this checkpoint's `(ledger_root, tree_size)` so it cannot be
+//! replayed against a different snapshot. This is a second, independent
+//! attestation alongside the Poseidon `TransitionAttestation` above — until
+//! now nothing signed or anchored the BLAKE3 tree's root, so a
+//! `PersistentSmt::prove` witness had no signed statement to verify
+//! against.
 
 use std::path::Path;
 
@@ -26,6 +35,7 @@ use ark_ff::{BigInteger, PrimeField};
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use crate::smt::{PersistentSmt, PgBackend};
 use crate::zk::witness::baby_jubjub::BabyJubJubPubKey;
 
 /// One persisted row in `own_checkpoints`. The cron's anchor pipeline
@@ -70,6 +80,12 @@ pub struct OwnCheckpointRow {
     pub transition_sig_r8x: Option<String>,
     pub transition_sig_r8y: Option<String>,
     pub transition_sig_s: Option<String>,
+    // ADR-0044 / migration 0060: BJJ-signed attestation of the shard's BLAKE3
+    // CD-HS-ST SMT subtree root at this checkpoint's (ledger_root, tree_size).
+    pub blake3_smt_root: Option<String>,
+    pub blake3_smt_sig_r8x: Option<String>,
+    pub blake3_smt_sig_r8y: Option<String>,
+    pub blake3_smt_sig_s: Option<String>,
 }
 
 /// Resolve the Ed25519 signing key from the same env var precedence
@@ -302,6 +318,39 @@ pub async fn build_and_persist(
         None => (None, None, None, None, None, None),
     };
 
+    // 4d. ADR-0044: bind a signed SmtRootAttestation for the shard's BLAKE3
+    //     CD-HS-ST SMT subtree root to this same checkpoint. Read the current
+    //     durable subtree root for `snap.shard_id` and sign it jointly with
+    //     the already-committed Poseidon `(ledger_root, tree_size)`, so the
+    //     two attestations describe the same instant and neither can be
+    //     replayed against a different snapshot. The signing-bytes domain
+    //     (`OLY:SMT:ROOT:V1`) lives in `olympus-crypto`, so every offline
+    //     verifier recomputes the same digest.
+    let (blake3_smt_root, blake3_smt_sig_r8x, blake3_smt_sig_r8y, blake3_smt_sig_s) = match bjj_key
+    {
+        Some(key) => {
+            let smt = PersistentSmt::open_deferred(PgBackend::new(pool.clone()));
+            let subtree_root = smt
+                .shard_subtree_root(&snap.shard_id)
+                .await
+                .map_err(|e| format!("read BLAKE3 SMT shard subtree root: {e}"))?;
+            let attestation = olympus_crypto::SmtRootAttestation {
+                shard_id: snap.shard_id.as_bytes().to_vec(),
+                ledger_root: hex_to_bytes32(&snap.snapshot_root)?,
+                tree_size: snap.snapshot_size,
+                blake3_smt_root: subtree_root,
+            };
+            let (r8x, r8y, s) = sign_smt_root(key, &attestation)?;
+            (
+                Some(hex::encode(subtree_root)),
+                Some(r8x),
+                Some(r8y),
+                Some(s),
+            )
+        }
+        None => (None, None, None, None),
+    };
+
     // 5. Insert. UUID generated in Rust so the return value carries it
     //    without a second round-trip.
     //
@@ -329,9 +378,11 @@ pub async fn build_and_persist(
              anchor_hash, groth16_proof, public_signals,
              ed25519_pubkey_hex, ed25519_signature_hex,
              transition_original_root, transition_leaf, transition_path, transition_sig_r8x,
-             transition_sig_r8y, transition_sig_s, dedup_enforced)
+             transition_sig_r8y, transition_sig_s,
+             blake3_smt_root, blake3_smt_sig_r8x, blake3_smt_sig_r8y, blake3_smt_sig_s,
+             dedup_enforced)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-                 $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, TRUE)
+                 $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, TRUE)
          ON CONFLICT (format_version, checkpoint_scope, shard_id, ledger_root, tree_size)
          WHERE dedup_enforced IS TRUE
          DO NOTHING",
@@ -360,6 +411,10 @@ pub async fn build_and_persist(
     .bind(transition_sig_r8x.as_deref())
     .bind(transition_sig_r8y.as_deref())
     .bind(transition_sig_s.as_deref())
+    .bind(blake3_smt_root.as_deref())
+    .bind(blake3_smt_sig_r8x.as_deref())
+    .bind(blake3_smt_sig_r8y.as_deref())
+    .bind(blake3_smt_sig_s.as_deref())
     .execute(pool)
     .await
     .map_err(|e| format!("insert own_checkpoints: {e}"))?;
@@ -420,6 +475,10 @@ pub async fn build_and_persist(
         transition_sig_r8x,
         transition_sig_r8y,
         transition_sig_s,
+        blake3_smt_root,
+        blake3_smt_sig_r8x,
+        blake3_smt_sig_r8y,
+        blake3_smt_sig_s,
     }))
 }
 
@@ -436,7 +495,8 @@ pub async fn fetch_by_id(pool: &PgPool, id: Uuid) -> Result<Option<OwnCheckpoint
                 anchor_hash, groth16_proof, public_signals,
                 ed25519_pubkey_hex, ed25519_signature_hex,
                 transition_original_root, transition_leaf, transition_path, transition_sig_r8x,
-                transition_sig_r8y, transition_sig_s
+                transition_sig_r8y, transition_sig_s,
+                blake3_smt_root, blake3_smt_sig_r8x, blake3_smt_sig_r8y, blake3_smt_sig_s
          FROM own_checkpoints
          WHERE id = $1",
     )
@@ -477,6 +537,11 @@ struct CheckpointDbRow {
     transition_sig_r8x: Option<String>,
     transition_sig_r8y: Option<String>,
     transition_sig_s: Option<String>,
+    // ADR-0044 / migration 0060: signed BLAKE3 SMT root attestation.
+    blake3_smt_root: Option<String>,
+    blake3_smt_sig_r8x: Option<String>,
+    blake3_smt_sig_r8y: Option<String>,
+    blake3_smt_sig_s: Option<String>,
 }
 
 /// Map a raw DB row into an [`OwnCheckpointRow`], enforcing the schema
@@ -542,6 +607,10 @@ fn row_to_own_checkpoint(r: CheckpointDbRow) -> Result<OwnCheckpointRow, String>
         transition_sig_r8x: r.transition_sig_r8x,
         transition_sig_r8y: r.transition_sig_r8y,
         transition_sig_s: r.transition_sig_s,
+        blake3_smt_root: r.blake3_smt_root,
+        blake3_smt_sig_r8x: r.blake3_smt_sig_r8x,
+        blake3_smt_sig_r8y: r.blake3_smt_sig_r8y,
+        blake3_smt_sig_s: r.blake3_smt_sig_s,
     })
 }
 
@@ -561,7 +630,8 @@ pub async fn fetch_latest_gossipable(pool: &PgPool) -> Result<Option<OwnCheckpoi
                 anchor_hash, groth16_proof, public_signals,
                 ed25519_pubkey_hex, ed25519_signature_hex,
                 transition_original_root, transition_leaf, transition_path, transition_sig_r8x,
-                transition_sig_r8y, transition_sig_s
+                transition_sig_r8y, transition_sig_s,
+                blake3_smt_root, blake3_smt_sig_r8x, blake3_smt_sig_r8y, blake3_smt_sig_s
          FROM own_checkpoints
          WHERE groth16_proof IS NOT NULL
            AND format_version = 2
@@ -607,7 +677,8 @@ async fn fetch_existing_for_snapshot(
                 anchor_hash, groth16_proof, public_signals,
                 ed25519_pubkey_hex, ed25519_signature_hex,
                 transition_original_root, transition_leaf, transition_path, transition_sig_r8x,
-                transition_sig_r8y, transition_sig_s
+                transition_sig_r8y, transition_sig_s,
+                blake3_smt_root, blake3_smt_sig_r8x, blake3_smt_sig_r8y, blake3_smt_sig_s
          FROM own_checkpoints
          WHERE format_version = 2
            AND checkpoint_scope = 'shard'
@@ -944,12 +1015,12 @@ fn hex_to_bytes32(h: &str) -> Result<[u8; 32], String> {
         .map_err(|v: Vec<u8>| format!("expected 32-byte root, got {} bytes", v.len()))
 }
 
-/// Reduce the 32-byte transition digest into a BN254 scalar via the "mod l"
-/// recipe shared with SBT-open signing
+/// Reduce a 32-byte attestation digest (transition or SMT-root) into a BN254
+/// scalar via the "mod l" recipe shared with SBT-open signing
 /// (`api::credentials::crypto::digest_jcs_to_subgroup_scalar`): reduce the digest
 /// modulo the BabyJubjub prime-subgroup order `l`, then map into `Fr`. The
 /// BJJ-EdDSA signer/verifier consume this `Fr` as the message scalar.
-fn persist_digest_to_subgroup_scalar(digest: &[u8; 32]) -> Fr {
+fn digest_to_subgroup_scalar(digest: &[u8; 32]) -> Fr {
     // Single source of truth for l (shared with the subgroup guards and the
     // SBT-open reduction) so the two signing-digest reductions can't drift.
     let l: num_bigint::BigUint = crate::zk::witness::baby_jubjub::BABYJ_SUBGROUP_ORDER
@@ -967,9 +1038,26 @@ fn sign_transition(
     bjj_key: &[u8; 32],
     attestation: &olympus_crypto::TransitionAttestation,
 ) -> Result<SigTriple, String> {
-    let msg = persist_digest_to_subgroup_scalar(&attestation.message());
+    let msg = digest_to_subgroup_scalar(&attestation.message());
     let sig = crate::zk::witness::baby_jubjub::sign(bjj_key, msg)
         .map_err(|e| format!("BJJ sign transition: {e}"))?;
+    Ok((
+        fr_to_decimal(&sig.r8x),
+        fr_to_decimal(&sig.r8y),
+        fr_to_decimal(&sig.s),
+    ))
+}
+
+/// BJJ-EdDSA-sign an SMT root attestation's digest (reduced mod l) under the
+/// authority key, returning `(r8x, r8y, s)` as canonical decimal `Fr` strings —
+/// the same encoding the row's other checkpoint signatures use. See ADR-0044.
+fn sign_smt_root(
+    bjj_key: &[u8; 32],
+    attestation: &olympus_crypto::SmtRootAttestation,
+) -> Result<SigTriple, String> {
+    let msg = digest_to_subgroup_scalar(&attestation.message());
+    let sig = crate::zk::witness::baby_jubjub::sign(bjj_key, msg)
+        .map_err(|e| format!("BJJ sign SMT root: {e}"))?;
     Ok((
         fr_to_decimal(&sig.r8x),
         fr_to_decimal(&sig.r8y),
@@ -1030,7 +1118,7 @@ pub fn verify_append_transition(
         snapshot_root: hex_to_bytes32(&current_root_hex)?,
         snapshot_size: current_size,
     };
-    let message = persist_digest_to_subgroup_scalar(&attestation.message());
+    let message = digest_to_subgroup_scalar(&attestation.message());
     let parse_signature_component = |name: &str, value: &str| -> Result<Fr, String> {
         let parsed = crate::zk::proof::parse_fr(value)
             .map_err(|e| format!("parse transition {name}: {e}"))?;
@@ -1048,6 +1136,50 @@ pub fn verify_append_transition(
     };
     if !crate::zk::witness::baby_jubjub::verify_signature(authority, &sig, message) {
         return Err("append transition signature does not verify".to_owned());
+    }
+    Ok(message)
+}
+
+/// Verify a persisted BLAKE3 SMT root attestation and its authority
+/// signature. Rebuilds the digest from the claimed shard/root/checkpoint
+/// fields — never trusting a caller-supplied digest — then authenticates
+/// the BJJ-EdDSA signature over it. Returns the exact message scalar signed,
+/// for bundle export. See ADR-0044.
+pub fn verify_smt_root_attestation(
+    shard_id: &str,
+    ledger_root_hex: &str,
+    tree_size: i64,
+    blake3_smt_root_hex: &str,
+    authority: &BabyJubJubPubKey,
+    signature: (&str, &str, &str),
+) -> Result<Fr, String> {
+    if tree_size <= 0 {
+        return Err("SMT root attestation tree_size must be positive".to_owned());
+    }
+    let attestation = olympus_crypto::SmtRootAttestation {
+        shard_id: shard_id.as_bytes().to_vec(),
+        ledger_root: hex_to_bytes32(ledger_root_hex)?,
+        tree_size,
+        blake3_smt_root: hex_to_bytes32(blake3_smt_root_hex)?,
+    };
+    let message = digest_to_subgroup_scalar(&attestation.message());
+    let parse_signature_component = |name: &str, value: &str| -> Result<Fr, String> {
+        let parsed = crate::zk::proof::parse_fr(value)
+            .map_err(|e| format!("parse smt root attestation {name}: {e}"))?;
+        if fr_to_decimal(&parsed) != value {
+            return Err(format!(
+                "smt root attestation {name} is not a canonical decimal field element"
+            ));
+        }
+        Ok(parsed)
+    };
+    let sig = crate::zk::witness::baby_jubjub::BabyJubJubSignature {
+        r8x: parse_signature_component("r8x", signature.0)?,
+        r8y: parse_signature_component("r8y", signature.1)?,
+        s: parse_signature_component("s", signature.2)?,
+    };
+    if !crate::zk::witness::baby_jubjub::verify_signature(authority, &sig, message) {
+        return Err("SMT root attestation signature does not verify".to_owned());
     }
     Ok(message)
 }

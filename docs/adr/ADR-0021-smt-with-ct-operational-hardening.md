@@ -58,3 +58,17 @@ Olympus does **not** implement RFC-6962 prefix consistency proofs. The SMT-nativ
 - We preserve one global CD-HS-ST data structure and avoid dual-tree operational complexity.
 - Operational trust posture aligns with CT deployment lessons without forcing RFC-6962 semantics onto an SMT.
 - This ADR enables incremental implementation: scaffold interfaces now, production network and witness governance later.
+
+## Update (2026-08-13): the "signed roots" leg is implemented
+
+The "Signed roots" row above assumed the CD-HS-ST (BLAKE3) tree's root would
+actually be signed. In practice, the Monitor API implementation (a separate,
+unmerged PR) found that nothing signed or externally anchored that root —
+only the unrelated Poseidon ledger-snapshot tree was signed — so it could
+only serve proofs against the wrong tree, and documented that as a known
+limitation. ADR-0044 closes this: every own-checkpoint now also BJJ-signs
+the BLAKE3 CD-HS-ST SMT's per-shard subtree root
+(`olympus_crypto::SmtRootAttestation`, domain `OLY:SMT:ROOT:V1`), jointly
+bound to the same `(ledger_root, tree_size)` the Poseidon side signs. This
+unblocks future native BLAKE3 proof serving; it does not itself add a
+proof-serving endpoint — see ADR-0044's "What this does not do (yet)".
