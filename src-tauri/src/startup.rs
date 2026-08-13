@@ -870,6 +870,45 @@ pub(crate) async fn run_server_bringup(
         app_state.redaction_blind_secret = crate::state::resolve_redaction_blind_secret(
             crate::state::secret_bytes(&app_state.bjj_authority_key),
         );
+        // Blind-secret rotation registry (migration 0058,
+        // docs/key-rotation.md): detect a changed
+        // OLYMPUS_REDACTION_BLIND_SECRET fingerprint against
+        // the last one this database recorded. Unlike the
+        // ingest signing key above, a mismatch here is NOT
+        // silently adopted — it is refused unless the operator
+        // opts in with OLYMPUS_BLIND_SECRET_ROTATION=confirm,
+        // because an unnoticed change makes every
+        // previously-redacted object's blinding permanently
+        // unreproducible. `pool` is always `Some` here — this
+        // whole block is inside `bjj_result`, which only exists
+        // when bootstrap ran against a real pool. Production-only:
+        // dev has no such guarantee to lean on and lower stakes.
+        if crate::env::is_production() {
+            if let (Some(pool), Some(secret)) = (
+                app_state.pool.as_ref(),
+                crate::state::secret_bytes(&app_state.redaction_blind_secret),
+            ) {
+                let fingerprint = crate::state::fingerprint_redaction_blind_secret(secret);
+                match crate::bootstrap::ensure_redaction_blind_secret_fingerprint(
+                    pool,
+                    &fingerprint,
+                )
+                .await
+                {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        // Fail closed: discard the mismatched secret so
+                        // object-redaction ingest/issue 503s instead of
+                        // silently producing blindings the registry can't
+                        // account for.
+                        app_state.redaction_blind_secret = None;
+                    }
+                    Err(e) => {
+                        tracing::warn!("bootstrap: redaction blind secret registry: {e}");
+                    }
+                }
+            }
+        }
         // Audit M-3: resolve the full trusted-issuer set
         // (primary bootstrap pubkey + any rotation entries
         // in OLYMPUS_BJJ_TRUSTED_ISSUERS_JSON + the

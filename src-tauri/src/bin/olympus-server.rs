@@ -170,6 +170,39 @@ async fn main() {
         app_state.redaction_blind_secret = state::resolve_redaction_blind_secret(
             state::secret_bytes(&app_state.bjj_authority_key),
         );
+        // Blind-secret rotation registry (migration 0058, docs/key-rotation.md):
+        // mirrors main.rs. Gated on the same literal `OLYMPUS_ENV=production`/
+        // `prod` this binary already refuses to start under (see the exit(2)
+        // guard above) — NOT `env::is_production`'s fail-closed-on-unset
+        // semantics (that helper is crate-private anyway), because unset here
+        // always means "this is the dev/audit-harness binary", never a real
+        // production deployment. Since literal production is refused before
+        // this point, this check is always false in practice; kept for parity
+        // with main.rs if that refusal is ever relaxed.
+        let is_production = std::env::var("OLYMPUS_ENV").is_ok_and(|v| {
+            matches!(
+                v.trim().to_ascii_lowercase().as_str(),
+                "production" | "prod"
+            )
+        });
+        if is_production {
+            if let (Some(pool), Some(secret)) = (
+                app_state.pool.as_ref(),
+                state::secret_bytes(&app_state.redaction_blind_secret),
+            ) {
+                let fingerprint = state::fingerprint_redaction_blind_secret(secret);
+                match bootstrap::ensure_redaction_blind_secret_fingerprint(pool, &fingerprint).await
+                {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        app_state.redaction_blind_secret = None;
+                    }
+                    Err(e) => {
+                        tracing::warn!("bootstrap: redaction blind secret registry: {e}");
+                    }
+                }
+            }
+        }
         app_state.bjj_trusted_issuers =
             api::trusted_issuers::load_trusted_issuers(app_state.bjj_authority_pubkey.as_ref());
 

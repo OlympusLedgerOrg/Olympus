@@ -308,11 +308,77 @@ fn derive_redaction_blind_secret(bjj_authority_key: &[u8; 32]) -> [u8; 32] {
     *hasher.finalize().as_bytes()
 }
 
+/// A 64-char lowercase-hex, domain-separated BLAKE3 fingerprint of a resolved
+/// [`resolve_redaction_blind_secret`] value — **not** a way to recover the
+/// secret. Used to detect "did the operator's configured secret change since
+/// last boot" (`bootstrap::ensure_redaction_blind_secret_fingerprint`,
+/// migration 0058) without ever persisting the secret itself, encrypted or
+/// otherwise: the blind secret must remain non-recoverable from anything the
+/// registry stores, unlike the ingest signing key (whose registry stores the
+/// full public verifying key, because it is not a secret).
+///
+/// Domain-separated from every other BLAKE3 use in this codebase (leaf
+/// hashing, node hashing, the secret's own derivation from the BJJ key above)
+/// so this fingerprint cannot collide with or be confused for any of them.
+pub fn fingerprint_redaction_blind_secret(secret: &[u8; 32]) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"OLY:REDACTION:BLIND-SECRET:FINGERPRINT:V1");
+    hasher.update(secret);
+    hasher.finalize().to_hex().to_string()
+}
+
 #[cfg(test)]
 mod secret_resolution_tests {
     use super::{
-        derive_dev_ingest_key, derive_redaction_blind_secret, resolve_redaction_blind_secret,
+        derive_dev_ingest_key, derive_redaction_blind_secret, fingerprint_redaction_blind_secret,
+        resolve_redaction_blind_secret,
     };
+
+    #[test]
+    fn blind_secret_fingerprint_is_stable_deterministic_and_secret_sensitive() {
+        let a = fingerprint_redaction_blind_secret(&[7u8; 32]);
+        let a_again = fingerprint_redaction_blind_secret(&[7u8; 32]);
+        let b = fingerprint_redaction_blind_secret(&[8u8; 32]);
+
+        assert_eq!(a, a_again, "same secret must fingerprint identically");
+        assert_ne!(a, b, "different secrets must fingerprint differently");
+        assert_eq!(a.len(), 64, "fingerprint must be 64 lowercase-hex chars");
+        assert!(
+            a.chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+            "fingerprint must be lowercase hex: {a}"
+        );
+    }
+
+    #[test]
+    fn blind_secret_fingerprint_never_contains_the_raw_secret() {
+        // The fingerprint is a BLAKE3 digest, so the raw secret bytes cannot
+        // appear verbatim in its hex encoding — this asserts the property
+        // directly rather than trusting the hash function's opacity.
+        let secret = [0xABu8; 32];
+        let raw_hex = hex::encode(secret);
+        let fingerprint = fingerprint_redaction_blind_secret(&secret);
+        assert_ne!(
+            fingerprint, raw_hex,
+            "fingerprint must not equal the raw secret's own hex encoding"
+        );
+        assert!(
+            !fingerprint.contains(&raw_hex),
+            "fingerprint must not embed the raw secret's hex substring"
+        );
+    }
+
+    #[test]
+    fn blind_secret_fingerprint_is_domain_separated_from_its_own_derivation() {
+        // Same input bytes, two different domain-separated BLAKE3 uses in this
+        // module — they must not collide, or a dev-derived secret's own
+        // derivation digest could be mistaken for its fingerprint (or vice
+        // versa) by anything that only checks 64-hex shape.
+        let seed = [3u8; 32];
+        let derived_secret = derive_redaction_blind_secret(&seed);
+        let fingerprint_of_seed = fingerprint_redaction_blind_secret(&seed);
+        assert_ne!(hex::encode(derived_secret), fingerprint_of_seed);
+    }
 
     struct BlindSecretEnvGuard {
         _guard: tokio::sync::MutexGuard<'static, ()>,

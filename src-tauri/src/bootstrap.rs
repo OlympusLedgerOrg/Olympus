@@ -703,6 +703,165 @@ pub async fn ensure_ingest_signing_key(pool: &PgPool, pubkey_hex: &str) -> Resul
     }
 }
 
+/// `OLYMPUS_BLIND_SECRET_ROTATION=confirm` is the one-shot operator opt-in
+/// for a redaction-blind-secret change (docs/key-rotation.md), mirroring
+/// [`authority_rotation_confirmed`]. Anything else — unset, empty, other
+/// values — refuses to adopt a fingerprint that differs from the registry's
+/// active row.
+fn blind_secret_rotation_confirmed() -> bool {
+    std::env::var("OLYMPUS_BLIND_SECRET_ROTATION")
+        .is_ok_and(|v| v.trim().eq_ignore_ascii_case("confirm"))
+}
+
+/// Reconcile the resolved redaction-blind-secret's fingerprint
+/// (`state::fingerprint_redaction_blind_secret`) against the registry
+/// (migration 0058), superseding the active row if the fingerprint changed
+/// **and** the operator opted in with `OLYMPUS_BLIND_SECRET_ROTATION=confirm`.
+///
+/// Unlike [`ensure_ingest_signing_key`], a fingerprint change here IS gated —
+/// closer to [`rotate_authority`]'s posture than the ingest key's. The blind
+/// secret is not a signing key whose worst accidental-swap consequence is a
+/// confusing verification failure the operator immediately notices; it is the
+/// input to every historical object's redaction blinding
+/// (`state::resolve_redaction_blind_secret`'s doc comment). A silent change
+/// makes those blindings permanently unreproducible with **no error at the
+/// moment it happens** — the corruption only surfaces later, if ever, when
+/// someone tries to verify an old redaction bundle. Refusing by default turns
+/// that into a loud, immediate, queryable signal instead.
+///
+/// Returns:
+///  * `Ok(true)` — the fingerprint is now the active registry row (first-ever
+///    secret, an unchanged restart, or a confirmed rotation that was just
+///    recorded).
+///  * `Ok(false)` — the fingerprint differs from the active row and
+///    `OLYMPUS_BLIND_SECRET_ROTATION=confirm` was not set. The registry is
+///    left untouched; the caller must NOT use the mismatched secret (see
+///    call sites in `startup.rs` / `bin/olympus-server.rs`, which discard it
+///    so redaction endpoints fail closed with 503 rather than silently
+///    producing unreproducible blindings).
+///  * `Err(_)` — a database error; the caller logs and treats this the same
+///    as the ingest-signing-key registry's failure mode (non-fatal, but see
+///    the call sites for why "non-fatal" does not mean "use the secret
+///    anyway" here).
+///
+/// Holds `pg_advisory_xact_lock` across the whole read-then-branch, same
+/// reasoning as [`ensure_ingest_signing_key`]: a bare SELECT-then-INSERT
+/// would let two concurrent callers both observe "no active row" and race the
+/// migration-0058 partial unique index.
+pub async fn ensure_redaction_blind_secret_fingerprint(
+    pool: &PgPool,
+    fingerprint_hex: &str,
+) -> Result<bool, String> {
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| format!("ensure_redaction_blind_secret_fingerprint: begin: {e}"))?;
+    sqlx::query(
+        "SELECT pg_advisory_xact_lock(hashtext('ensure_redaction_blind_secret_fingerprint'))",
+    )
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| format!("ensure_redaction_blind_secret_fingerprint: advisory lock: {e}"))?;
+
+    let active: Option<(String, String)> = sqlx::query_as(
+        "SELECT key_id, public_key FROM account_signing_keys
+          WHERE purpose = 'redaction_blind_secret' AND revoked_at IS NULL",
+    )
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|e| format!("ensure_redaction_blind_secret_fingerprint: read active row: {e}"))?;
+
+    match active {
+        Some((_, existing)) if existing == fingerprint_hex => {
+            tx.commit()
+                .await
+                .map_err(|e| format!("ensure_redaction_blind_secret_fingerprint: commit: {e}"))?;
+            Ok(true)
+        }
+        None => {
+            let key_id = Uuid::new_v4().to_string();
+            sqlx::query(
+                "INSERT INTO account_signing_keys
+                     (key_id, user_id, public_key, label, purpose, created_at)
+                 VALUES ($1, $2, $3, 'redaction-blind-secret', 'redaction_blind_secret', NOW())",
+            )
+            .bind(&key_id)
+            .bind(SYSTEM_USER_ID)
+            .bind(fingerprint_hex)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| {
+                format!("ensure_redaction_blind_secret_fingerprint: insert first row: {e}")
+            })?;
+            tx.commit()
+                .await
+                .map_err(|e| format!("ensure_redaction_blind_secret_fingerprint: commit: {e}"))?;
+            tracing::info!(
+                "bootstrap: redaction blind secret fingerprint registered \
+                 (registry row created)"
+            );
+            Ok(true)
+        }
+        Some((old_key_id, _)) if !blind_secret_rotation_confirmed() => {
+            // Refuse silently — no write, no adoption. The caller discards
+            // the mismatched secret.
+            tx.rollback().await.ok();
+            tracing::error!(
+                old_key_id = %old_key_id,
+                "bootstrap: OLYMPUS_REDACTION_BLIND_SECRET's fingerprint does not match \
+                 the active redaction_blind_secret registry row. Refusing to adopt it — \
+                 object-redaction ingest/issue will 503 until this is resolved. If this \
+                 is a deliberate rotation, follow docs/key-rotation.md and restart with \
+                 OLYMPUS_BLIND_SECRET_ROTATION=confirm (rotating invalidates \
+                 reproducibility of blindings for anything redacted under the prior \
+                 secret); otherwise the env var is wrong or unset from a previous value."
+            );
+            Ok(false)
+        }
+        Some((old_key_id, _)) => {
+            let new_key_id = Uuid::new_v4().to_string();
+            sqlx::query(
+                "UPDATE account_signing_keys
+                    SET revoked_at = NOW(), valid_until = NOW(), replaced_by_key_id = $1
+                  WHERE key_id = $2",
+            )
+            .bind(&new_key_id)
+            .bind(&old_key_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| {
+                format!("ensure_redaction_blind_secret_fingerprint: supersede active row: {e}")
+            })?;
+            sqlx::query(
+                "INSERT INTO account_signing_keys
+                     (key_id, user_id, public_key, label, purpose, created_at, valid_from)
+                 VALUES ($1, $2, $3, 'redaction-blind-secret', 'redaction_blind_secret', NOW(), NOW())",
+            )
+            .bind(&new_key_id)
+            .bind(SYSTEM_USER_ID)
+            .bind(fingerprint_hex)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| {
+                format!("ensure_redaction_blind_secret_fingerprint: insert successor: {e}")
+            })?;
+            tx.commit()
+                .await
+                .map_err(|e| format!("ensure_redaction_blind_secret_fingerprint: commit: {e}"))?;
+            tracing::warn!(
+                old_key_id = %old_key_id,
+                new_key_id = %new_key_id,
+                "bootstrap: REDACTION BLIND SECRET ROTATED (confirmed) — predecessor \
+                 windowed (valid_until = now) in the registry; unset \
+                 OLYMPUS_BLIND_SECRET_ROTATION after this restart. Blindings for objects \
+                 redacted under the prior secret can no longer be reproduced; see \
+                 docs/key-rotation.md."
+            );
+            Ok(true)
+        }
+    }
+}
+
 async fn persist_bjj_pubkey(pool: &PgPool, pubkey: &BabyJubJubPubKey) {
     let x = fr_to_decimal(&pubkey.x);
     let y = fr_to_decimal(&pubkey.y);

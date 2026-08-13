@@ -29,7 +29,7 @@ rotation (per-row pinned keys) and what escrow still buys you.
 | `OLYMPUS_INGEST_SIGNING_KEY`     | Ed25519 shard/redaction/snapshot signing                                | Env var only; Olympus never persists it — operator escrow in a secret manager is the required durable copy | Manual procedure below                                                            |
 | `OLYMPUS_ANCHOR_SIGN_KEY`        | Ed25519 anchoring/receipt signing                                       | Env var; **falls back to the ingest key when unset**                                                       | Same as ingest key                                                                |
 | `OLYMPUS_ADMIN_KEY`              | `x-admin-key` break-glass admin header                                  | Env var                                                                                                    | Restart with new value                                                            |
-| `OLYMPUS_REDACTION_BLIND_SECRET` | Redaction blinding salt                                                 | Env var, or derived from the BJJ key                                                                       | **Do not rotate** (see below)                                                     |
+| `OLYMPUS_REDACTION_BLIND_SECRET` | Redaction blinding salt                                                 | Env var, or derived from the BJJ key                                                                       | **Avoid rotating** — detected + gated via `OLYMPUS_BLIND_SECRET_ROTATION=confirm` (see below) |
 | Ceremony coordinator key         | Signs ZK ceremony manifests                                             | Offline, operator-held                                                                                     | Requires re-signing manifests (see trap below)                                    |
 | API keys                         | HTTP caller authentication                                              | `api_keys` table (BLAKE3 hash)                                                                             | Supported: issue new + revoke old                                                 |
 | Account Ed25519 signing keys     | User/operator payload signing                                           | `account_signing_keys` (public keys only)                                                                  | Supported: register + revoke with `replaced_by_key_id`                            |
@@ -197,12 +197,42 @@ restart, so coordinate with anyone holding the old key. The comparison is consta
 key is never persisted, so no database or keychain step exists. ADR-0036 signed-request
 enforcement is a separate factor and is unaffected.
 
-## Do not rotate `OLYMPUS_REDACTION_BLIND_SECRET`
+## Avoid rotating `OLYMPUS_REDACTION_BLIND_SECRET`
 
-This value is a deterministic salt, not a signing key: object-level redaction commitments must
-reproduce byte-identically across restarts and re-ingests. Changing it makes previously
-committed object roots unreproducible. It has no compromise-rotation story in v0.10 — if it is
-explicitly set, protect it like the BJJ key it defaults to being derived from.
+This value is a deterministic salt, not a signing key: the per-object Pedersen blinding for
+every object-level redaction is derived from `(secret, content_hash, obj_id)`
+(`state::resolve_redaction_blind_secret`), so it must reproduce byte-identically across restarts
+and re-ingests. **Rotating it makes every blinding computed under the prior secret permanently
+unreproducible** — there is no way to recover them afterward. If it is explicitly set, protect it
+like the BJJ key it defaults to being derived from.
+
+Unlike the ingest signing key above, a change here is not silently adopted. At startup, if a pool
+is available and `OLYMPUS_ENV=production`, `bootstrap::ensure_redaction_blind_secret_fingerprint`
+(migration `0058`) compares a domain-separated BLAKE3 **fingerprint** of the resolved secret
+against the fingerprint recorded in `account_signing_keys`
+(`purpose = 'redaction_blind_secret'`) for the active row:
+
+- **No active row yet** (first boot with this registry, or a fresh database): the fingerprint is
+  recorded unbounded (`valid_from = NULL`), same as every pre-registry secret.
+- **Fingerprint matches**: normal restart, no-op.
+- **Fingerprint differs**: refused by default. The mismatched secret is **discarded** —
+  `redaction_blind_secret` is left `None` for this process, so object-redaction ingest/issue
+  fail closed with `503` instead of silently producing blindings the registry has no record of.
+  A structured `tracing::error!` names the old `key_id` and points at this section.
+
+To perform a deliberate rotation anyway (e.g. after a suspected compromise, accepting that old
+blindings become unreproducible): set the new `OLYMPUS_REDACTION_BLIND_SECRET`, restart once with
+`OLYMPUS_BLIND_SECRET_ROTATION=confirm`, confirm the `tracing::warn!` "REDACTION BLIND SECRET
+ROTATED" line, then **unset the confirm flag** before the next restart — leaving it set would
+silently authorise a future accidental swap, the same anti-footgun reasoning as
+`OLYMPUS_AUTHORITY_ROTATION` below. The registry keeps both fingerprints (append-only,
+`valid_until` windowed on the old row), but that is a detection record, not a recovery
+mechanism — it cannot reconstruct the old secret or its blindings.
+
+Only a domain-separated **fingerprint** (`state::fingerprint_redaction_blind_secret`) is ever
+stored — never the secret itself, encrypted or otherwise. This tracking is production-only (gated
+on `OLYMPUS_ENV=production` and a DB pool); a dev install with no pool, or `OLYMPUS_ENV` unset,
+gets no rotation detection, matching the lower stakes of the dev-derived fallback secret.
 
 ## The ceremony-coordinator trap (resolved for v3 manifests)
 
