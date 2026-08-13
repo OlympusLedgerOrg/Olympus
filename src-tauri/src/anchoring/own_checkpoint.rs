@@ -85,6 +85,16 @@ pub struct OwnCheckpointRow {
     pub blake3_smt_sig_r8x: Option<String>,
     pub blake3_smt_sig_r8y: Option<String>,
     pub blake3_smt_sig_s: Option<String>,
+    // ADR-0033 / migration 0061: the M-of-N checkpoint-quorum parameters this
+    // row was co-signed under, pinned once at first collection so a later
+    // change to `OLYMPUS_CHECKPOINT_QUORUM_THRESHOLD` or the trusted-peer set
+    // cannot silently re-scope an in-flight or already-collected quorum.
+    /// `M`. `NULL` until the gossip loop first attempts quorum collection for
+    /// this checkpoint.
+    pub checkpoint_quorum_threshold: Option<i32>,
+    /// The pinned `N` signer set (JSON array of `{"x": <dec>, "y": <dec>}`),
+    /// same shape as `key_credentials.quorum_signers`.
+    pub checkpoint_quorum_signers: Option<serde_json::Value>,
 }
 
 /// Resolve the Ed25519 signing key from the same env var precedence
@@ -493,6 +503,10 @@ pub async fn build_and_persist(
         blake3_smt_sig_r8x,
         blake3_smt_sig_r8y,
         blake3_smt_sig_s,
+        // Pinned later, once, by `set_checkpoint_quorum_params` — a freshly
+        // inserted row has not attempted quorum collection yet.
+        checkpoint_quorum_threshold: None,
+        checkpoint_quorum_signers: None,
     }))
 }
 
@@ -510,7 +524,8 @@ pub async fn fetch_by_id(pool: &PgPool, id: Uuid) -> Result<Option<OwnCheckpoint
                 ed25519_pubkey_hex, ed25519_signature_hex,
                 transition_original_root, transition_leaf, transition_path, transition_sig_r8x,
                 transition_sig_r8y, transition_sig_s,
-                blake3_smt_root, blake3_smt_sig_r8x, blake3_smt_sig_r8y, blake3_smt_sig_s
+                blake3_smt_root, blake3_smt_sig_r8x, blake3_smt_sig_r8y, blake3_smt_sig_s,
+                checkpoint_quorum_threshold, checkpoint_quorum_signers
          FROM own_checkpoints
          WHERE id = $1",
     )
@@ -556,6 +571,8 @@ struct CheckpointDbRow {
     blake3_smt_sig_r8x: Option<String>,
     blake3_smt_sig_r8y: Option<String>,
     blake3_smt_sig_s: Option<String>,
+    checkpoint_quorum_threshold: Option<i32>,
+    checkpoint_quorum_signers: Option<serde_json::Value>,
 }
 
 /// Map a raw DB row into an [`OwnCheckpointRow`], enforcing the schema
@@ -625,6 +642,8 @@ fn row_to_own_checkpoint(r: CheckpointDbRow) -> Result<OwnCheckpointRow, String>
         blake3_smt_sig_r8x: r.blake3_smt_sig_r8x,
         blake3_smt_sig_r8y: r.blake3_smt_sig_r8y,
         blake3_smt_sig_s: r.blake3_smt_sig_s,
+        checkpoint_quorum_threshold: r.checkpoint_quorum_threshold,
+        checkpoint_quorum_signers: r.checkpoint_quorum_signers,
     })
 }
 
@@ -645,7 +664,8 @@ pub async fn fetch_latest_gossipable(pool: &PgPool) -> Result<Option<OwnCheckpoi
                 ed25519_pubkey_hex, ed25519_signature_hex,
                 transition_original_root, transition_leaf, transition_path, transition_sig_r8x,
                 transition_sig_r8y, transition_sig_s,
-                blake3_smt_root, blake3_smt_sig_r8x, blake3_smt_sig_r8y, blake3_smt_sig_s
+                blake3_smt_root, blake3_smt_sig_r8x, blake3_smt_sig_r8y, blake3_smt_sig_s,
+                checkpoint_quorum_threshold, checkpoint_quorum_signers
          FROM own_checkpoints
          WHERE groth16_proof IS NOT NULL
            AND format_version = 2
@@ -694,7 +714,8 @@ pub async fn latest_for_shard(
                 ed25519_pubkey_hex, ed25519_signature_hex,
                 transition_original_root, transition_leaf, transition_path, transition_sig_r8x,
                 transition_sig_r8y, transition_sig_s,
-                blake3_smt_root, blake3_smt_sig_r8x, blake3_smt_sig_r8y, blake3_smt_sig_s
+                blake3_smt_root, blake3_smt_sig_r8x, blake3_smt_sig_r8y, blake3_smt_sig_s,
+                checkpoint_quorum_threshold, checkpoint_quorum_signers
          FROM own_checkpoints
          WHERE checkpoint_scope = $1
            AND shard_id = $2
@@ -731,7 +752,8 @@ pub async fn list_recent_for_shard(
                 ed25519_pubkey_hex, ed25519_signature_hex,
                 transition_original_root, transition_leaf, transition_path, transition_sig_r8x,
                 transition_sig_r8y, transition_sig_s,
-                blake3_smt_root, blake3_smt_sig_r8x, blake3_smt_sig_r8y, blake3_smt_sig_s
+                blake3_smt_root, blake3_smt_sig_r8x, blake3_smt_sig_r8y, blake3_smt_sig_s,
+                checkpoint_quorum_threshold, checkpoint_quorum_signers
          FROM own_checkpoints
          WHERE checkpoint_scope = $1
            AND shard_id = $2
@@ -771,7 +793,8 @@ pub async fn first_covering_for_shard(
                 ed25519_pubkey_hex, ed25519_signature_hex,
                 transition_original_root, transition_leaf, transition_path, transition_sig_r8x,
                 transition_sig_r8y, transition_sig_s,
-                blake3_smt_root, blake3_smt_sig_r8x, blake3_smt_sig_r8y, blake3_smt_sig_s
+                blake3_smt_root, blake3_smt_sig_r8x, blake3_smt_sig_r8y, blake3_smt_sig_s,
+                checkpoint_quorum_threshold, checkpoint_quorum_signers
          FROM own_checkpoints
          WHERE checkpoint_scope = $1
            AND shard_id = $2
@@ -810,7 +833,8 @@ async fn fetch_existing_for_snapshot(
                 ed25519_pubkey_hex, ed25519_signature_hex,
                 transition_original_root, transition_leaf, transition_path, transition_sig_r8x,
                 transition_sig_r8y, transition_sig_s,
-                blake3_smt_root, blake3_smt_sig_r8x, blake3_smt_sig_r8y, blake3_smt_sig_s
+                blake3_smt_root, blake3_smt_sig_r8x, blake3_smt_sig_r8y, blake3_smt_sig_s,
+                checkpoint_quorum_threshold, checkpoint_quorum_signers
          FROM own_checkpoints
          WHERE format_version = 2
            AND checkpoint_scope = 'shard'
@@ -829,6 +853,38 @@ async fn fetch_existing_for_snapshot(
     .map_err(|e| format!("query existing own_checkpoint: {e}"))?;
 
     row.map(row_to_own_checkpoint).transpose()
+}
+
+/// Pin the M-of-N checkpoint-quorum parameters a row was co-signed under
+/// (ADR-0033 "Remaining producer work"). One-shot: the `WHERE
+/// checkpoint_quorum_threshold IS NULL` guard means a checkpoint's `(M, N)`
+/// is set exactly once, at first successful collection — a later env-var
+/// change or trusted-peer-list edit cannot silently re-scope an
+/// already-pinned checkpoint's quorum out from under its stored signatures
+/// (the same rationale [`checkpoint_quorum_message`](crate::quorum::checkpoint::checkpoint_quorum_message)
+/// binds threshold + signer set into the signed digest for). Returns the
+/// number of rows updated (0 if the row was already pinned or doesn't
+/// exist) so the caller can tell "pinned now" from "already pinned".
+pub async fn set_checkpoint_quorum_params(
+    pool: &PgPool,
+    checkpoint_id: Uuid,
+    threshold: u32,
+    signers: &[crate::quorum::QuorumSigner],
+) -> Result<u64, sqlx::Error> {
+    let signers_json = serde_json::to_value(signers).unwrap_or_else(|_| serde_json::json!([]));
+    let result = sqlx::query(
+        "UPDATE own_checkpoints
+            SET checkpoint_quorum_threshold = $1,
+                checkpoint_quorum_signers = $2
+          WHERE id = $3
+            AND checkpoint_quorum_threshold IS NULL",
+    )
+    .bind(threshold as i32)
+    .bind(signers_json)
+    .bind(checkpoint_id)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected())
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────

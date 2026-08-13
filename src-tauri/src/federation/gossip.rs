@@ -155,6 +155,23 @@ async fn sync_round(
         }
     }
 
+    // ADR-0033 "Remaining producer work": now that every peer's synchronous
+    // `receive_checkpoint` handler has processed our push above (see
+    // `checkpoint_cosign`'s module doc for why that ordering matters), try to
+    // collect checkpoint-quorum co-signatures for it. A failure here is
+    // logged, not propagated — quorum collection is opportunistic and must
+    // not make an otherwise-successful gossip round look failed.
+    if own_checkpoint.is_some() {
+        if let Err(e) =
+            super::checkpoint_cosign::collect_and_store_checkpoint_quorum(
+                pool, bjj_key, bjj_pubkey, client,
+            )
+            .await
+        {
+            tracing::debug!("federation: checkpoint quorum collection failed: {e}");
+        }
+    }
+
     Ok(())
 }
 

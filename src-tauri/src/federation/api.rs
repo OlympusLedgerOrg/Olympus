@@ -360,6 +360,12 @@ pub fn tor_router() -> Router<AppState> {
             post(super::cosign::cosign_credential)
                 .layer(DefaultBodyLimit::max(super::cosign::MAX_COSIGN_BYTES)),
         )
+        .route(
+            "/federation/checkpoint-cosign",
+            post(super::checkpoint_cosign::checkpoint_cosign).layer(DefaultBodyLimit::max(
+                super::checkpoint_cosign::MAX_CHECKPOINT_COSIGN_BYTES,
+            )),
+        )
 }
 
 /// POST /federation/identity/rotate — wipe the persisted hidden-service
