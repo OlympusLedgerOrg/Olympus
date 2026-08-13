@@ -121,10 +121,21 @@ pub fn verify(
     signature: &Signature,
     msg: &BigUint,
 ) -> Result<(), EddsaError> {
-    if !curve.on_curve(pubkey) || !curve.in_prime_subgroup(pubkey) {
+    // Match the JS eddsa predicate `bjjInPrimeSubgroup` (circom_compat.js), which
+    // is `on-curve ∧ (l·P == identity) ∧ (P != identity)`. The identity `(0, 1)`
+    // lies on the curve and satisfies `l·P == identity`, so `in_prime_subgroup`
+    // alone admits it — but an identity pubkey collapses the verification equation
+    // to `s·G == R8`, forging a signature over any message (issue L3). The pedersen
+    // leg (`verifier.js`, mirrored by `pedersen.rs`) deliberately does NOT exclude
+    // the identity, so the guard lives here on the eddsa path rather than in the
+    // shared `in_prime_subgroup`, preserving exact Rust↔JS parity on both paths.
+    if !curve.on_curve(pubkey) || !curve.in_prime_subgroup(pubkey) || *pubkey == curve.identity() {
         return Err(EddsaError::PubkeyNotInSubgroup);
     }
-    if !curve.on_curve(&signature.r8) || !curve.in_prime_subgroup(&signature.r8) {
+    if !curve.on_curve(&signature.r8)
+        || !curve.in_prime_subgroup(&signature.r8)
+        || signature.r8 == curve.identity()
+    {
         return Err(EddsaError::R8NotInSubgroup);
     }
     if signature.s >= curve.l {
@@ -293,6 +304,41 @@ mod tests {
         assert_eq!(
             verify(&curve, &bogus, &sig, &BigUint::from(7u32)),
             Err(EddsaError::PubkeyNotInSubgroup)
+        );
+    }
+
+    /// The identity public key `(0, 1)` is on the curve and satisfies
+    /// `l·P == identity`, so the bare subgroup predicate admits it. But with
+    /// `A = identity` the verification equation `s·G == R8 + 8·hm·A` collapses to
+    /// `s·G == R8`, so any `(s, R8 = s·G)` "verifies" over any message — a genuine
+    /// forgery. The verifier must reject the identity pubkey outright, matching the
+    /// JS `bjjInPrimeSubgroup` identity exclusion (issue L3).
+    #[test]
+    fn identity_pubkey_forgery_is_refused() {
+        let curve = Curve::baby_jubjub();
+        let identity = curve.identity();
+
+        // Forge a signature: pick any s in [1, l) and set R8 = s·G, so s·G == R8.
+        let s = BigUint::from(42u32);
+        let r8 = curve.scalar_mul(&curve.g, &s);
+        let sig = Signature { r8, s };
+        let msg = BigUint::from(7u32);
+
+        // Prove the forgery is real: under an identity key the raw equation holds,
+        // RHS = R8 + 8·hm·identity = R8 = s·G = LHS, independent of `msg`.
+        let hm = challenge(&sig.r8, &identity, &msg).expect("challenge");
+        let lhs = curve.scalar_mul(&curve.g, &sig.s);
+        let rhs = curve.point_add(
+            &sig.r8,
+            &curve.scalar_mul(&curve.scalar_mul(&identity, &hm), &BigUint::from(8u32)),
+        );
+        assert_eq!(lhs, rhs, "identity-key equation must collapse to s·G == R8");
+
+        // …yet the verifier must refuse it before the equation is ever reached.
+        assert_eq!(
+            verify(&curve, &identity, &sig, &msg),
+            Err(EddsaError::PubkeyNotInSubgroup),
+            "identity pubkey must be rejected (would otherwise forge any message)"
         );
     }
 }
