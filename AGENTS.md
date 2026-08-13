@@ -103,7 +103,9 @@ pg_embed for an embedded PostgreSQL instance. sqlx migrations in `migrations/`
 are applied on startup (both `init_embedded` and `connect_external` paths).
 
 Key files:
-- `src-tauri/src/main.rs` — Tauri entry, `resolve_proofs_dir`, placeholder gate, IPC commands
+- `src-tauri/src/main.rs` — Tauri entry point; module wiring only, the substantive startup logic below lives in `startup.rs`
+- `src-tauri/src/startup.rs` — `resolve_proofs_dir`, the placeholder-artifact gate (`detect_placeholder_artifacts`), `verify_ceremony_manifests`, and `run_server_bringup` (the async server-bringup sequence spawned from `main.rs`)
+- `src-tauri/src/commands/` — Tauri IPC command handlers, split by domain (`files`, `keychain`, `secrets`, `server_state`)
 - `src-tauri/src/server/mod.rs` — Axum router setup
 - `src-tauri/src/api/` — Axum route handlers (`ingest`, `ledger`, `redaction`, `admin`, `admin_users`, `keys`, `zk`, `user_auth`, `credentials`, `shards`, `trusted_issuers`)
 - `src-tauri/src/api/shards.rs` — shard registry + `authorize_write` gate (operator-controlled shard creation; see Critical Invariants)
@@ -210,7 +212,7 @@ Three checks run automatically:
 
 1. **build.rs**: asserts `blake3(vkey.json) == manifest.artifacts.vkey.blake3`. `cargo build` fails on mismatch.
 2. **`load_proving_key_with_manifest`**: re-hashes `.ark.zkey` from disk and asserts match against manifest before `deserialize_uncompressed_unchecked`. Returns `ZkeyError::ManifestMismatch` on tamper.
-3. **`main.rs::verify_ceremony_manifests`**: at startup, recomputes the contribution chain hash from `manifest.contributions[]` and verifies the coordinator BJJ-EdDSA signature against `state.bjj_trusted_issuers` (audit M-3). Production: any failure is `exit(2)`. Dev: `tracing::error!` + continue.
+3. **`startup.rs::verify_ceremony_manifests`**: at startup, recomputes the contribution chain hash from `manifest.contributions[]` and verifies the coordinator BJJ-EdDSA signature against `state.bjj_trusted_issuers` (audit M-3). Production: any failure is `exit(2)`. Dev: `tracing::error!` + continue.
 
 For production: set `OLYMPUS_CEREMONY_COORDINATOR_KEY` when running setup scripts; add the coordinator pubkey to consumer machines' `OLYMPUS_BJJ_TRUSTED_ISSUERS_JSON`.
 
