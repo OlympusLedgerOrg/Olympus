@@ -140,13 +140,18 @@ or externally anchors its output. `GET /monitor/proof` therefore serves the
 Poseidon snapshot witness — the tree that is actually checkpointed, signed,
 and (via `OLYMPUS_ANCHOR_*`) externally anchored — not the BLAKE3 SMT.
 
-This is an honest scope boundary, not an oversight: a proof against an
+This was an honest scope boundary, not an oversight: a proof against an
 unsigned root would have no signed statement for a monitor to check it
 against, which would misrepresent what this API can actually establish.
-Reconciling which tree is "the" canonical commitment — or signing both — is
-a protocol-level decision outside this ADR's scope; it would need its own
-ADR and would touch the checkpoint signing domain (ADR-0033 §"Does not
-change"), which this revision explicitly does not.
+ADR-0044 (merged after this revision) closes the "signing both" half: every
+own-checkpoint emitted with the BJJ authority private key loaded now also
+BJJ-signs the BLAKE3 CD-HS-ST SMT's per-shard subtree root
+(`olympus_crypto::SmtRootAttestation`, domain `OLY:SMT:ROOT:V1`), jointly
+bound to the same `(ledger_root, tree_size)` the Poseidon side signs — see
+its "What this does not do (yet)" section. That does not by itself change
+what `GET /monitor/proof` serves: reconciling which tree is "the" canonical
+commitment, or wiring this endpoint to serve BLAKE3 witnesses now that a
+signed root exists to check them against, remains open follow-up work.
 
 ## SMT-native equivalent of CT consistency checks
 

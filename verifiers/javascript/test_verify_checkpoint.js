@@ -5,10 +5,10 @@
  * against it, and assert the JS-side checks accept it. Then mutate
  * each field in turn and assert the verifier rejects.
  *
- * The Groth16 (check 4) is not exercised here — that's the Rust
- * verifier's job (`verifiers/rust/src/bin/verify.rs`). The synthetic
- * bundle ships a placeholder proof block; verify.js prints the cargo
- * invocation and exits 0 if checks 1–3 pass.
+ * The Groth16 pairing (part of check 6) is not exercised here — that's
+ * the Rust verifier's job (`verifiers/rust/src/bin/verify.rs`). The
+ * synthetic bundle ships a placeholder proof block; verify.js prints
+ * the cargo invocation and exits 0 if checks 1–6 pass.
  */
 
 "use strict";
@@ -201,6 +201,33 @@ async function buildSyntheticBundle() {
     message_doc: "test",
   };
 
+  // ADR-0044: BLAKE3 CD-HS-ST SMT root attestation, jointly bound to this
+  // checkpoint's (shard_id, ledger_root, tree_size).
+  const blake3SmtRoot = new Uint8Array(32).fill(0x55);
+  const blake3SmtRootHex = toHex(blake3SmtRoot);
+  const smtRootDigest = blake3(
+    concatBytes(
+      enc.encode("OLY:SMT:ROOT:V1"),
+      lp(enc.encode(checkpoint.shard_id)),
+      lp(bigIntToBE32(ledgerRoot)),
+      lp(i64ToBE8(1)),
+      lp(blake3SmtRoot),
+    ),
+  );
+  const smtRootMessage = bigEndianBigInt(smtRootDigest) % BABYJUBJUB_SUBGROUP_ORDER;
+  const smtRootSig = eddsa.signPoseidon(bjjPriv, F.e(smtRootMessage));
+  const smtRootAttestation = {
+    scheme: "BLAKE3-CD-HS-ST-root + BabyJubJub-EdDSA",
+    blake3_smt_root_hex: blake3SmtRootHex,
+    signature: {
+      r8x: F.toObject(smtRootSig.R8[0]).toString(),
+      r8y: F.toObject(smtRootSig.R8[1]).toString(),
+      s: smtRootSig.S.toString(),
+    },
+    message: smtRootMessage.toString(),
+    message_doc: "test",
+  };
+
   const anchorHash = computeAnchorHash(
     {
       ...checkpoint,
@@ -216,10 +243,11 @@ async function buildSyntheticBundle() {
   const edSig = ed25519.sign(anchorHash, edSk);
 
   return {
-    schema: "olympus-checkpoint-bundle/v3",
+    schema: "olympus-checkpoint-bundle/v4",
     checkpoint,
     bjj_eddsa_poseidon: bjjBlock,
     append_transition: appendTransition,
+    smt_root_attestation: smtRootAttestation,
     ed25519: {
       scheme: "Ed25519 (RFC 8032)",
       pubkey_hex: toHex(edPk),
@@ -314,6 +342,25 @@ async function main() {
   fs.writeFileSync(tTransitionPath, JSON.stringify(tTransition));
   runVerifier(tTransitionPath, 1);
   console.log("PASS  tamper append-consistency path → reject");
+
+  // Tamper smt_root_attestation.blake3_smt_root_hex → check 5 rejects (the
+  // message no longer matches the recomputed digest for the new root).
+  const tSmtRoot = JSON.parse(JSON.stringify(bundle));
+  tSmtRoot.smt_root_attestation.blake3_smt_root_hex = "0".repeat(64);
+  const tSmtRootPath = path.join(tmp, "t-smt-root.json");
+  fs.writeFileSync(tSmtRootPath, JSON.stringify(tSmtRoot));
+  runVerifier(tSmtRootPath, 1);
+  console.log("PASS  tamper SMT root attestation root → reject");
+
+  // Tamper smt_root_attestation.signature.s → check 5 rejects.
+  const tSmtRootSig = JSON.parse(JSON.stringify(bundle));
+  tSmtRootSig.smt_root_attestation.signature.s = (
+    BigInt(tSmtRootSig.smt_root_attestation.signature.s) + 1n
+  ).toString();
+  const tSmtRootSigPath = path.join(tmp, "t-smt-root-sig.json");
+  fs.writeFileSync(tSmtRootSigPath, JSON.stringify(tSmtRootSig));
+  runVerifier(tSmtRootSigPath, 1);
+  console.log("PASS  tamper SMT root attestation signature → reject");
 
   // 5. Tamper authority_pubkey_hash → check 3a rejects
   const t4 = JSON.parse(JSON.stringify(bundle));
