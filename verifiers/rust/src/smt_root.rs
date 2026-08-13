@@ -155,10 +155,22 @@ mod tests {
     #[test]
     fn every_field_participates_in_the_digest() {
         let base = smt_root_attest_message(b"files", &root(0x33), 9, &root(0x44));
-        assert_ne!(base, smt_root_attest_message(b"other", &root(0x33), 9, &root(0x44)));
-        assert_ne!(base, smt_root_attest_message(b"files", &root(0x34), 9, &root(0x44)));
-        assert_ne!(base, smt_root_attest_message(b"files", &root(0x33), 10, &root(0x44)));
-        assert_ne!(base, smt_root_attest_message(b"files", &root(0x33), 9, &root(0x45)));
+        assert_ne!(
+            base,
+            smt_root_attest_message(b"other", &root(0x33), 9, &root(0x44))
+        );
+        assert_ne!(
+            base,
+            smt_root_attest_message(b"files", &root(0x34), 9, &root(0x44))
+        );
+        assert_ne!(
+            base,
+            smt_root_attest_message(b"files", &root(0x33), 10, &root(0x44))
+        );
+        assert_ne!(
+            base,
+            smt_root_attest_message(b"files", &root(0x33), 9, &root(0x45))
+        );
     }
 
     /// Length prefixing must defeat concatenation ambiguity.
