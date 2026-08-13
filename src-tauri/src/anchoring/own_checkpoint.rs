@@ -590,6 +590,121 @@ pub async fn fetch_latest_gossipable(pool: &PgPool) -> Result<Option<OwnCheckpoi
     row.map(row_to_own_checkpoint).transpose()
 }
 
+/// The most recent signed checkpoint for one shard (ADR-0021 Monitor API's
+/// "get-sth" equivalent) — the newest `own_checkpoints` row carrying a BJJ
+/// signature (`sig_r8x`/`sig_r8y`/`sig_s` all present), regardless of whether
+/// a Groth16 proof was also generated for it (unlike
+/// [`fetch_latest_gossipable`], a monitor cares about the newest *signed
+/// root*, not the newest gossip-ready envelope).
+pub async fn latest_for_shard(
+    pool: &PgPool,
+    checkpoint_scope: &str,
+    shard_id: &str,
+) -> Result<Option<OwnCheckpointRow>, String> {
+    let row: Option<CheckpointDbRow> = sqlx::query_as(
+        "SELECT id, format_version, checkpoint_scope, shard_id,
+                ledger_root, tree_size, checkpoint_timestamp,
+                authority_pubkey_hash, sig_r8x, sig_r8y, sig_s,
+                authority_pubkey_x, authority_pubkey_y,
+                anchor_hash, groth16_proof, public_signals,
+                ed25519_pubkey_hex, ed25519_signature_hex,
+                transition_original_root, transition_leaf, transition_path, transition_sig_r8x,
+                transition_sig_r8y, transition_sig_s
+         FROM own_checkpoints
+         WHERE checkpoint_scope = $1
+           AND shard_id = $2
+           AND sig_r8x IS NOT NULL
+           AND sig_r8y IS NOT NULL
+           AND sig_s   IS NOT NULL
+         ORDER BY checkpoint_timestamp DESC, id DESC
+         LIMIT 1",
+    )
+    .bind(checkpoint_scope)
+    .bind(shard_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| format!("query latest own_checkpoint for shard: {e}"))?;
+
+    row.map(row_to_own_checkpoint).transpose()
+}
+
+/// Recent signed checkpoints for one shard, newest first, capped at `limit`
+/// (ADR-0021 Monitor API's checkpoint-history listing). Same signedness
+/// filter as [`latest_for_shard`].
+pub async fn list_recent_for_shard(
+    pool: &PgPool,
+    checkpoint_scope: &str,
+    shard_id: &str,
+    limit: i64,
+) -> Result<Vec<OwnCheckpointRow>, String> {
+    let rows: Vec<CheckpointDbRow> = sqlx::query_as(
+        "SELECT id, format_version, checkpoint_scope, shard_id,
+                ledger_root, tree_size, checkpoint_timestamp,
+                authority_pubkey_hash, sig_r8x, sig_r8y, sig_s,
+                authority_pubkey_x, authority_pubkey_y,
+                anchor_hash, groth16_proof, public_signals,
+                ed25519_pubkey_hex, ed25519_signature_hex,
+                transition_original_root, transition_leaf, transition_path, transition_sig_r8x,
+                transition_sig_r8y, transition_sig_s
+         FROM own_checkpoints
+         WHERE checkpoint_scope = $1
+           AND shard_id = $2
+           AND sig_r8x IS NOT NULL
+           AND sig_r8y IS NOT NULL
+           AND sig_s   IS NOT NULL
+         ORDER BY checkpoint_timestamp DESC, id DESC
+         LIMIT $3",
+    )
+    .bind(checkpoint_scope)
+    .bind(shard_id)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("query recent own_checkpoints for shard: {e}"))?;
+
+    rows.into_iter().map(row_to_own_checkpoint).collect()
+}
+
+/// The earliest signed checkpoint for one shard whose `tree_size` is at
+/// least `min_tree_size` — i.e. the first checkpoint that could possibly
+/// cover a leaf committed at that ordinal position (ADR-0021 MMD evidence).
+/// Same signedness filter as [`latest_for_shard`]: an unsigned row is not a
+/// published commitment a submitter could ever have relied on as evidence.
+pub async fn first_covering_for_shard(
+    pool: &PgPool,
+    checkpoint_scope: &str,
+    shard_id: &str,
+    min_tree_size: i64,
+) -> Result<Option<OwnCheckpointRow>, String> {
+    let row: Option<CheckpointDbRow> = sqlx::query_as(
+        "SELECT id, format_version, checkpoint_scope, shard_id,
+                ledger_root, tree_size, checkpoint_timestamp,
+                authority_pubkey_hash, sig_r8x, sig_r8y, sig_s,
+                authority_pubkey_x, authority_pubkey_y,
+                anchor_hash, groth16_proof, public_signals,
+                ed25519_pubkey_hex, ed25519_signature_hex,
+                transition_original_root, transition_leaf, transition_path, transition_sig_r8x,
+                transition_sig_r8y, transition_sig_s
+         FROM own_checkpoints
+         WHERE checkpoint_scope = $1
+           AND shard_id = $2
+           AND tree_size >= $3
+           AND sig_r8x IS NOT NULL
+           AND sig_r8y IS NOT NULL
+           AND sig_s   IS NOT NULL
+         ORDER BY checkpoint_timestamp ASC, id ASC
+         LIMIT 1",
+    )
+    .bind(checkpoint_scope)
+    .bind(shard_id)
+    .bind(min_tree_size)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| format!("query first covering own_checkpoint: {e}"))?;
+
+    row.map(row_to_own_checkpoint).transpose()
+}
+
 /// Fetch an existing checkpoint for a given `(ledger_root, tree_size)`
 /// snapshot, if one was already persisted. Used by [`build_and_persist`] to
 /// dedup repeated cron ticks over an unchanged ledger snapshot.

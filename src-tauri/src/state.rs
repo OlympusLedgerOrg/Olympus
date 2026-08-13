@@ -123,6 +123,10 @@ pub struct AppState {
     /// leaf committed into the parser-bound SMT is stamped with this triple so
     /// the ledger records which parser + model produced each value.
     pub ingest_provenance: crate::ingest_provenance::IngestProvenance,
+    /// Maximum Merge Delay policy (ADR-0021), resolved once at startup from
+    /// `OLYMPUS_MMD_SECONDS`. Consumed by `api::monitor::mmd` to judge
+    /// whether a record's first covering checkpoint arrived within policy.
+    pub mmd_policy: crate::mmd::MmdPolicy,
     /// External anchoring config (RFC 3161 / Rekor / OTS). Resolved once
     /// at startup from `OLYMPUS_ANCHOR_*` env vars. All-`None` config is
     /// the default and disables outbound anchoring submissions.
@@ -203,6 +207,7 @@ impl AppState {
             ),
             proofs_dir: None,
             ingest_provenance: crate::ingest_provenance::IngestProvenance::from_env(),
+            mmd_policy: crate::mmd::MmdPolicy::from_env(),
             anchoring: crate::anchoring::AnchoringConfig::from_env(),
             anchor_http: crate::anchoring::build_http_client(std::time::Duration::from_secs(30)),
             #[cfg(feature = "federation")]
