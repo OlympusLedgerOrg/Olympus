@@ -137,6 +137,17 @@ pub fn verify_checkpoint_quorum(
     threshold: u32,
     sigs: &[CollectedSignature],
 ) -> QuorumStatus {
+    // WIRING PREREQUISITE (audit L-5): this primitive counts valid, distinct,
+    // in-set co-signatures and reports `satisfied` for `valid >= threshold >= 1`
+    // — 1-of-1 included, which is intentional and pinned by the domain-separation
+    // test in `mod.rs`. Any *acceptance* policy — a minimum M/N, and above all the
+    // issuer-anchor the SBT path enforces (`issuer_anchors_quorum`, which is what
+    // stops a DB-tier signer-set graft) — must be applied by the future Phase-2
+    // producer that wires this to a real acceptance path. This verifier has no
+    // authority anchor of its own, so it must not be exposed on an acceptance
+    // path without one; the degenerate-bounds check belongs there too, not here,
+    // because this counting primitive legitimately serves any `threshold >= 1`.
+    //
     // The message binds (chain_id, epoch, root) + threshold + the pinned set, so
     // a post-hoc tamper to any of them makes every stored signature verify
     // against a different message and drop out in the shared loop.
