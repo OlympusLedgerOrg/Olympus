@@ -221,4 +221,33 @@ mod tests {
             .unwrap();
         assert!(scalar < modulus, "signed scalar must be reduced mod l");
     }
+
+    /// `verify_smt_root_attestation` must actually check the equation, not
+    /// silently accept any well-formed signature — a bogus (but
+    /// subgroup-valid) signature over the pinned attestation above must be
+    /// rejected. This module holds no signing key (by design — it shares no
+    /// code with the producer), so it cannot mint a genuine signature and
+    /// then tamper it the way the JavaScript verifier's smoke test does; this
+    /// asserts the wiring to `crate::eddsa::verify` actually rejects instead
+    /// of always returning `Ok`.
+    #[test]
+    fn verify_smt_root_attestation_rejects_a_bogus_signature() {
+        let curve = crate::pedersen::Curve::baby_jubjub();
+        let attestation = SmtRootAttestation {
+            shard_id: b"files".to_vec(),
+            ledger_root: root(0x33),
+            tree_size: 9,
+            blake3_smt_root: root(0x44),
+        };
+        // `curve.g` is a valid prime-order-subgroup point, so this exercises
+        // the equation check itself rather than the subgroup guard.
+        let bogus_signature = crate::eddsa::Signature {
+            r8: curve.g.clone(),
+            s: num_bigint::BigUint::from(1u32),
+        };
+        assert_eq!(
+            verify_smt_root_attestation(&curve, &curve.g, &bogus_signature, &attestation),
+            Err(crate::eddsa::EddsaError::Rejected)
+        );
+    }
 }

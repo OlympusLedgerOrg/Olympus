@@ -35,7 +35,6 @@ use ark_ff::{BigInteger, PrimeField};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::smt::{PersistentSmt, PgBackend};
 use crate::zk::witness::baby_jubjub::BabyJubJubPubKey;
 
 /// One persisted row in `own_checkpoints`. The cron's anchor pipeline
@@ -182,7 +181,26 @@ pub async fn build_and_persist(
             );
         }
     }
-    let canonical = validate_canonical_snapshot(pool, &snap, bjj_pubkey).await?;
+    // Open one REPEATABLE READ transaction so the canonical Poseidon leaf
+    // read and the BLAKE3 SMT subtree-root read observe the same database
+    // snapshot. Without this, a concurrent ingest committing between the two
+    // reads could sign a BLAKE3 root reflecting a later state than the
+    // (ledger_root, tree_size) this checkpoint asserts — the two attestations
+    // must describe one committed instant (review finding on PR #1631).
+    let mut consistency_tx = pool
+        .begin()
+        .await
+        .map_err(|e| format!("open snapshot-consistency transaction: {e}"))?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+        .execute(&mut *consistency_tx)
+        .await
+        .map_err(|e| format!("set REPEATABLE READ isolation: {e}"))?;
+    let canonical = validate_canonical_snapshot(&mut consistency_tx, &snap, bjj_pubkey).await?;
+    let blake3_subtree_root = shard_subtree_root_in_tx(&mut consistency_tx, &snap.shard_id).await?;
+    consistency_tx
+        .commit()
+        .await
+        .map_err(|e| format!("commit snapshot-consistency transaction: {e}"))?;
 
     // Snapshot roots are persisted as 32-byte hexadecimal field values. V2
     // stores and emits their one canonical decimal representation so the
@@ -319,30 +337,26 @@ pub async fn build_and_persist(
     };
 
     // 4d. ADR-0044: bind a signed SmtRootAttestation for the shard's BLAKE3
-    //     CD-HS-ST SMT subtree root to this same checkpoint. Read the current
-    //     durable subtree root for `snap.shard_id` and sign it jointly with
-    //     the already-committed Poseidon `(ledger_root, tree_size)`, so the
-    //     two attestations describe the same instant and neither can be
-    //     replayed against a different snapshot. The signing-bytes domain
-    //     (`OLY:SMT:ROOT:V1`) lives in `olympus-crypto`, so every offline
-    //     verifier recomputes the same digest.
+    //     CD-HS-ST SMT subtree root to this same checkpoint. Sign the root
+    //     already captured above (in the same REPEATABLE READ transaction as
+    //     the canonical Poseidon leaf read) jointly with the already-committed
+    //     Poseidon `(ledger_root, tree_size)`, so the two attestations
+    //     describe the same instant and neither can be replayed against a
+    //     different snapshot. The signing-bytes domain (`OLY:SMT:ROOT:V1`)
+    //     lives in `olympus-crypto`, so every offline verifier recomputes the
+    //     same digest.
     let (blake3_smt_root, blake3_smt_sig_r8x, blake3_smt_sig_r8y, blake3_smt_sig_s) = match bjj_key
     {
         Some(key) => {
-            let smt = PersistentSmt::open_deferred(PgBackend::new(pool.clone()));
-            let subtree_root = smt
-                .shard_subtree_root(&snap.shard_id)
-                .await
-                .map_err(|e| format!("read BLAKE3 SMT shard subtree root: {e}"))?;
             let attestation = olympus_crypto::SmtRootAttestation {
                 shard_id: snap.shard_id.as_bytes().to_vec(),
                 ledger_root: hex_to_bytes32(&snap.snapshot_root)?,
                 tree_size: snap.snapshot_size,
-                blake3_smt_root: subtree_root,
+                blake3_smt_root: blake3_subtree_root,
             };
             let (r8x, r8y, s) = sign_smt_root(key, &attestation)?;
             (
-                Some(hex::encode(subtree_root)),
+                Some(hex::encode(blake3_subtree_root)),
                 Some(r8x),
                 Some(r8y),
                 Some(s),
@@ -816,8 +830,13 @@ struct CanonicalSnapshot {
 /// Rebuild the selected shard tip from its canonical ordered leaves, compare
 /// every persisted witness field, and verify the ingest-time snapshot
 /// signature before the root is checkpoint-signed or externally anchored.
+///
+/// Runs against a caller-supplied transaction (rather than the pool) so it
+/// can share one REPEATABLE READ database snapshot with
+/// [`shard_subtree_root_in_tx`] — see the call site in [`build_and_persist`]
+/// for why that matters.
 async fn validate_canonical_snapshot(
-    pool: &PgPool,
+    tx: &mut sqlx::PgConnection,
     snap: &Snapshot,
     authority: &BabyJubJubPubKey,
 ) -> Result<CanonicalSnapshot, String> {
@@ -842,7 +861,7 @@ async fn validate_canonical_snapshot(
           ORDER BY snapshot_index ASC",
     )
     .bind(&snap.shard_id)
-    .fetch_all(pool)
+    .fetch_all(&mut *tx)
     .await
     .map_err(|e| format!("load canonical snapshot leaves: {e}"))?;
     if stored_rows.len() != snap.snapshot_size as usize {
@@ -963,6 +982,42 @@ async fn validate_canonical_snapshot(
         previous_root,
         path_json,
     })
+}
+
+/// Read the shard's BLAKE3 SMT subtree root against `tx`, so it observes the
+/// same REPEATABLE READ database snapshot [`validate_canonical_snapshot`]
+/// just read the canonical Poseidon leaf set against. Without this, a
+/// concurrent `/ingest/files` commit landing between the two reads could sign
+/// a BLAKE3 root reflecting a later state than the `(ledger_root, tree_size)`
+/// this checkpoint asserts — breaking ADR-0044's "both attestations describe
+/// one instant" property (found in review of PR #1631).
+///
+/// Mirrors `smt::PersistentSmt::shard_subtree_root` exactly, but is
+/// duplicated here rather than reused: `PersistentSmt`/`PgBackend` always
+/// acquire their own pool connection per query and cannot be bound to a
+/// caller's transaction. `SHARD_PREFIX_BITS` (64) is byte-aligned, so the
+/// packed `path_bits` for the shard-prefix node is exactly
+/// `shard_prefix(shard_id)` with no bit-packing needed.
+async fn shard_subtree_root_in_tx(
+    tx: &mut sqlx::PgConnection,
+    shard_id: &str,
+) -> Result<[u8; 32], String> {
+    let prefix = olympus_crypto::smt::shard_prefix(shard_id);
+    let row: Option<(Vec<u8>,)> =
+        sqlx::query_as("SELECT hash FROM smt_nodes WHERE depth = $1 AND path_bits = $2")
+            .bind(olympus_crypto::smt::SHARD_PREFIX_BITS as i16)
+            .bind(&prefix[..])
+            .fetch_optional(tx)
+            .await
+            .map_err(|e| format!("read BLAKE3 SMT shard subtree root: {e}"))?;
+    match row {
+        Some((hash,)) => hash
+            .try_into()
+            .map_err(|v: Vec<u8>| format!("smt_nodes.hash is {} bytes; expected 32", v.len())),
+        None => Ok(olympus_crypto::smt::empty_subtree_hash(
+            olympus_crypto::smt::SMT_DEPTH - olympus_crypto::smt::SHARD_PREFIX_BITS,
+        )),
+    }
 }
 
 fn parse_snapshot_path(v: &serde_json::Value) -> Result<(Vec<Fr>, Vec<u8>), String> {

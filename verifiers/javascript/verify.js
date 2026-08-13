@@ -688,7 +688,7 @@ async function main() {
     return "'" + arg.replace(/'/g, "'\\''") + "'";
   }
 
-  console.log(`OK   [5/5 Groth16]         pending — run the independent Rust verifier:`);
+  console.log(`OK   [6/6 Groth16 pairing] pending — run the independent Rust verifier:`);
   console.log("");
   console.log(`     ${shellEscape("cd")} ${shellEscape("verifiers/rust")}`);
   console.log(

@@ -66,9 +66,10 @@ actually be signed. In practice, the Monitor API implementation (a separate,
 unmerged PR) found that nothing signed or externally anchored that root —
 only the unrelated Poseidon ledger-snapshot tree was signed — so it could
 only serve proofs against the wrong tree, and documented that as a known
-limitation. ADR-0044 closes this: every own-checkpoint now also BJJ-signs
-the BLAKE3 CD-HS-ST SMT's per-shard subtree root
-(`olympus_crypto::SmtRootAttestation`, domain `OLY:SMT:ROOT:V1`), jointly
-bound to the same `(ledger_root, tree_size)` the Poseidon side signs. This
-unblocks future native BLAKE3 proof serving; it does not itself add a
-proof-serving endpoint — see ADR-0044's "What this does not do (yet)".
+limitation. ADR-0044 closes this: every own-checkpoint emitted with the BJJ
+authority private key loaded now also BJJ-signs the BLAKE3 CD-HS-ST SMT's
+per-shard subtree root (`olympus_crypto::SmtRootAttestation`, domain
+`OLY:SMT:ROOT:V1`), jointly bound to the same `(ledger_root, tree_size)` the
+Poseidon side signs. This unblocks future native BLAKE3 proof serving; it
+does not itself add a proof-serving endpoint — see ADR-0044's "What this does
+not do (yet)".

@@ -126,7 +126,10 @@ golden vector.
   producer-wiring change + a forward-only migration adding nullable columns.
 - `PersistentSmt::prove` output now has a signed statement a verifier can
   check it against, closing the specific gap that made it dead code.
-- The BLAKE3 tree and the Poseidon tree are now both signed at every
-  checkpoint, cryptographically tied to the same `(ledger_root, tree_size)`
-  instant — a prerequisite for, not a replacement for, actually serving
-  BLAKE3 proofs.
+- For every checkpoint emitted with the BJJ authority *private* key loaded,
+  the BLAKE3 tree and the Poseidon tree are now both signed, cryptographically
+  tied to the same `(ledger_root, tree_size)` instant — a prerequisite for,
+  not a replacement for, actually serving BLAKE3 proofs. (A keyless dev
+  checkpoint carries neither attestation, matching the existing
+  `TransitionAttestation` contract — see ADR-0031 and CLAUDE.md's insert-only
+  invariant bullet.)

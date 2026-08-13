@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! ADR-0044 conformance: every own-checkpoint also carries a BJJ-signed
 //! `SmtRootAttestation` binding the shard's BLAKE3 CD-HS-ST parser-bound SMT
 //! subtree root to this checkpoint's `(ledger_root, tree_size)`, verifiable
@@ -256,9 +258,12 @@ async fn try_boot_embedded() -> anyhow::Result<(PgPool, Option<pg_embed::postgre
     use pg_embed::postgres::{PgEmbed, PgSettings};
     use std::time::Duration;
 
-    let port = std::net::TcpListener::bind("127.0.0.1:0")?
-        .local_addr()?
-        .port();
+    // Held through `PgEmbed::setup` (which only stages the binary/data dir,
+    // it doesn't bind the port) so a concurrent test process picking a port
+    // via the same `bind("127.0.0.1:0")` trick can't claim this one first;
+    // released just before `start_db` actually needs it.
+    let reserved = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let port = reserved.local_addr()?.port();
     let dir = std::env::temp_dir().join(format!("olympus-smtroot-pgtest-{port}")); // nosemgrep: rust.lang.security.temp-dir.temp-dir
     let settings = PgSettings {
         database_dir: dir.clone(),
@@ -276,6 +281,7 @@ async fn try_boot_embedded() -> anyhow::Result<(PgPool, Option<pg_embed::postgre
     };
     let mut pg = PgEmbed::new(settings, fetch).await?;
     pg.setup().await?;
+    drop(reserved);
     {
         use std::io::Write;
         let conf = dir.join("postgresql.conf");

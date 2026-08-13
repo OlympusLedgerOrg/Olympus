@@ -1,3 +1,6 @@
+-- SPDX-FileCopyrightText: 2026 Olympus Contributors
+-- SPDX-License-Identifier: Apache-2.0
+
 -- 0060_own_checkpoints_smt_root_attestation.sql
 --
 -- ADR-0044: bind a signed SmtRootAttestation to every own-checkpoint.
