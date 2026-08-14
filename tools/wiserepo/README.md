@@ -62,8 +62,18 @@ alongside `repowise` — no extra Claude Code config needed.
 
 ## Local LLM (Ollama)
 
-No API key, no per-token cost, no repo content leaving the machine. Needs
-[Ollama](https://ollama.com) running locally and a model pulled:
+No API key, no per-token cost, no repo content leaving the machine. **Gated
+off by default** — the `ollama` backend is implemented and tested but
+targets a specific 24GB-class local GPU that isn't provisioned yet.
+`resolveBackend` rejects `ollama` with a clear "gated off" error unless you
+explicitly opt in:
+
+```bash
+export WISEREPO_ENABLE_OLLAMA=true
+```
+
+Once that's set, needs [Ollama](https://ollama.com) running locally and a
+model pulled:
 
 ```bash
 ollama pull qwen3-coder:30b   # ~24GB VRAM at Q4 -- fits a 3090 with room to spare

@@ -94,14 +94,34 @@ test("isRestrictedOpenAiModel identifies reasoning/gpt-5 model families", () => 
   }
 });
 
-test("resolveBackend accepts every supported backend, case-insensitively", () => {
+test("resolveBackend accepts claude/openai case-insensitively", () => {
   assert.equal(resolveBackend("claude"), "claude");
   assert.equal(resolveBackend("OpenAI"), "openai");
-  assert.equal(resolveBackend("Ollama"), "ollama");
 });
 
 test("resolveBackend rejects an unknown backend as a request error", () => {
   assert.throws(() => resolveBackend("gemini"), ModelRequestError);
+});
+
+// ollama is implemented but gated off until WISEREPO_ENABLE_OLLAMA=true --
+// it targets a specific local GPU that isn't provisioned yet. Ungated, a
+// typo'd/copied WISEREPO_BACKEND=ollama would fail every call with an opaque
+// connection-refused error instead of a clear "not enabled yet" message.
+test("resolveBackend rejects ollama when the enable flag is unset", () => {
+  delete process.env.WISEREPO_ENABLE_OLLAMA;
+  assert.throws(
+    () => resolveBackend("ollama"),
+    (err) => err instanceof ModelRequestError && /gated off/.test(err.message),
+  );
+});
+
+test("resolveBackend accepts ollama once WISEREPO_ENABLE_OLLAMA=true", () => {
+  process.env.WISEREPO_ENABLE_OLLAMA = "true";
+  try {
+    assert.equal(resolveBackend("ollama"), "ollama");
+  } finally {
+    delete process.env.WISEREPO_ENABLE_OLLAMA;
+  }
 });
 
 // numericEnv guards WISEREPO_TIMEOUT_MS / WISEREPO_TEMPERATURE. Before this,
