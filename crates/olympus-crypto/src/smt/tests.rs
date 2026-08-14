@@ -479,6 +479,116 @@ fn two_shard_tree() -> SparseMerkleTree {
     t
 }
 
+/// Build a self-consistent shard-scoped existence proof: siblings are all
+/// empty-subtree hashes, so the proof folds to its own shard root regardless
+/// of the provenance field values — the shard-scoped analogue of
+/// `lone_leaf_proof` (see its doc for why this is the trick that isolates
+/// each `||` guard as the sole reason for rejection, distinguishing the
+/// guard chain from a mutated `&&` that would fall through to a passing
+/// hash check). Returns `(proof, shard_root)`.
+fn lone_leaf_shard_proof(
+    shard: &str,
+    key: [u8; 32],
+    value: [u8; 32],
+    parser: &str,
+    cpv: &str,
+    model: &str,
+) -> (ExistenceProof, [u8; 32]) {
+    let siblings: Vec<[u8; 32]> = (0..SMT_DEPTH).map(empty_subtree_hash).collect();
+    let path = key_to_path_bits(&key);
+    let mut current = leaf_hash(
+        shard.as_bytes(),
+        &key,
+        &value,
+        parser.as_bytes(),
+        cpv.as_bytes(),
+        model.as_bytes(),
+    );
+    let mut shard_root = [0u8; 32];
+    for (level, sib) in siblings.iter().enumerate() {
+        let bit_pos = SMT_DEPTH - 1 - level;
+        current = if path[bit_pos] == 0 {
+            node_hash(&current, sib)
+        } else {
+            node_hash(sib, &current)
+        };
+        if level + 1 == SMT_DEPTH - SHARD_PREFIX_BITS {
+            shard_root = current;
+        }
+    }
+    (
+        ExistenceProof {
+            key,
+            value_hash: value,
+            shard_id: shard.to_string(),
+            parser_id: parser.to_string(),
+            canonical_parser_version: cpv.to_string(),
+            model_hash: model.to_string(),
+            siblings,
+            root_hash: current,
+        },
+        shard_root,
+    )
+}
+
+#[test]
+fn shard_scoped_existence_guards_reject_self_consistent_but_invalid_proofs() {
+    let k = shard_record_key("shard-a", &rk(1));
+
+    // A fully-valid lone-leaf shard proof verifies.
+    let (valid, shard_root) = lone_leaf_shard_proof("shard-a", k, rk(0xAA), "p", "v1", "m1");
+    assert!(verify_existence_proof_against_shard_root(
+        &valid,
+        "shard-a",
+        &shard_root
+    ));
+
+    // Each empty provenance field, one at a time: the proof still folds to
+    // its own shard root, so the ONLY reason to reject is that specific
+    // empty-field guard — kills a `||` -> `&&` mutation on any one of them
+    // (each of these would otherwise fall through to the passing fold).
+    let (bad, root) = lone_leaf_shard_proof("shard-a", k, rk(0xAA), "", "v1", "m1");
+    assert!(!verify_existence_proof_against_shard_root(
+        &bad, "shard-a", &root
+    ));
+    let (bad, root) = lone_leaf_shard_proof("shard-a", k, rk(0xAA), "p", "", "m1");
+    assert!(!verify_existence_proof_against_shard_root(
+        &bad, "shard-a", &root
+    ));
+    let (bad, root) = lone_leaf_shard_proof("shard-a", k, rk(0xAA), "p", "v1", "");
+    assert!(!verify_existence_proof_against_shard_root(
+        &bad, "shard-a", &root
+    ));
+
+    // Empty shard_id: build the key from "" so shard_id_matches_key passes
+    // and the empty-shard guard is the sole discriminator.
+    let k0 = shard_record_key("", &rk(1));
+    let (bad, root) = lone_leaf_shard_proof("", k0, rk(0xAA), "p", "v1", "m1");
+    assert!(!verify_existence_proof_against_shard_root(&bad, "", &root));
+}
+
+#[test]
+fn verify_proof_against_shard_root_dispatches_rejection() {
+    // Kills a "replace verify_proof_against_shard_root with true" mutation:
+    // both proof kinds must actually reject a wrong root, not just accept a
+    // right one (verify_proof_against_shard_root_dispatches_both_variants
+    // only covers the accept path).
+    let t = two_shard_tree();
+    let existence = t.prove(&shard_record_key("shard-a", &rk(1)));
+    let nonexistence = t.prove(&shard_record_key("shard-a", &rk(9)));
+    let wrong_root = t.shard_subtree_root("shard-b");
+    assert!(!verify_proof_against_shard_root(
+        &existence,
+        "shard-a",
+        &wrong_root
+    ));
+    assert!(!verify_proof_against_shard_root(
+        &nonexistence,
+        "shard-a",
+        &wrong_root
+    ));
+}
+
 #[test]
 fn existence_proof_verifies_against_shard_subtree_root() {
     let t = two_shard_tree();
