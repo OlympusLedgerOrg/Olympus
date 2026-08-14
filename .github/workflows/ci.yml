@@ -213,6 +213,141 @@ jobs:
       - name: Run formatting and license-header checks
         run: pnpm tooling:check
 
+  # ── Static analysis (Semgrep) ────────────────────────────────────────────────
+  # Runs on every push/PR regardless of what changed -- like secrets-scan,
+  # deliberately not gated behind the `changes` filter, because
+  # .semgrep/olympus-rules.yml encodes repo-wide invariants (CLAUDE.md's
+  # "Critical Invariants" section) that any Rust change anywhere could
+  # violate, not just changes in one filtered area.
+  #
+  # Two configs run together: Semgrep's default "auto" ruleset (broad,
+  # general-purpose findings) and .semgrep/olympus-rules.yml (this repo's
+  # own invariants -- e.g. "every SMT write goes through
+  # NodeBackend::begin_write", "the ledger is insert-only"). Every rule in
+  # the custom file was verified against a synthetic violation before being
+  # committed -- see that file's own header comment for the two ways an
+  # earlier draft looked correct while silently matching nothing.
+  semgrep:
+    name: static analysis (semgrep)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      # Pinned, not `pip install semgrep` -- an unpinned install drifting
+      # between runs is exactly the kind of nondeterminism this repo's other
+      # CI-tooling comments (cargo-cyclonedx, gitleaks) warn against.
+      - name: Install Semgrep
+        run: pip install semgrep==1.168.0
+
+      # `--config auto` was tried first and rejected: it refuses to run with
+      # metrics off ("Cannot create auto config when metrics are off"),
+      # because it phones home to Semgrep's registry to pick rules based on
+      # repo metadata. That conflicts with the metrics=off / no-unnecessary-
+      # network-calls stance this repo already takes elsewhere (see
+      # tools/wiserepo's trust-boundary README section). `p/rust` is a
+      # specific, pinned public registry pack that needs no login and no
+      # telemetry, and matches this scan's scope -- the codebase's dominant
+      # language, where clippy has no equivalent security-pattern matching.
+      # TS/JS is intentionally out of scope here: eslint + tsc + prettier
+      # already gate app/public-ui and tools/wiserepo (see repo-tooling and
+      # the frontend jobs); add a JS Semgrep pack later if a real gap shows up.
+      #
+      # Four rule IDs are excluded, triaged the same way cargo-audit-baseline.txt
+      # and .gitleaks-baseline.json triage known noise in this repo -- run
+      # against the real tree before excluding anything, not reflexively:
+      #   * rust.lang.security.unsafe-usage.unsafe-usage (146 of 153 raw
+      #     findings) -- flags every `unsafe` block unconditionally. That is
+      #     an audit-checklist item ("did you use unsafe, go look"), not a
+      #     confirmed-bug pattern, and this codebase has legitimate unsafe in
+      #     vendored/patched crates (light-poseidon, babyjubjub-permissive)
+      #     and pg-embed's process handling. A blocking CI gate needs a
+      #     pattern that's wrong when it fires, not a reminder to read code
+      #     that's already been reviewed.
+      #   * rust.lang.security.current-exe.current-exe -- fires on
+      #     pg-embed-local's std::env::current_exe() calls, which it uses
+      #     legitimately to locate its own bundled Postgres binaries.
+      #   * rust.lang.security.args-os.args-os / rust.lang.security.args.args
+      #     -- fire on ordinary CLI argument parsing in binary entry points
+      #     (olympus_smt_demo, the zkVM host-tools binary,
+      #     verify_ceremony_bundle) with no more specific pattern attached.
+      # Re-run without --exclude-rule locally after a p/rust version bump to
+      # confirm this list is still the right one before trusting a green CI.
+      - name: Run Semgrep (p/rust registry ruleset)
+        run: |
+          semgrep scan --config p/rust --error --metrics=off \
+            --exclude-rule rust.lang.security.unsafe-usage.unsafe-usage \
+            --exclude-rule rust.lang.security.current-exe.current-exe \
+            --exclude-rule rust.lang.security.args-os.args-os \
+            --exclude-rule rust.lang.security.args.args
+
+      - name: Run Semgrep (Olympus custom invariant rules)
+        run: semgrep scan --config .semgrep/olympus-rules.yml --error --metrics=off
+
+  # ── Public API drift (olympus-crypto) ────────────────────────────────────────
+  # olympus-crypto carries the ADR-0005 leaf-hash layout and the other
+  # constants CLAUDE.md lists as "four independent implementations to keep in
+  # step" -- an accidental rename or signature change here is exactly the
+  # silent-drift class of bug that section exists to prevent, and nothing
+  # else in CI would catch a change that compiles fine but alters the crate's
+  # public surface. `publish = false` in its Cargo.toml means it is never on
+  # crates.io, so cargo-semver-checks' default "compare against last
+  # published version" has nothing to compare against -- --baseline-rev
+  # origin/main compares against the base branch instead. --all-features is
+  # required: this crate's ADR-0005 constants and SMT/canonical/poseidon API
+  # sit behind feature flags, and without --all-features semver-checks would
+  # only see the default-feature subset and miss a breaking change gated
+  # behind e.g. `smt` or `canonical`.
+  #
+  # Verified both directions before wiring this in, not just the happy path:
+  # renamed a real public const (OLY_STRUCT_MARKER) locally and confirmed
+  # semver-checks reports it as a breaking removal with a nonzero exit
+  # (100), then reverted and confirmed a clean tree exits 0.
+  crypto-semver-checks:
+    name: public API drift (olympus-crypto)
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.rust-app == 'true' || needs.changes.outputs.ci == 'true'
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # stable
+
+      - name: Cache cargo-semver-checks binary
+        id: cache-semver-checks
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ~/.cargo/bin/cargo-semver-checks
+          # Pin invariant matches cargo-cyclonedx / cargo-mutants / cargo-deny
+          # elsewhere in this file: cache key encodes the exact version, bump
+          # deliberately.
+          key: cargo-semver-checks-0.50.0
+
+      - name: Install cargo-semver-checks
+        if: steps.cache-semver-checks.outputs.cache-hit != 'true'
+        run: cargo install cargo-semver-checks --locked --version 0.50.0
+
+      - name: Check olympus-crypto public API against origin/main
+        run: |
+          cargo semver-checks check-release \
+            --package olympus-crypto \
+            --baseline-rev origin/main \
+            --all-features
+
   # ── Rust reference verifier ──────────────────────────────────────────────────
   rust-verifier:
     name: Rust verifier conformance

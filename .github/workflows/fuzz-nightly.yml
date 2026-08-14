@@ -1,0 +1,128 @@
+name: Nightly Fuzz (3h)
+
+# The PR-triggered `cargo-fuzz-verifier` / `cargo-fuzz-crypto` jobs in ci.yml
+# are smoke tests -- 30 seconds per target, just enough to catch a fuzz
+# harness that no longer builds or crashes immediately. That is not real
+# fuzzing depth. This workflow runs every target for a real budget on a
+# schedule instead, where a long runtime doesn't block anyone's PR.
+#
+# Each of the 5 targets gets the FULL 3-hour budget, run in parallel across
+# 5 separate runners (a matrix job), not a 3-hour budget divided five ways --
+# splitting it would dilute the one thing this workflow exists to buy over
+# the PR smoke test: real per-target depth. Wall-clock for the whole nightly
+# run is therefore ~3 hours (plus setup), not 15.
+
+on:
+  schedule:
+    - cron: "0 2 * * *" # 02:00 UTC daily
+  workflow_dispatch:
+
+concurrency:
+  # Don't cancel a 3-hour fuzz run that's already in flight just because a
+  # new scheduled trigger or manual dispatch fires -- let it finish.
+  group: fuzz-nightly
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    name: fuzz ${{ matrix.target }} (3h)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Root fuzz workspace -- exercises olympus-crypto directly. `fuzz/`
+          # IS the fuzz-crate root here (Cargo.toml + fuzz_targets/ live
+          # directly under it), unlike the verifiers group below where the
+          # fuzz crate is nested one level deeper. fuzz_root points at
+          # wherever corpus/ and artifacts/ actually land (confirmed against
+          # each group's real directory layout, not assumed) -- it is
+          # deliberately a separate field from workdir (the directory `cargo
+          # fuzz run` is invoked from) because the two coincide for this
+          # group but NOT for the verifiers group below, and deriving one
+          # from the other got the corpus-cache path wrong on the first pass.
+          - target: fuzz_crypto_primitives
+            workdir: fuzz
+            fuzz_root: fuzz
+            cache_workspace: "fuzz -> fuzz/target"
+            cache_key: nightly-root-fuzz
+          - target: fuzz_smt
+            workdir: fuzz
+            fuzz_root: fuzz
+            cache_workspace: "fuzz -> fuzz/target"
+            cache_key: nightly-root-fuzz
+          # verifiers/rust/fuzz -- exercises the offline Rust verifier.
+          # `cargo fuzz` is invoked from verifiers/rust (it auto-discovers
+          # the nested fuzz/ subdir); corpus/artifacts land under
+          # verifiers/rust/fuzz/, confirmed via that fuzz crate's own
+          # .gitignore (`corpus/`).
+          - target: fuzz_verify_merkle_proof
+            workdir: verifiers/rust
+            fuzz_root: verifiers/rust/fuzz
+            cache_workspace: "verifiers/rust -> target"
+            cache_key: nightly-verifier-fuzz
+          - target: fuzz_compute_merkle_root
+            workdir: verifiers/rust
+            fuzz_root: verifiers/rust/fuzz
+            cache_workspace: "verifiers/rust -> target"
+            cache_key: nightly-verifier-fuzz
+          - target: fuzz_redaction_bundle
+            workdir: verifiers/rust
+            fuzz_root: verifiers/rust/fuzz
+            cache_workspace: "verifiers/rust -> target"
+            cache_key: nightly-verifier-fuzz
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # No job token in git config while this job runs the fuzz harness:
+          # cargo fuzz builds and runs code that (for the verifier target)
+          # is exactly the code a PR could have modified, mirrored from the
+          # PR-triggered smoke-test job's same precaution.
+          persist-credentials: false
+
+      - name: Install Rust nightly
+        run: rustup toolchain install nightly-2026-07-20 --no-self-update
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: ${{ matrix.cache_workspace }}
+          key: ${{ matrix.cache_key }}
+
+      # Corpus is cached separately from build artifacts and keyed per
+      # target so each night's run resumes from what the previous run found,
+      # rather than starting from an empty corpus every time -- this is most
+      # of the point of running long and often instead of once and briefly.
+      # `restore-keys` falls back to any prior save for this target if the
+      # exact key (which includes the run number, so every run's corpus gets
+      # its own snapshot) isn't found, so a cache-miss on a brand new key
+      # still resumes from the most recent prior corpus rather than empty.
+      - name: Cache fuzz corpus
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ${{ matrix.fuzz_root }}/corpus/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_number }}
+          restore-keys: |
+            fuzz-corpus-${{ matrix.target }}-
+
+      - name: Install cargo-fuzz
+        run: cargo +nightly-2026-07-20 install cargo-fuzz --version 0.13.2 --locked
+
+      - name: Fuzz ${{ matrix.target }} (3h)
+        working-directory: ${{ matrix.workdir }}
+        run: cargo +nightly-2026-07-20 fuzz run ${{ matrix.target }} -- -max_total_time=10800
+
+      # A crashing input is the actual point of running this long -- keep it
+      # somewhere a human can pull down and reproduce locally, since the job
+      # log alone doesn't preserve the artifact file cargo-fuzz writes.
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fuzz-crash-${{ matrix.target }}
+          path: ${{ matrix.fuzz_root }}/artifacts/${{ matrix.target }}/
+          retention-days: 30
+          if-no-files-found: ignore

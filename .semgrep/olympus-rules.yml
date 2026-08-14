@@ -1,0 +1,84 @@
+# SPDX-FileCopyrightText: 2026 Olympus Contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Custom Semgrep rules encoding invariants documented in CLAUDE.md's
+# "Critical Invariants" section as static checks, rather than leaving them
+# as prose a reviewer has to remember. Each rule below corresponds to an
+# invariant that already has a real, current-tree confirmation of where the
+# sanctioned code lives -- these are not speculative; they were checked
+# against the actual repo before being written, and every pattern below was
+# proven to actually fire against a synthetic violation before being
+# trusted -- an earlier draft's metavariable-regex silently matched nothing
+# because it anchored on `^\s*` when metavariable-regex matches the raw
+# source text of a string literal metavariable INCLUDING the surrounding
+# quote character, and a separate `"...text..."` ellipsis-inside-a-string
+# pattern (meant to mean "any string containing this substring") also does
+# not work for Rust string literals in this semgrep version -- both were
+# dropped rather than shipped looking correct while matching nothing.
+#
+# Plain ASCII only in this file, deliberately: an earlier draft used
+# typographic dashes and a section-sign character that survived fine in the
+# editor but round-tripped through a tool as mojibake once written to disk,
+# which Semgrep then failed to parse. Cheap to avoid entirely.
+
+rules:
+  - id: smt-write-outside-backend
+    languages: [rust]
+    severity: ERROR
+    message: >-
+      Direct write to smt_nodes/smt_leaves outside src-tauri/src/smt/backend.rs.
+      CLAUDE.md's "Persistent SMT batches are atomic and writers serialise"
+      invariant (ADR-0039) requires every leaf/node write to go through the
+      single transaction returned by NodeBackend::begin_write, so the hot
+      cache refresh and the lock scope stay correct. A write issued from
+      anywhere else bypasses that transaction and the serialisation it
+      provides. If this is a legitimate new backend implementation, add it
+      to backend.rs; if it's test fixture setup, add the file to this
+      rule's exclude list explicitly rather than suppressing the finding.
+    patterns:
+      - pattern-either:
+          - pattern: sqlx::query($SQL)
+          - pattern: QueryBuilder::<$DB>::new($SQL)
+      - metavariable-regex:
+          metavariable: $SQL
+          regex: (?i)^"\s*(INSERT INTO|UPDATE)\s+smt_(nodes|leaves)\b
+    paths:
+      exclude:
+        - "**/src-tauri/src/smt/backend.rs"
+        - "**/src-tauri/tests/smt_pg_backend.rs"
+
+  - id: ledger-delete-violates-insert-only
+    languages: [rust]
+    severity: ERROR
+    message: >-
+      DELETE FROM smt_nodes/smt_leaves in application code. CLAUDE.md's
+      "The ledger is insert-only (ADR-0031)" invariant states there is NO
+      leaf-delete/tombstone path -- LeafUpdate is the only mutation entry.
+      A DELETE here is either a real regression or (if this is a one-time
+      maintenance migration like 0044's lazy-deep-node pruning) does not
+      belong in application Rust at all -- migrations are SQL files under
+      migrations/, not code this rule scans.
+    patterns:
+      - pattern: sqlx::query($SQL)
+      - metavariable-regex:
+          metavariable: $SQL
+          regex: (?i)^"\s*DELETE\s+FROM\s+smt_(nodes|leaves)\b
+
+  - id: crypto-todo-fixme
+    languages: [rust]
+    severity: WARNING
+    message: >-
+      TODO/FIXME/XXX left in a cryptographic hot-path module (blake3,
+      poseidon, canonical, smt, quorum, zk). Not an invariant violation by
+      itself, but this repo's CLAUDE.md treats these modules as the parts
+      where "claims must match the code" matters most, and a stray TODO is
+      exactly the kind of thing that survives review because nobody reads
+      comments in a crypto file twice. Resolve it or turn it into a tracked
+      issue reference (e.g. "see #1234") so it isn't silently forgotten.
+    pattern-regex: (?i)//\s*(TODO|FIXME|XXX)(?!.*#\d+)
+    paths:
+      include:
+        - "**/crates/olympus-crypto/src/**/*.rs"
+        - "**/src-tauri/src/smt/**/*.rs"
+        - "**/src-tauri/src/quorum/**/*.rs"
+        - "**/src-tauri/src/zk/**/*.rs"
