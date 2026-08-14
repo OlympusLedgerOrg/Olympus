@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Olympus Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-import { stat, realpath, open } from "node:fs/promises";
+import { realpath, open } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFile } from "node:child_process";

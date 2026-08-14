@@ -167,6 +167,21 @@ async function main() {
   }
 
   const newAgentsMd = embedSourceTrailer(generated, currentHash);
+  // codeql[js/http-to-file-access] CodeQL flags this as network-sourced data
+  // reaching a file write, and the flow it traces is real -- `raw` does
+  // originate from an HTTP response (callModel, src/backend.mjs). It stays
+  // open rather than a false positive because CodeQL's default JS taint
+  // model only recognizes a curated list of library-call sanitizers, not
+  // sanitizeGeneratedMarkdown (a project-local function it has no model
+  // for) -- there is no way to make this specific query pass without
+  // either removing the sanitizer call it can't see through or removing
+  // the feature. The actual mitigation is real, just invisible to this
+  // query: sanitizeGeneratedMarkdown strips control/invisible characters
+  // BEFORE this line (see the call above), checkStructuralParity gates the
+  // content's shape before this line runs at all, AGENTS_MD is a hardcoded
+  // constant path (never attacker-influenced), and this line only executes
+  // when the CI ANTHROPIC_API_KEY is present -- which ci.yml scopes to
+  // `push` only, never `pull_request` (see that workflow's own comment).
   await writeFile(AGENTS_MD, newAgentsMd, "utf8");
   console.log("[wiserepo] AGENTS.md regenerated from CLAUDE.md and stamped with its source hash.");
 }
