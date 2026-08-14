@@ -253,13 +253,25 @@ jobs:
       # because it phones home to Semgrep's registry to pick rules based on
       # repo metadata. That conflicts with the metrics=off / no-unnecessary-
       # network-calls stance this repo already takes elsewhere (see
-      # tools/wiserepo's trust-boundary README section). `p/rust` is a
-      # specific, pinned public registry pack that needs no login and no
-      # telemetry, and matches this scan's scope -- the codebase's dominant
-      # language, where clippy has no equivalent security-pattern matching.
-      # TS/JS is intentionally out of scope here: eslint + tsc + prettier
-      # already gate app/public-ui and tools/wiserepo (see repo-tooling and
-      # the frontend jobs); add a JS Semgrep pack later if a real gap shows up.
+      # tools/wiserepo's trust-boundary README section).
+      #
+      # `.semgrep/p-rust-snapshot.yml` is a VENDORED, committed copy of the
+      # public `p/rust` registry pack (`curl -fsSL https://semgrep.dev/c/p/rust`),
+      # not a live `--config p/rust` fetch. The registry path is a mutable
+      # pointer -- Semgrep provides no version/commit pinning for it, so
+      # `--config p/rust` means every CI run scans against whatever the
+      # ruleset currently is, silently, with no repository commit recording
+      # the change. That's the opposite of how every other tool pin in this
+      # file works (exact SHAs, exact toolchain versions, exact tool
+      # versions). Re-vendor deliberately with the same curl command when you
+      # want to pick up upstream rule changes -- that's a normal, reviewable
+      # diff, not a standing exception to the pin-everything discipline.
+      #
+      # Matches this scan's scope -- the codebase's dominant language, where
+      # clippy has no equivalent security-pattern matching. TS/JS is
+      # intentionally out of scope here: eslint + tsc + prettier already gate
+      # app/public-ui and tools/wiserepo (see repo-tooling and the frontend
+      # jobs); add a JS Semgrep pack later if a real gap shows up.
       #
       # Four rule IDs are excluded, triaged the same way cargo-audit-baseline.txt
       # and .gitleaks-baseline.json triage known noise in this repo -- run
@@ -279,15 +291,25 @@ jobs:
       #     -- fire on ordinary CLI argument parsing in binary entry points
       #     (olympus_smt_demo, the zkVM host-tools binary,
       #     verify_ceremony_bundle) with no more specific pattern attached.
-      # Re-run without --exclude-rule locally after a p/rust version bump to
-      # confirm this list is still the right one before trusting a green CI.
-      - name: Run Semgrep (p/rust registry ruleset)
+      # Re-run without --exclude-rule locally after re-vendoring the snapshot
+      # to confirm this list is still the right one before trusting a green CI.
+      - name: Run Semgrep (vendored p/rust snapshot)
         run: |
-          semgrep scan --config p/rust --error --metrics=off \
-            --exclude-rule rust.lang.security.unsafe-usage.unsafe-usage \
-            --exclude-rule rust.lang.security.current-exe.current-exe \
-            --exclude-rule rust.lang.security.args-os.args-os \
-            --exclude-rule rust.lang.security.args.args
+          # `--exclude-rule` values are prefixed `semgrep.` here, not the
+          # bare `rust.lang.security....` IDs the same rules have when
+          # fetched live via `--config p/rust`. Loading a LOCAL config file
+          # namespaces every rule ID with the config's basename -- verified
+          # directly: the bare IDs silently excluded nothing (11 rules ran,
+          # 153 findings), the `semgrep.`-prefixed IDs correctly excluded
+          # all four (7 rules ran, 0 findings). Same class of bug as the
+          # metavariable-regex quoting issue in .semgrep/olympus-rules.yml's
+          # own header comment -- looked right, matched nothing, caught by
+          # testing the actual command rather than trusting the rename.
+          semgrep scan --config .semgrep/p-rust-snapshot.yml --error --metrics=off \
+            --exclude-rule semgrep.rust.lang.security.unsafe-usage.unsafe-usage \
+            --exclude-rule semgrep.rust.lang.security.current-exe.current-exe \
+            --exclude-rule semgrep.rust.lang.security.args-os.args-os \
+            --exclude-rule semgrep.rust.lang.security.args.args
 
       - name: Run Semgrep (Olympus custom invariant rules)
         run: semgrep scan --config .semgrep/olympus-rules.yml --error --metrics=off
