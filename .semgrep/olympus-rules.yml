@@ -57,12 +57,23 @@ rules:
       A DELETE here is either a real regression or (if this is a one-time
       maintenance migration like 0044's lazy-deep-node pruning) does not
       belong in application Rust at all -- migrations are SQL files under
-      migrations/, not code this rule scans.
+      migrations/, not code this rule scans. If this is a test that
+      exercises migration-mirroring DELETE logic (like
+      src-tauri/tests/smt_pg_backend.rs does for 0044), add the file to
+      this rule's exclude list explicitly rather than suppressing the
+      finding.
     patterns:
       - pattern: sqlx::query($SQL)
       - metavariable-regex:
           metavariable: $SQL
           regex: (?i)^"\s*DELETE\s+FROM\s+smt_(nodes|leaves)\b
+    paths:
+      exclude:
+        - "**/src-tauri/tests/smt_pg_backend.rs"
+        # Benchmark tool gated on OLYMPUS_BENCH_DATABASE_URL, explicitly
+        # documented in its own header as operating on a throwaway database
+        # to measure storage-size tradeoffs -- not part of the application.
+        - "**/src-tauri/examples/smt_node_depth_histogram.rs"
 
   - id: crypto-todo-fixme
     languages: [rust]
