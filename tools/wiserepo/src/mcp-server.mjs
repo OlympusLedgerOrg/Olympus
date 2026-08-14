@@ -6,8 +6,9 @@ import { pathToFileURL } from "node:url";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
-import { callModel } from "./backend.mjs";
+import { callModel, ModelUnavailableError } from "./backend.mjs";
 import { readRepoFile, gitDiff, gitGrep, truncateText, wouldTruncate } from "./repo.mjs";
+import { semanticSearch } from "./search.mjs";
 
 // Total context budget across every file/diff/grep a single tool call pulls
 // in, independent of the per-piece truncation each helper already applies.
@@ -34,7 +35,10 @@ const TOOLS = [
     name: "repo_qa",
     description:
       "Answer a question about the Olympus repo, grounded in actual file contents. " +
-      "Give it a question plus a few relevant file paths (relative to repo root) or a grep pattern to search first.",
+      "If a semantic index exists (run `node bin/build-index.mjs` first), automatically " +
+      "searches it by meaning to find relevant chunks -- you don't need to already know " +
+      "which file the answer lives in. Explicit `files`/`grep` still work and are added " +
+      "alongside whatever the index search finds.",
     inputSchema: {
       type: "object",
       properties: {
@@ -48,6 +52,15 @@ const TOOLS = [
         grep: {
           type: "string",
           description: "Optional git-grep pattern to search first and include as context.",
+        },
+        useIndex: {
+          type: "boolean",
+          description:
+            "Search the semantic index (if one exists) using the question as the query. Default true.",
+        },
+        topK: {
+          type: "number",
+          description: "Max index chunks to include when useIndex is true. Default 8.",
         },
         backend: BACKEND_PROPERTY,
       },
@@ -90,6 +103,19 @@ const TOOLS = [
     },
   },
 ];
+
+// Renders semanticSearch's results into the same "## heading + fenced
+// block" shape gatherContext's other pieces use, so the model sees one
+// consistent context format regardless of whether a piece came from an
+// explicit file, a grep, or the semantic index.
+export function formatSemanticResults(results) {
+  if (results.length === 0) return "";
+  const parts = results.map(
+    (r) =>
+      `### ${r.file}:${r.startLine}-${r.endLine} (similarity ${r.score.toFixed(3)})\n\`\`\`\n${r.text}\n\`\`\``,
+  );
+  return `## Semantic search results\n\n${parts.join("\n\n")}`;
+}
 
 export async function gatherContext({ files = [], grep, diffArgs }) {
   if (files.length > MAX_FILES_PER_REQUEST) {
@@ -158,7 +184,31 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   try {
     if (name === "repo_qa") {
       const context = await gatherContext({ files: args.files, grep: args.grep });
-      const prompt = `${context ? context + "\n\n" : ""}Question: ${args.question}`;
+
+      let semanticContext = "";
+      if (args.useIndex !== false) {
+        try {
+          const results = await semanticSearch(args.question, { topK: args.topK });
+          // null means no index has been built yet (bin/build-index.mjs
+          // was never run) -- that's not an error, just "nothing to add",
+          // so proceed silently with whatever explicit files/grep gave.
+          if (results) semanticContext = formatSemanticResults(results);
+        } catch (err) {
+          if (err instanceof ModelUnavailableError) {
+            // Missing OPENAI_API_KEY, or a network error embedding the
+            // query -- non-fatal. This is an optional enhancement over
+            // explicit files/grep, not a hard dependency; note the
+            // degradation rather than silently proceeding OR failing the
+            // whole call over it.
+            semanticContext = `[wiserepo: semantic index search unavailable (${err.message}) -- answering from explicit files/grep only]\n\n`;
+          } else {
+            throw err;
+          }
+        }
+      }
+
+      const combinedContext = [semanticContext, context].filter(Boolean).join("\n\n");
+      const prompt = `${combinedContext ? combinedContext + "\n\n" : ""}Question: ${args.question}`;
       const answer = await callModel({ system: SYSTEM_PROMPT, prompt, backend: args.backend });
       return { content: [{ type: "text", text: answer }] };
     }

@@ -15,6 +15,16 @@ credentials, anything outside this repo — the path-confinement guards in
 `src/repo.mjs` exist specifically to stop the tool from reading and sending
 those without you asking it to by name).
 
+**The semantic index widens this boundary — it is not scoped to a single
+call.** Running `node bin/build-index.mjs` sends the content of every
+indexable file in the repo to the OpenAI embeddings API, unconditionally —
+not just the files a `repo_qa` call happens to name. There is no per-file
+opt-in at index time; if a file matches the indexer's extension list and
+isn't excluded (see below), its content leaves the machine. Build the index
+only in a repo you'd be comfortable sending to OpenAI wholesale, and see
+"Semantic index" below for exactly what gets excluded and when re-indexing
+happens (it never happens implicitly).
+
 ## Setup
 
 ```bash
@@ -47,9 +57,63 @@ alongside `repowise` — no extra Claude Code config needed.
 
 ## MCP tools
 
-- `repo_qa` — ask a question grounded in repo file contents / a git-grep search
+- `repo_qa` — ask a question grounded in repo file contents / a git-grep search.
+  If a semantic index exists (see below), it's searched automatically using
+  the question as the query and the results are folded into the same context
+  as any explicit `files`/`grep`; set `useIndex: false` to skip it, or
+  `topK` to change how many chunks are pulled in (default 8).
 - `review_diff` — review a diff against `CLAUDE.md`'s engineering standards
 - `summarize` — summarize a diff or set of files (changelog entry, PR description, etc.)
+
+## Semantic index
+
+`repo_qa` can answer "which file handles X" without you already knowing the
+path, by searching an embedding-based index instead of relying solely on
+explicit `files`/`grep`. This is opt-in infrastructure, not a background
+service: nothing builds or refreshes the index automatically.
+
+```bash
+cd tools/wiserepo
+node bin/build-index.mjs            # build/refresh the index
+node bin/build-index.mjs --dry-run  # show what would change, no API calls, no writes
+```
+
+**Re-indexing is manual only, by design.** There is no git hook, no CI job,
+and no watch mode that rebuilds the index for you — `repo_qa` searches
+whatever was on disk the last time you ran `build-index.mjs` by hand, and
+silently falls back to explicit `files`/`grep` if it's never been run at
+all (`semanticSearch` returns `null`, not an error — no `OPENAI_API_KEY` is
+even required until you actually build an index). Run it again after making
+changes you want reflected in search results.
+
+How it works:
+
+- **Chunking** (`src/chunk.mjs`) splits each indexable file on
+  language-aware boundaries (Rust `fn`/`impl`/`struct`/`enum`/`trait`/`mod`,
+  JS/TS `function`/`class`/exported `const`, Markdown headings), falling
+  back to fixed-size chunks for unrecognized extensions. Undersized chunks
+  are merged into a neighbor rather than dropped, so a short-but-real
+  function or heading section never silently vanishes from the index.
+- **Embedding** (`src/embed.mjs`) batches chunk text through OpenAI's
+  `text-embedding-3-small` (override with `WISEREPO_EMBEDDING_MODEL`).
+- **Storage** (`src/index-store.mjs`) is incremental and content-hash keyed
+  (`.wiserepo-index/index.json`, gitignored): unchanged chunks are never
+  re-embedded on a subsequent run, and entries for since-deleted/changed
+  chunks are pruned.
+- **Search** (`src/search.mjs`) embeds the query and ranks stored chunks by
+  cosine similarity.
+
+**Verification status:** chunking, embedding batching/ordering/error
+handling, index storage, and ranking are each covered by unit tests
+(`test/chunk.test.mjs`, `test/embed.test.mjs` with a stubbed `fetch`,
+`test/index-store.test.mjs`, `test/search.test.mjs`), and `repo_qa`'s
+fallback behavior when no index exists is tested end-to-end
+(`test/mcp-server.test.mjs`). The live call to OpenAI's real embeddings
+endpoint is architecturally exercised only through the stub — there is no
+`OPENAI_API_KEY` in this development environment, so the actual
+network round-trip has not been verified end-to-end. Treat the feature as
+correct-by-construction until someone with a key confirms a real
+`build-index.mjs` run end-to-end.
 
 Every file/diff/grep result is truncated per-piece, and the combined context
 for a single call is capped at 300k chars (`TOTAL_CONTEXT_BUDGET_CHARS` in
@@ -171,7 +235,7 @@ cd tools/wiserepo
 npm test
 ```
 
-65 tests covering the places a bug is silent rather than loud:
+105 tests covering the places a bug is silent rather than loud:
 
 - `resolveInRepo` path-traversal guard, including the sibling-prefix case
   (`Olympus-evil` must not count as inside `Olympus`) — and
