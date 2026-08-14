@@ -495,6 +495,39 @@ async fn set_checkpoint_quorum_threshold_rejects_zero() {
 }
 
 #[tokio::test]
+async fn set_checkpoint_quorum_threshold_rejects_above_i32_max() {
+    let h = common::boot().await;
+    let shard = common::unique_id("cqt-overflow");
+    let reg = common::post_admin_json(
+        &h.client,
+        &common::url(h, "/admin/shards"),
+        &h.admin_key,
+        &serde_json::json!({ "shard_id": shard }),
+    )
+    .await;
+    assert_eq!(reg.status(), 201);
+
+    // One past i32::MAX: an unchecked `as i32` cast would wrap this negative
+    // and the column's CHECK constraint would reject it as a DB error rather
+    // than a clean 422 — the handler must catch it first.
+    let resp = common::patch_admin_json(
+        &h.client,
+        &common::url(
+            h,
+            &format!("/admin/shards/{shard}/checkpoint-quorum-threshold"),
+        ),
+        &h.admin_key,
+        &serde_json::json!({ "threshold": 2_147_483_648u64 }),
+    )
+    .await;
+    assert_eq!(
+        resp.status(),
+        422,
+        "a threshold above i32::MAX must be rejected as 422, not surfaced as a DB error"
+    );
+}
+
+#[tokio::test]
 async fn set_checkpoint_quorum_threshold_sets_then_clears() {
     let h = common::boot().await;
     let shard = common::unique_id("cqt-setclear");
@@ -539,7 +572,10 @@ async fn set_checkpoint_quorum_threshold_sets_then_clears() {
         .iter()
         .find(|r| r["shard_id"].as_str() == Some(shard.as_str()))
         .expect("shard must be listed");
-    assert_eq!(row["checkpoint_quorum_threshold_override"].as_i64(), Some(3));
+    assert_eq!(
+        row["checkpoint_quorum_threshold_override"].as_i64(),
+        Some(3)
+    );
 
     // Clear it — an explicit `null` (not an omitted field) round-trips back
     // to no override.

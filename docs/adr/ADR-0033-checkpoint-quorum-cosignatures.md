@@ -199,7 +199,7 @@ registry (`shards.checkpoint_quorum_threshold_override`, migration
 operator-controlled model shard creation already uses (CLAUDE.md "Shard
 creation is operator-controlled"). An operator sets or clears it via `PATCH
 /admin/shards/{shard_id}/checkpoint-quorum-threshold` (`api::shards::
-set_checkpoint_quorum_threshold`), admin-gated the same way `POST
+set_quorum_threshold`), admin-gated the same way `POST
 /admin/shards` is (`require_admin_auth` + the ADR-0036 signed-envelope
 policy for high-risk admin mutations). `collect_and_store_checkpoint_quorum`
 reads it (`api::shards::checkpoint_quorum_threshold_override`) only in the

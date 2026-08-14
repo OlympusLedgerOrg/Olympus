@@ -6,7 +6,8 @@
 pub const ADMIN_SCOPE: &str = "admin";
 
 pub const ADMIN_SHARDS: &str = "/admin/shards";
-pub const ADMIN_SHARD_QUORUM_THRESHOLD: &str = "/admin/shards/{shard_id}/checkpoint-quorum-threshold";
+pub const ADMIN_SHARD_QUORUM_THRESHOLD: &str =
+    "/admin/shards/{shard_id}/checkpoint-quorum-threshold";
 pub const ADMIN_USERS: &str = "/admin/users";
 pub const ADMIN_USER_KEYS: &str = "/admin/users/{user_id}/keys";
 pub const ADMIN_USER_ROLE: &str = "/admin/users/{user_id}/role";

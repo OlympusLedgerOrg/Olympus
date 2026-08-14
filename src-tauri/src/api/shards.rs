@@ -23,7 +23,7 @@
 //! Lifecycle scope (current): `register`/`list` (POST/GET `/admin/shards`) plus
 //! one targeted mutation, `PATCH /admin/shards/{shard_id}/checkpoint-quorum-threshold`
 //! (ADR-0033's per-shard checkpoint-quorum threshold override — see
-//! [`set_checkpoint_quorum_threshold`]). There is still no endpoint that sets
+//! [`set_quorum_threshold`]). There is still no endpoint that sets
 //! `active = false` or rewrites `owner_user_id`, so the `!active` branch in
 //! [`authorize_write`] is reachable only by editing the `shards` row directly
 //! in the DB. Deactivating or re-binding a shard is therefore a manual
@@ -96,7 +96,7 @@ pub struct ShardRecord {
     pub active: bool,
     /// ADR-0033 per-shard checkpoint-quorum threshold override. `NULL` means
     /// "use `OLYMPUS_CHECKPOINT_QUORUM_THRESHOLD`" — see
-    /// [`set_checkpoint_quorum_threshold`].
+    /// [`set_quorum_threshold`].
     pub checkpoint_quorum_threshold_override: Option<i32>,
 }
 
@@ -248,7 +248,7 @@ async fn list_shards(
 /// `configured_checkpoint_threshold` floors a zero env value to `1` — a zero
 /// threshold is never satisfiable — but here it is a hard rejection rather
 /// than a silent clamp, since this is an explicit operator action.
-async fn set_checkpoint_quorum_threshold(
+async fn set_quorum_threshold(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(shard_id): Path<String>,
@@ -261,11 +261,16 @@ async fn set_checkpoint_quorum_threshold(
     require_admin_auth(&headers, pool, &state.bjj_trusted_issuers).await?;
 
     if let Some(t) = req.threshold {
-        if t < 1 {
+        // Upper-bounded by i32::MAX: the column is a Postgres INTEGER, and an
+        // unchecked `as i32` cast below would wrap a larger u32 negative,
+        // surfacing as a DB CHECK-constraint failure (a 500-ish error) instead
+        // of a clean 422.
+        if t < 1 || t > i32::MAX as u32 {
             return Err(err(
                 StatusCode::UNPROCESSABLE_ENTITY,
-                "threshold must be >= 1 (a zero checkpoint-quorum threshold can never be \
-                 satisfied); omit threshold or pass null to clear the override.",
+                "threshold must be in 1..=2147483647 (a zero checkpoint-quorum threshold can \
+                 never be satisfied, and the column is a Postgres INTEGER); omit threshold or \
+                 pass null to clear the override.",
             ));
         }
     }
@@ -299,7 +304,7 @@ async fn set_checkpoint_quorum_threshold(
 /// the caller (`collect_and_store_checkpoint_quorum`) already falls back to
 /// [`crate::quorum::checkpoint::configured_checkpoint_threshold`] in either
 /// case, matching its existing no-op-on-missing-data posture. A stored value
-/// `< 1` (unreachable through [`set_checkpoint_quorum_threshold`], which
+/// `< 1` (unreachable through [`set_quorum_threshold`], which
 /// rejects it, but the column has no `CHECK` beyond the migration's `>= 1`
 /// constraint on write, not on read) is defensively clamped up to `1`, the
 /// same floor `configured_checkpoint_threshold` applies to a bad env value.
@@ -379,7 +384,7 @@ pub async fn authorize_write(
 pub fn router() -> Router<AppState> {
     Router::new()
         .route(ADMIN_SHARDS, post(register_shard).get(list_shards))
-        .route(ADMIN_SHARD_QUORUM_THRESHOLD, patch(set_checkpoint_quorum_threshold))
+        .route(ADMIN_SHARD_QUORUM_THRESHOLD, patch(set_quorum_threshold))
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────────
