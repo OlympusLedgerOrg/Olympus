@@ -163,7 +163,9 @@ The signer set is sourced from `quorum::trusted_signer_set` (the trusted-peer
 registry), and the threshold from `OLYMPUS_CHECKPOINT_QUORUM_THRESHOLD`
 (clamped `≥ 1`, defaulting to `1`) — a dedicated env var, distinct from
 `OLYMPUS_FEDERATION_QUORUM_THRESHOLD` (which scopes SBT credential quorums),
-so an operator can run different M-of-N policies for the two. Migration
+so an operator can run different M-of-N policies for the two, unless the
+checkpoint's shard carries a per-shard override (see "Per-shard threshold
+override" below), which takes precedence. Migration
 `0061_own_checkpoints_quorum_params.sql` adds `checkpoint_quorum_threshold` /
 `checkpoint_quorum_signers` to `own_checkpoints`, pinned **once**, on the
 **first attempt** (not the first time the threshold is *met* — see below),
@@ -188,8 +190,25 @@ its way to quorum at all. The one real failure mode this trades in — a
 threshold pinned above the live signer count — is closed separately, above:
 that specific case is refused before it is ever pinned.
 
-Deliberately **not** implemented here: a per-checkpoint threshold override
-(the credential path's `quorum_threshold` request field has no checkpoint
-analogue, since checkpoints are produced by the cron/gossip loop, not a
-per-call API request) — the env default is the only lever. A future revision
-can add one if an operational need for it appears.
+**Per-shard threshold override.** The credential path's `quorum_threshold`
+request field has no direct checkpoint analogue, since checkpoints are
+produced by the cron/gossip loop, not a per-call API request that could carry
+its own override — so the operator-facing knob instead lives on the shard
+registry (`shards.checkpoint_quorum_threshold_override`, migration
+`0062_shards_checkpoint_quorum_threshold.sql`), reusing the same
+operator-controlled model shard creation already uses (CLAUDE.md "Shard
+creation is operator-controlled"). An operator sets or clears it via `PATCH
+/admin/shards/{shard_id}/checkpoint-quorum-threshold` (`api::shards::
+set_quorum_threshold`), admin-gated the same way `POST
+/admin/shards` is (`require_admin_auth` + the ADR-0036 signed-envelope
+policy for high-risk admin mutations). `collect_and_store_checkpoint_quorum`
+reads it (`api::shards::checkpoint_quorum_threshold_override`) only in the
+fresh-pin branch — a shard override takes precedence over
+`OLYMPUS_CHECKPOINT_QUORUM_THRESHOLD` when set, `None` falls back to the env
+default unchanged. Because pinning is still one-shot on first attempt (see
+above), setting or clearing the override never retroactively changes an
+already-pinned checkpoint row — it only takes effect on that shard's *next*
+checkpoint. The override is deliberately not validated against the live
+trusted-peer count at set time; that would be a second, driftable source of
+truth for a check the pin-time path (`threshold as usize > signers.len()`
+above) already performs correctly against the live set.
