@@ -1,0 +1,21 @@
+{
+  "name": "wiserepo",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Self-hosted repo Q&A / review / doc-sync MCP server for Olympus, backed by the user's own Claude or Codex API key.",
+  "bin": {
+    "wiserepo-sync-agent-docs": "./bin/sync-agent-docs.mjs"
+  },
+  "scripts": {
+    "start": "node src/mcp-server.mjs",
+    "sync-agent-docs": "node bin/sync-agent-docs.mjs",
+    "test": "node --test \"test/**/*.test.mjs\""
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
