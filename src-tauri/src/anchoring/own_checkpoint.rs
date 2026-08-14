@@ -777,6 +777,47 @@ pub async fn list_recent_for_shard(
     rows.into_iter().map(row_to_own_checkpoint).collect()
 }
 
+/// The most recent checkpoint for one shard carrying a **BLAKE3 SMT root
+/// attestation** (ADR-0044) — i.e. `blake3_smt_root` and its BJJ signature
+/// are all present, not just the Poseidon signature [`latest_for_shard`]
+/// requires. The BLAKE3-proof-serving endpoint (`api::monitor::proof_blake3`)
+/// serves a proof against this row's `blake3_smt_root`, so an unsigned or
+/// pre-ADR-0044 checkpoint row is not a candidate.
+pub async fn latest_smt_attestation_for_shard(
+    pool: &PgPool,
+    checkpoint_scope: &str,
+    shard_id: &str,
+) -> Result<Option<OwnCheckpointRow>, String> {
+    let row: Option<CheckpointDbRow> = sqlx::query_as(
+        "SELECT id, format_version, checkpoint_scope, shard_id,
+                ledger_root, tree_size, checkpoint_timestamp,
+                authority_pubkey_hash, sig_r8x, sig_r8y, sig_s,
+                authority_pubkey_x, authority_pubkey_y,
+                anchor_hash, groth16_proof, public_signals,
+                ed25519_pubkey_hex, ed25519_signature_hex,
+                transition_original_root, transition_leaf, transition_path, transition_sig_r8x,
+                transition_sig_r8y, transition_sig_s,
+                blake3_smt_root, blake3_smt_sig_r8x, blake3_smt_sig_r8y, blake3_smt_sig_s,
+                checkpoint_quorum_threshold, checkpoint_quorum_signers
+         FROM own_checkpoints
+         WHERE checkpoint_scope = $1
+           AND shard_id = $2
+           AND blake3_smt_root     IS NOT NULL
+           AND blake3_smt_sig_r8x IS NOT NULL
+           AND blake3_smt_sig_r8y IS NOT NULL
+           AND blake3_smt_sig_s   IS NOT NULL
+         ORDER BY checkpoint_timestamp DESC, id DESC
+         LIMIT 1",
+    )
+    .bind(checkpoint_scope)
+    .bind(shard_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| format!("query latest smt-attested own_checkpoint for shard: {e}"))?;
+
+    row.map(row_to_own_checkpoint).transpose()
+}
+
 /// The earliest signed checkpoint for one shard whose `tree_size` is at
 /// least `min_tree_size` — i.e. the first checkpoint that could possibly
 /// cover a leaf committed at that ordinal position (ADR-0021 MMD evidence).

@@ -269,6 +269,197 @@ async fn proof_rejects_malformed_hash_and_404s_on_unknown_hash() {
     assert_eq!(resp.status(), 404);
 }
 
+// ── GET /monitor/proof/blake3/{content_hash} ────────────────────────────────
+
+/// Reduce a 32-byte digest into the BJJ-EdDSA message scalar, mirroring
+/// `anchoring::own_checkpoint::digest_to_subgroup_scalar` (private, so this
+/// test replicates the "mod l then map into Fr" recipe rather than exercising
+/// it directly — the point of this test is independent verification, not
+/// reuse of the producer's own reduction code).
+fn digest_to_subgroup_scalar(digest: &[u8; 32]) -> ark_bn254::Fr {
+    use ark_ff::PrimeField;
+    let l: num_bigint::BigUint = olympus_tauri_lib::zk::witness::baby_jubjub::BABYJ_SUBGROUP_ORDER
+        .parse()
+        .expect("static decimal");
+    let reduced = num_bigint::BigUint::from_bytes_be(digest) % l;
+    ark_bn254::Fr::from_le_bytes_mod_order(&reduced.to_bytes_le())
+}
+
+/// Insert an `own_checkpoints` row carrying a **real, verifiable**
+/// `SmtRootAttestation` for `shard_id`'s *actual* current persisted BLAKE3
+/// subtree root — signed with the test harness's own BJJ authority key, the
+/// same key `/monitor/proof/blake3` checks incoming attestations against via
+/// `state.bjj_trusted_issuers`. Returns the signed `blake3_smt_root` hex so
+/// callers can assert on it.
+async fn insert_checkpoint_with_smt_attestation(
+    h: &common::TestHarness,
+    pool: &PgPool,
+    shard_id: &str,
+    tree_size: i64,
+    checkpoint_timestamp: i64,
+) -> String {
+    use olympus_tauri_lib::smt::{backend::PgBackend, tree::PersistentSmt};
+
+    let tree = PersistentSmt::open_deferred(PgBackend::new(pool.clone()));
+    let shard_root = tree
+        .shard_subtree_root(shard_id)
+        .await
+        .expect("shard_subtree_root");
+    // `own_checkpoints.ledger_root` is stored as hex (unlike `insert_checkpoint`'s
+    // decimal-shaped Poseidon placeholder above) because
+    // `verify_smt_root_attestation` parses it via `hex_to_bytes32` — this
+    // attestation's `ledger_root` value doesn't need to correspond to a real
+    // Poseidon root for this test, only to be valid, matching hex on both sides.
+    let ledger_root_bytes = [0x42u8; 32];
+
+    let attestation = olympus_crypto::SmtRootAttestation {
+        shard_id: shard_id.as_bytes().to_vec(),
+        ledger_root: ledger_root_bytes,
+        tree_size,
+        blake3_smt_root: shard_root,
+    };
+    let message = digest_to_subgroup_scalar(&attestation.message());
+    let sig = olympus_tauri_lib::zk::witness::baby_jubjub::sign(&h.bjj_authority_key, message)
+        .expect("sign smt root attestation");
+
+    let shard_root_hex = hex::encode(shard_root);
+    let ledger_root_hex = hex::encode(attestation.ledger_root);
+    sqlx::query(
+        "INSERT INTO own_checkpoints
+             (format_version, checkpoint_scope, shard_id, ledger_root, tree_size,
+              checkpoint_timestamp, authority_pubkey_hash, authority_pubkey_x,
+              authority_pubkey_y, sig_r8x, sig_r8y, sig_s, anchor_hash,
+              blake3_smt_root, blake3_smt_sig_r8x, blake3_smt_sig_r8y, blake3_smt_sig_s)
+         VALUES (2, 'shard', $1, $2, $3, $4, 'ph', 'ph', 'ph', 'ph', 'ph', 'ph', $5,
+                 $6, $7, $8, $9)",
+    )
+    .bind(shard_id)
+    .bind(&ledger_root_hex)
+    .bind(tree_size)
+    .bind(checkpoint_timestamp)
+    .bind(vec![0u8; 32])
+    .bind(&shard_root_hex)
+    .bind(olympus_tauri_lib::zk::proof::fr_to_decimal(&sig.r8x))
+    .bind(olympus_tauri_lib::zk::proof::fr_to_decimal(&sig.r8y))
+    .bind(olympus_tauri_lib::zk::proof::fr_to_decimal(&sig.s))
+    .execute(pool)
+    .await
+    .expect("insert own_checkpoints row with smt root attestation");
+
+    shard_root_hex
+}
+
+#[tokio::test]
+async fn blake3_proof_serves_an_independently_verifiable_witness() {
+    let h = common::boot().await;
+    let pool = PgPool::connect(&h.database_url).await.expect("pool");
+    let shard = common::unique_id("monitor-blake3");
+    register_shard(h, &shard).await;
+
+    let body = common::unique_id("monitor-blake3-body");
+    let ingested = ingest_file(h, &shard, &body).await;
+    let content_hash = ingested["content_hash"]
+        .as_str()
+        .expect("contentHash")
+        .to_owned();
+
+    let shard_root_hex =
+        insert_checkpoint_with_smt_attestation(h, &pool, &shard, 1, 1_700_000_000).await;
+
+    let resp = h
+        .client
+        .get(common::url(
+            h,
+            &format!("/monitor/proof/blake3/{content_hash}"),
+        ))
+        .send()
+        .await
+        .expect("GET blake3 proof");
+    assert_eq!(resp.status(), 200, "body: {:?}", resp.text().await);
+    let body: Value = {
+        let resp = h
+            .client
+            .get(common::url(
+                h,
+                &format!("/monitor/proof/blake3/{content_hash}"),
+            ))
+            .send()
+            .await
+            .expect("GET blake3 proof (re-fetch for JSON)");
+        resp.json().await.expect("JSON")
+    };
+
+    assert_eq!(body["contentHash"], content_hash);
+    assert_eq!(body["shardId"], shard);
+    assert_eq!(body["blake3SmtRoot"], shard_root_hex);
+    assert_eq!(
+        body["serverReportsValid"], true,
+        "a freshly ingested record's own witness must self-verify: {body:?}"
+    );
+
+    // Independent re-verification: the offline crypto primitive, not this
+    // server's own verdict.
+    let proof: olympus_crypto::smt::Proof =
+        serde_json::from_value(body["proof"].clone()).expect("proof deserializes");
+    let shard_root: [u8; 32] = hex::decode(&shard_root_hex)
+        .expect("hex")
+        .try_into()
+        .expect("32 bytes");
+    assert!(
+        olympus_crypto::smt::verify_proof_against_shard_root(&proof, &shard, &shard_root),
+        "served proof must independently fold to the attested shard root"
+    );
+}
+
+#[tokio::test]
+async fn blake3_proof_rejects_malformed_hash_and_404s_on_unknown_hash() {
+    let h = common::boot().await;
+
+    let resp = h
+        .client
+        .get(common::url(h, "/monitor/proof/blake3/not-a-hash"))
+        .send()
+        .await
+        .expect("GET malformed hash");
+    assert_eq!(resp.status(), 422);
+
+    let unknown = "cd".repeat(32);
+    let resp = h
+        .client
+        .get(common::url(h, &format!("/monitor/proof/blake3/{unknown}")))
+        .send()
+        .await
+        .expect("GET unknown hash");
+    assert_eq!(resp.status(), 404);
+}
+
+#[tokio::test]
+async fn blake3_proof_503s_when_shard_has_no_attestation_yet() {
+    let h = common::boot().await;
+    let shard = common::unique_id("monitor-blake3-noattest");
+    register_shard(h, &shard).await;
+
+    let body = common::unique_id("monitor-blake3-noattest-body");
+    let ingested = ingest_file(h, &shard, &body).await;
+    let content_hash = ingested["content_hash"]
+        .as_str()
+        .expect("contentHash")
+        .to_owned();
+
+    // No own_checkpoints row for this shard at all — the record exists and is
+    // provable, but nothing has signed a BLAKE3 root covering it yet.
+    let resp = h
+        .client
+        .get(common::url(
+            h,
+            &format!("/monitor/proof/blake3/{content_hash}"),
+        ))
+        .send()
+        .await
+        .expect("GET blake3 proof (no attestation)");
+    assert_eq!(resp.status(), 503);
+}
+
 // ── GET /monitor/mmd/{content_hash} ─────────────────────────────────────────
 
 #[tokio::test]

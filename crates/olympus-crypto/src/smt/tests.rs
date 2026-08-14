@@ -451,3 +451,172 @@ fn wrong_length_nonexistence_rejected() {
     long.siblings.push([0u8; 32]);
     assert!(!verify_nonexistence_proof(&long, Some(&root)));
 }
+
+// ── shard-scoped verification (ADR-0044 proof-serving) ──────────────────────
+
+/// Build a two-shard tree so the shard-subtree root and the global root are
+/// provably distinct values, not just conceptually different fields — a
+/// regression that silently re-implemented a full 256-fold instead of the
+/// leaf-side 192 would still pass a single-shard test by coincidence.
+fn two_shard_tree() -> SparseMerkleTree {
+    let mut t = SparseMerkleTree::new();
+    t.update(
+        shard_record_key("shard-a", &rk(1)),
+        rk(0xAA),
+        "shard-a",
+        "p",
+        "v1",
+        "m1",
+    );
+    t.update(
+        shard_record_key("shard-b", &rk(2)),
+        rk(0xBB),
+        "shard-b",
+        "p",
+        "v1",
+        "m1",
+    );
+    t
+}
+
+#[test]
+fn existence_proof_verifies_against_shard_subtree_root() {
+    let t = two_shard_tree();
+    let shard_root = t.shard_subtree_root("shard-a");
+    assert_ne!(
+        shard_root,
+        t.root(),
+        "sanity: shard root and global root must differ in a multi-shard tree"
+    );
+    let Proof::Existence(p) = t.prove(&shard_record_key("shard-a", &rk(1))) else {
+        panic!("expected existence proof")
+    };
+    assert!(verify_existence_proof_against_shard_root(
+        &p,
+        "shard-a",
+        &shard_root
+    ));
+    // The same proof does NOT fold to the global root under this function —
+    // it only ever folds the leaf-side 192 siblings.
+    assert!(!verify_existence_proof_against_shard_root(
+        &p,
+        "shard-a",
+        &t.root()
+    ));
+}
+
+#[test]
+fn nonexistence_proof_verifies_against_shard_subtree_root() {
+    let t = two_shard_tree();
+    let shard_root = t.shard_subtree_root("shard-a");
+    let Proof::NonExistence(p) = t.prove(&shard_record_key("shard-a", &rk(9))) else {
+        panic!("expected non-existence proof")
+    };
+    assert!(verify_nonexistence_proof_against_shard_root(
+        &p,
+        "shard-a",
+        &shard_root
+    ));
+    assert!(!verify_nonexistence_proof_against_shard_root(
+        &p,
+        "shard-a",
+        &t.root()
+    ));
+}
+
+#[test]
+fn verify_proof_against_shard_root_dispatches_both_variants() {
+    let t = two_shard_tree();
+    let shard_root = t.shard_subtree_root("shard-a");
+    let existence = t.prove(&shard_record_key("shard-a", &rk(1)));
+    let nonexistence = t.prove(&shard_record_key("shard-a", &rk(9)));
+    assert!(verify_proof_against_shard_root(
+        &existence,
+        "shard-a",
+        &shard_root
+    ));
+    assert!(verify_proof_against_shard_root(
+        &nonexistence,
+        "shard-a",
+        &shard_root
+    ));
+}
+
+#[test]
+fn shard_scoped_existence_rejects_wrong_shard_id() {
+    let t = two_shard_tree();
+    let Proof::Existence(p) = t.prove(&shard_record_key("shard-a", &rk(1))) else {
+        panic!("expected existence proof")
+    };
+    // Asking for shard-a's proof to verify against shard-b's root (with the
+    // caller-asserted shard_id set to "shard-b") must fail on the explicit
+    // shard_id mismatch, not just happen to fail the fold.
+    let shard_b_root = t.shard_subtree_root("shard-b");
+    assert!(!verify_existence_proof_against_shard_root(
+        &p,
+        "shard-b",
+        &shard_b_root
+    ));
+}
+
+#[test]
+fn shard_scoped_nonexistence_rejects_wrong_shard_id() {
+    let t = two_shard_tree();
+    let Proof::NonExistence(p) = t.prove(&shard_record_key("shard-a", &rk(9))) else {
+        panic!("expected non-existence proof")
+    };
+    let shard_b_root = t.shard_subtree_root("shard-b");
+    assert!(!verify_nonexistence_proof_against_shard_root(
+        &p,
+        "shard-b",
+        &shard_b_root
+    ));
+}
+
+#[test]
+fn shard_scoped_existence_rejects_tampered_sibling_and_wrong_length() {
+    let t = two_shard_tree();
+    let shard_root = t.shard_subtree_root("shard-a");
+    let Proof::Existence(p) = t.prove(&shard_record_key("shard-a", &rk(1))) else {
+        panic!("expected existence proof")
+    };
+    let mut tampered = p.clone();
+    tampered.siblings[0] = rk(0xFF);
+    assert!(!verify_existence_proof_against_shard_root(
+        &tampered,
+        "shard-a",
+        &shard_root
+    ));
+
+    let mut short = p.clone();
+    short.siblings.pop();
+    assert!(!verify_existence_proof_against_shard_root(
+        &short,
+        "shard-a",
+        &shard_root
+    ));
+}
+
+#[test]
+fn shard_scoped_nonexistence_rejects_tampered_sibling_and_wrong_length() {
+    let t = two_shard_tree();
+    let shard_root = t.shard_subtree_root("shard-a");
+    let Proof::NonExistence(p) = t.prove(&shard_record_key("shard-a", &rk(9))) else {
+        panic!("expected non-existence proof")
+    };
+    let mut tampered = p.clone();
+    tampered.siblings[0] = rk(0xFF);
+    assert!(!verify_nonexistence_proof_against_shard_root(
+        &tampered,
+        "shard-a",
+        &shard_root
+    ));
+
+    let mut short = p.clone();
+    short.siblings.pop();
+    assert!(!verify_nonexistence_proof_against_shard_root(
+        &short,
+        "shard-a",
+        &shard_root
+    ));
+}

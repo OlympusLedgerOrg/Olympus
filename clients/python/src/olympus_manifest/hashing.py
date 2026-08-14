@@ -27,6 +27,7 @@ LEAF_BODY_FIELD_COUNT = 0x05
 
 SMT_DEPTH = 256
 SHARD_PREFIX_BYTES = 8
+SHARD_PREFIX_BITS = SHARD_PREFIX_BYTES * 8
 
 # Record-type tag folded into every manifest record key (matches
 # ``olympus_manifest::RECORD_TYPE``).
@@ -135,14 +136,17 @@ def _key_bit(key: bytes, i: int) -> int:
     return (key[i >> 3] >> (7 - (i & 7))) & 1
 
 
-def fold_to_root(key: bytes, start: bytes, siblings: list[bytes]) -> bytes:
-    """Fold a 256-sibling path from ``start`` up to a root, branching by ``key`` bits.
+def fold_to_root(key: bytes, start: bytes, siblings: list[bytes], depth: int = SMT_DEPTH) -> bytes:
+    """Fold ``depth`` siblings from ``start`` up to a root, branching by ``key`` bits.
 
     Mirrors ``olympus_crypto::smt::fold_to_root``: siblings are ordered
-    leaf→root (index 0 is the deepest, at bit 255).
+    leaf→root (index 0 is the deepest, at bit 255). ``depth`` defaults to a
+    full fold to the global root; a caller folding only the leaf-side
+    siblings up to a shard-subtree root (ADR-0044) passes a shorter depth
+    (and a correspondingly shorter ``siblings`` list) instead.
     """
     current = start
-    for level in range(SMT_DEPTH):
+    for level in range(depth):
         bit_pos = SMT_DEPTH - 1 - level
         sib = siblings[level]
         if _key_bit(key, bit_pos) == 0:

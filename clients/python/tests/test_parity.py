@@ -143,5 +143,82 @@ def test_verify_against_manifest_handles_bad_root():
     )
 
 
+# ── shard-scoped verification parity (ADR-0044) ─────────────────────────────
+#
+# `shard_scoped_proof` is generated from a raw `olympus_crypto::smt::SparseMerkleTree`
+# (not the sealed-manifest scheme the rest of this file exercises), so these
+# tests bind the Python port to the Rust source of truth for the new
+# `verify_*_against_shard_root` functions specifically.
+
+
+def test_shard_scoped_existence_proof_verifies():
+    from olympus_manifest import smt
+
+    sp = VECTORS["shard_scoped_proof"]
+    shard_root = bytes.fromhex(sp["shard_a_root"])
+    assert smt.verify_existence_against_shard_root(
+        sp["existence_proof"], sp["existence_shard_id"], shard_root
+    )
+    # Must not verify against the global root — only the shard-subtree root.
+    global_root = bytes.fromhex(sp["global_root"])
+    assert not smt.verify_existence_against_shard_root(
+        sp["existence_proof"], sp["existence_shard_id"], global_root
+    )
+
+
+def test_shard_scoped_nonexistence_proof_verifies():
+    from olympus_manifest import smt
+
+    sp = VECTORS["shard_scoped_proof"]
+    shard_root = bytes.fromhex(sp["shard_a_root"])
+    assert smt.verify_nonexistence_against_shard_root(
+        sp["nonexistence_proof"], sp["nonexistence_shard_id"], shard_root
+    )
+    global_root = bytes.fromhex(sp["global_root"])
+    assert not smt.verify_nonexistence_against_shard_root(
+        sp["nonexistence_proof"], sp["nonexistence_shard_id"], global_root
+    )
+
+
+def test_shard_scoped_existence_proof_rejects_wrong_shard():
+    from olympus_manifest import smt
+
+    sp = VECTORS["shard_scoped_proof"]
+    # shard-a's proof must not verify against shard-b's root.
+    shard_b_root = bytes.fromhex(sp["shard_b_root"])
+    assert not smt.verify_existence_against_shard_root(
+        sp["existence_proof"], "shard-b", shard_b_root
+    )
+
+
+def test_shard_scoped_existence_proof_rejects_tampered_sibling():
+    from olympus_manifest import smt
+
+    sp = VECTORS["shard_scoped_proof"]
+    shard_root = bytes.fromhex(sp["shard_a_root"])
+    bundle = json.loads(json.dumps(sp["existence_proof"]))
+    bundle["siblings"][0][0] ^= 0xFF
+    assert not smt.verify_existence_against_shard_root(
+        bundle, sp["existence_shard_id"], shard_root
+    )
+
+
+def test_shard_scoped_verifiers_never_raise_on_garbage():
+    from olympus_manifest import smt
+
+    assert smt.verify_existence_against_shard_root({}, "s", b"\x00" * 32) is False
+    assert (
+        smt.verify_existence_against_shard_root({"siblings": "nope"}, "s", b"\x00" * 32)
+        is False
+    )
+    assert smt.verify_nonexistence_against_shard_root({}, "s", b"\x00" * 32) is False
+    assert (
+        smt.verify_nonexistence_against_shard_root(
+            {"key": "zz", "siblings": []}, "s", b"\x00" * 32
+        )
+        is False
+    )
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
