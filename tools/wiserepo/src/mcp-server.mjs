@@ -28,7 +28,8 @@ const BACKEND_PROPERTY = {
   enum: ["claude", "openai", "ollama"],
   description:
     "Which backend to use. Defaults to $WISEREPO_BACKEND or claude. " +
-    '"ollama" talks to a local Ollama daemon (no API key, no data leaves the machine).',
+    '"ollama" talks to a local Ollama daemon (no API key, no data leaves the machine) but is ' +
+    "currently gated off pending GPU hardware -- requires WISEREPO_ENABLE_OLLAMA=true.",
 };
 
 const TOOLS = [

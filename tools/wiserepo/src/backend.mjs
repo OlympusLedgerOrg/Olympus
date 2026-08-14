@@ -80,11 +80,27 @@ function isRestrictedOpenAiModel(model) {
 
 const KNOWN_BACKENDS = ["claude", "openai", "ollama"];
 
+// The ollama backend is implemented but gated off by default: it targets a
+// specific 24GB-class local GPU (see README) that isn't provisioned yet.
+// Ungated, an accidental `WISEREPO_BACKEND=ollama` (typo'd env, copied from
+// a future README) would silently fail every call with a connection-refused
+// ModelUnavailableError and no hint why -- the explicit flag turns that into
+// a clear "not enabled yet" message instead. Flip WISEREPO_ENABLE_OLLAMA=true
+// once the hardware's in and a model is pulled.
+function isOllamaEnabled() {
+  return process.env.WISEREPO_ENABLE_OLLAMA === "true";
+}
+
 function resolveBackend(explicit) {
   const backend = (explicit || process.env.WISEREPO_BACKEND || "claude").toLowerCase();
   if (!KNOWN_BACKENDS.includes(backend)) {
     throw new ModelRequestError(
       `Unknown wiserepo backend "${backend}" — expected one of: ${KNOWN_BACKENDS.join(", ")}`,
+    );
+  }
+  if (backend === "ollama" && !isOllamaEnabled()) {
+    throw new ModelRequestError(
+      "ollama backend is gated off (no local GPU provisioned yet) — set WISEREPO_ENABLE_OLLAMA=true once it is",
     );
   }
   return backend;
