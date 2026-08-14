@@ -105,12 +105,23 @@ golden vector.
 
 ## What this does not do (yet)
 
-- **It does not wire `PersistentSmt::prove` output into any API endpoint.**
-  The BLAKE3 tree's root is now signable and verifiable, which is the
-  prerequisite for a future `/monitor/proof`-style endpoint to serve BLAKE3
-  witnesses against it — but this ADR does not add such an endpoint. That
-  work belongs to the Monitor API PR (ADR-0021), which can now build on a
-  signed root instead of working around its absence.
+- **Proof-serving endpoint — shipped as a follow-up.** `GET
+  /monitor/proof/blake3/{content_hash}` (`api::monitor::proof_blake3`) now
+  wires `PersistentSmt::prove` into the Monitor API (ADR-0021), serving a
+  BLAKE3 membership proof against the shard's signed `SmtRootAttestation`.
+  This closed a real gap beyond wiring: `prove()`'s output folds to the
+  tree's *global* 256-depth root, but `SmtRootAttestation` signs the *shard
+  subtree* root (depth `SHARD_PREFIX_BITS` = 64) — the two don't verify
+  against each other directly. The fix is additive, not a change to what's
+  signed: `olympus_crypto::smt::verify_existence_proof_against_shard_root`
+  / `verify_nonexistence_proof_against_shard_root` fold only the leaf-side
+  192 siblings and compare against the shard root instead of `proof.root_hash`.
+  `Proof`/`ExistenceProof`/`NonExistenceProof`, `prove()`/`prove_batch()`, and
+  the checkpoint bundle schema are all unchanged. Mirrored independently in
+  `clients/python/src/olympus_manifest/smt.py` (the SMT proof-folding parity
+  surface turned out to be just these two implementations — the offline Rust
+  and JavaScript verifiers only check the attestation signature/digest, not
+  full SMT proofs, so neither needed a change).
 - **It does not extend federation gossip.** `PeerCheckpoint`'s wire format
   and `peer_checkpoints` table are unchanged; the new attestation is not
   carried over Tor gossip. Peers verifying a checkpoint bundle out-of-band
