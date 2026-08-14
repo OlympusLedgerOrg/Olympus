@@ -4,6 +4,17 @@ Self-hosted replacement for the `repowise` MCP server — same shape (repo Q&A,
 diff review, summarization) but running as a plain local Node process backed
 by **your own** Claude or Codex API key instead of an opaque Docker image.
 
+**Trust boundary — read before use.** "Self-hosted" describes where the
+_process_ runs, not where your data goes. Every `repo_qa` / `review_diff` /
+`summarize` call sends the file contents, diffs, and grep results it gathers
+— plus your question or prompt — to the configured Anthropic or OpenAI API
+over the network. wiserepo provides no confidentiality from that provider:
+it is exactly as private as calling their API directly, and no more. Don't
+point it at files you would not otherwise send to that provider (secrets,
+credentials, anything outside this repo — the path-confinement guards in
+`src/repo.mjs` exist specifically to stop the tool from reading and sending
+those without you asking it to by name).
+
 ## Setup
 
 ```bash
@@ -25,8 +36,11 @@ Pick the default backend with `WISEREPO_BACKEND=claude|openai` (defaults to
 
 Low temperature reduces wording churn between runs — it does **not** make
 output byte-reproducible, and a floating model alias can change underneath
-you. Nothing here assumes byte-identical regeneration; the drift check below
-compares structure, never bytes.
+you. Nothing here assumes a _regeneration_ is byte-identical to the last
+one; the drift _detection_ below is byte-based (a hash of `CLAUDE.md`
+itself, not of the model's output), and a _successful_ regeneration's output
+is separately verified for structure, not bytes. See below for why that
+split matters.
 
 Already registered as a project MCP server (`wiserepo`) in `.claude.json`
 alongside `repowise` — no extra Claude Code config needed.
@@ -60,56 +74,74 @@ this repo before (commit `4f5e270f`). `bin/sync-agent-docs.mjs` regenerates
 `AGENTS.md` from `CLAUDE.md` via the model backend, preserving every fact and
 only reframing what must differ for Codex.
 
-**Verification, not blind trust.** After regenerating, the script runs
-`src/sections.mjs::checkStructuralParity` and refuses to write anything on
-mismatch. It compares four independent signals:
+**Sync detection is a content-hash comparison, not a structural one.**
+`AGENTS.md` carries a trailing `<!-- wiserepo:source-sha256:... -->` comment
+recording the exact `CLAUDE.md` bytes it was generated from
+(`src/source-trailer.mjs`). "In sync" means that hash still matches the
+current `CLAUDE.md` — full stop. This is deterministic and needs **no model
+call** to answer "has anything changed since last generation"; the model is
+only invoked once drift is found, to produce the fix.
 
-1. every Markdown heading, verbatim and in order (title line excepted),
-2. per-section bullet counts,
-3. per-section table-row counts,
-4. fenced-code-block count.
+That replaced an earlier design that treated "`AGENTS.md` still satisfies
+structural parity against the current `CLAUDE.md`" as proof of sync. That
+was unsound, and demonstrably so: a `CLAUDE.md` edit that rewords a bullet's
+prose — softening an invariant, changing a command, fixing a typo — without
+changing the bullet _count_ passes structural parity trivially, because
+nothing in that check reads prose. The old code reported `{ ok: true }` on
+exactly that mutation in testing, meaning real drift could go undetected
+indefinitely and silently — the precise failure mode this tool exists to
+prevent. `test/source-trailer.test.mjs` carries the regression test.
 
-Heading comparison alone was tried first and is **not** sufficient: most of
-`CLAUDE.md`'s load-bearing content — `## Critical Invariants`, the
-`## Before every git push` gates table — is bullets and rows under a single
-heading each, so an invariant could be dropped or inverted invisibly. Signals
-2–4 exist for exactly that.
+**Once regeneration does run, its output is still verified before being
+trusted enough to write.** `src/sections.mjs::checkStructuralParity` checks
+four independent structural signals against the output — headings, per-
+section bullet counts, per-section table-row counts, and fenced-code-block
+count — and the script refuses to write anything on mismatch. This is a
+_different_ safeguard than the hash check above: it catches the model
+truncating or dropping content mid-generation, not staleness. Heading
+comparison alone was tried first and is not sufficient here either, for the
+same reason — most of `CLAUDE.md`'s load-bearing content is bullets and rows
+under a single heading each, so a naive check would miss a dropped
+invariant. Code-block _content_ is deliberately not required to match
+(that's the whole point of `AGENTS.md` existing — some commands legitimately
+differ for Codex); only the count is asserted, so wholesale deletion is
+still caught. The checker is fence-aware (`stripFencedCode`): `CLAUDE.md`'s
+` ```bash ` blocks are full of `# shell comments`, and a naive line-wise
+heading regex counts every one as a heading — which made the first version
+of this checker reject the repo's own correct docs 100% of the time.
 
-**What it does not guarantee:** semantic equivalence. A model can still
-reword one bullet incorrectly while keeping every count intact. A regenerated
-`AGENTS.md` is reviewable output, not automatically trustworthy — read the
-diff.
-
-Code-block _content_ is deliberately not required to match, because the whole
-point of `AGENTS.md` is that some commands legitimately differ for Codex;
-only the count is asserted, so wholesale deletion is still caught.
-
-Note the checker is fence-aware (`stripFencedCode`). This is load-bearing,
-not cosmetic: `CLAUDE.md`'s ` ```bash ` blocks are full of `# shell
-comments`, and a naive line-wise heading regex counts every one as a heading
-— which made the first version of this checker reject the repo's own correct
-docs 100% of the time.
+**What none of this guarantees:** semantic equivalence of a _successful_
+regeneration. The hash check proves something changed and triggers a fresh
+generation; the structural check proves that generation didn't lose content
+wholesale. Neither proves the model reworded the changed content
+_correctly_. A regenerated `AGENTS.md` is reviewable output, not
+automatically trustworthy — read the diff.
 
 `CODEX.md` is a short hand-written pointer at both files and is deliberately
 **not** regenerated — see its own text for why a near-duplicate was retired.
 
 ### Exit codes (used by both the pre-commit hook and CI)
 
-- `0` — success (written, or already in sync)
-- `1` — **blocking.** The model responded but the result failed structural
-  parity, `--check` found real drift, or wiserepo itself is broken (bad
-  request, programming error, unreadable `CLAUDE.md`). All need a human.
+- `0` — success (written, or already in sync).
+- `1` — **blocking.** `--check` found the source hash has drifted (or
+  `AGENTS.md` has no trailer at all — e.g. it was hand-edited), a
+  regeneration's output failed structural parity, or wiserepo itself is
+  broken (bad request, programming error, unreadable `CLAUDE.md`). All of
+  these need a human.
 - `2` — **non-blocking.** The backend was unavailable: no API key, network
   error, timeout, rate limit, auth rejection, or an empty completion. The
-  check did not run — which is not the same as failing.
+  check did not run — which is not the same as failing. **`--check` never
+  hits this path** — hash comparison needs no model, so it can only exit `0`
+  or `1`. Only an actual regeneration (no `--check`) can hit `2`.
 
-The 1-vs-2 split is deliberate and tested (`test/backend.test.mjs`): a 401 or
-429 must never block a commit, while a 400 (a request _we_ built wrong) must,
-because retrying will never fix it and silence would hide the bug.
+The 1-vs-2 split for regeneration failures is deliberate and tested
+(`test/backend.test.mjs`): a 401 or 429 must never block a commit, while a
+400 (a request _we_ built wrong) must, because retrying will never fix it
+and silence would hide the bug.
 
 ```bash
-node tools/wiserepo/bin/sync-agent-docs.mjs          # regenerate
-node tools/wiserepo/bin/sync-agent-docs.mjs --check  # CI-style: exit 1 if stale, 2 if unreachable
+node tools/wiserepo/bin/sync-agent-docs.mjs          # regenerate (needs a key only if hash drifted)
+node tools/wiserepo/bin/sync-agent-docs.mjs --check  # CI-style: exit 1 if stale, never needs a key
 ```
 
 ### Where it's wired in
@@ -120,10 +152,17 @@ node tools/wiserepo/bin/sync-agent-docs.mjs --check  # CI-style: exit 1 if stale
   `2` (no key configured yet, or npm deps not installed). Silence it
   entirely with `WISEREPO_SKIP=1`.
 - **CI (`docs-agent-sync` job in `.github/workflows/ci.yml`)** — runs
-  `npm test` (see below) unconditionally, then `--check` as a **soft gate**:
-  it only enforces drift if the `WISEREPO_ANTHROPIC_API_KEY` repo secret is
-  set. Without that secret the job posts a `::warning::` and passes — add
-  the secret to make this a hard gate in CI, not just locally.
+  `npm test` unconditionally, then `--check`. Because `--check` is pure hash
+  comparison, it runs the **same way on every trigger and needs no secret at
+  all** — it's a hard gate on `pull_request`, not a soft one. The
+  `ANTHROPIC_API_KEY` env var in that step is deliberately scoped to
+  `github.event_name == 'push'` only: a `pull_request` job checks out the PR
+  head and runs `node` against that checkout, so any code a same-repository
+  PR adds (in `sync-agent-docs.mjs` or anywhere else executed in that step)
+  could otherwise read and exfiltrate the secret regardless of whether the
+  model is ever actually called. On `push` (post-merge, protected branch)
+  the key is present so a genuinely stale `AGENTS.md` can be regenerated by
+  re-running the script by hand or in a follow-up job.
 
 ## Tests
 
@@ -132,16 +171,31 @@ cd tools/wiserepo
 npm test
 ```
 
-43 tests covering the places a bug is silent rather than loud:
+65 tests covering the places a bug is silent rather than loud:
 
 - `resolveInRepo` path-traversal guard, including the sibling-prefix case
-  (`Olympus-evil` must not count as inside `Olympus`).
+  (`Olympus-evil` must not count as inside `Olympus`) — and
+  `resolveInRepoFollowingSymlinks`, which catches what the lexical check
+  can't: a repo-tracked symlink pointing at `~/.ssh/id_rsa` passes
+  `resolveInRepo` (it's lexically inside the repo) but must still be
+  refused, because `readRepoFile` puts whatever it reads into a prompt sent
+  to a third-party model API. An unguarded version of this was a real
+  exfiltration path, not a hypothetical.
 - `sanitizeDiffArgs` option-injection guard, including an end-to-end check
-  that `gitDiff(["--output=…"])` writes no file.
+  that `gitDiff(["--output=…"])` writes no file, and a `gitGrep` globs
+  regression (a double `--` silently made every glob after the first match
+  nothing).
 - `checkStructuralParity` against **the real `CLAUDE.md`**, not just
   synthetic fixtures. The original test suite was 14 green tests against a
   checker that failed on both documents it would ever see — synthetic-only
-  fixtures are how that happened, so two regression tests now load the actual
-  file.
-- HTTP failure classification (`401/429/5xx` → non-blocking, `4xx` →
-  blocking) and the OpenAI restricted-model parameter split.
+  fixtures are how that happened, so two regression tests now load the
+  actual file.
+- `source-trailer`'s hash tracking, including the regression proving a
+  prose-only edit (same Markdown structure, different meaning) changes the
+  hash — the exact case structural parity alone let through.
+- HTTP failure classification (`401/403/429/5xx` plus `402/408` → non-
+  blocking, `4xx` → blocking), the OpenAI restricted-model parameter split,
+  `numericEnv`'s rejection of malformed `WISEREPO_TIMEOUT_MS`/
+  `WISEREPO_TEMPERATURE` (silently becoming `NaN` used to fail the gate open
+  forever with no diagnostic), and API-key redaction from provider error
+  bodies.

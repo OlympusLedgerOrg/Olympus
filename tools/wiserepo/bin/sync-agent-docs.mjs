@@ -10,22 +10,33 @@
 // everywhere else). CODEX.md is a short hand-written pointer at both and is
 // intentionally NOT regenerated here (see its own text for why).
 //
-// What the verification actually guarantees, stated honestly: the regenerated
-// file preserves CLAUDE.md's heading structure, per-section bullet and
-// table-row counts, and code-block count (see src/sections.mjs). That catches
-// truncation, dropped sections, deleted invariant bullets, and gutted tables.
-// It does NOT prove semantic equivalence — a model could still reword a
-// single bullet incorrectly while keeping the count. Treat a regenerated
-// AGENTS.md as reviewable output, not as automatically trustworthy.
+// Sync detection is a content-hash comparison (src/source-trailer.mjs), NOT
+// a structural-parity comparison. AGENTS.md carries a trailing
+// `<!-- wiserepo:source-sha256:... -->` comment recording the exact
+// CLAUDE.md bytes it was generated from; "in sync" means that hash still
+// matches. This is fully deterministic and needs no model call — the model
+// is only invoked to produce a NEW generation once drift is found. (An
+// earlier version of this script treated "AGENTS.md still satisfies
+// structural parity against the current CLAUDE.md" as proof of sync — that
+// is unsound: a CLAUDE.md edit that rewords a bullet's prose without
+// changing its count passes structural parity while genuinely drifting, so
+// that version could report "in sync" forever on real, undetected drift.)
+//
+// Once regeneration DOES run (model-backed), the result is still verified
+// with checkStructuralParity before being trusted enough to write — that
+// check is for a different failure mode (the model truncating or dropping
+// content mid-generation), not for staleness detection.
 //
 // Exit codes (the pre-commit hook and CI both depend on this distinction):
 //   0 — success (written, or already in sync)
-//   1 — BLOCKING. The model responded but the result failed structural
-//       parity, or --check found real drift, or wiserepo itself is broken
-//       (bad request, programming error). All of these need a human.
+//   1 — BLOCKING. --check found the source hash has drifted (or AGENTS.md
+//       has no trailer at all), or a regeneration's output failed
+//       structural parity, or wiserepo itself is broken (bad request,
+//       programming error). All of these need a human.
 //   2 — NON-BLOCKING. The backend was unavailable: no API key, network
 //       error, timeout, rate limit, auth rejection, empty completion. The
-//       check did not run — that is not the same as failing.
+//       check did not run — that is not the same as failing. --check itself
+//       never hits this path (see above) — only actual regeneration can.
 //
 // Usage: node bin/sync-agent-docs.mjs [--check] [--backend claude|openai]
 import { readFile, writeFile } from "node:fs/promises";
@@ -33,8 +44,12 @@ import path from "node:path";
 import { callModel, ModelUnavailableError } from "../src/backend.mjs";
 import { repoRoot } from "../src/repo.mjs";
 import { checkStructuralParity } from "../src/sections.mjs";
+import {
+  computeSourceHash,
+  embedSourceTrailer,
+  extractSourceTrailer,
+} from "../src/source-trailer.mjs";
 
-const EXIT_OK = 0;
 const EXIT_BLOCKING = 1;
 const EXIT_UNAVAILABLE = 2;
 
@@ -61,7 +76,8 @@ const SYSTEM_PROMPT =
   "   (e.g. nextest filters vs plain cargo test), preserving the existing AGENTS.md's variants where " +
   "   CLAUDE.md does not dictate otherwise.\n" +
   "4. Output ONLY the raw Markdown for the new AGENTS.md — no commentary, no code fences around the " +
-  "   whole document.\n" +
+  "   whole document, and no trailing HTML comments (wiserepo appends its own tracking comment after " +
+  "   validating your output).\n" +
   "5. The very first line must be '# AGENTS.md'.";
 
 function fail(message, code) {
@@ -86,33 +102,36 @@ async function main() {
     // AGENTS.md doesn't exist yet — fine, we're creating it.
   }
 
+  const currentHash = computeSourceHash(claudeMd);
+  const recordedHash = currentAgentsMd ? extractSourceTrailer(currentAgentsMd) : null;
+
+  if (recordedHash === currentHash) {
+    console.log(
+      "[wiserepo] AGENTS.md content is verified in sync with CLAUDE.md (source hash matches).",
+    );
+    return;
+  }
+
+  // --check is purely detection — deterministic, no model call, so it can
+  // never be blocked by an unavailable backend and never needs an API key.
+  if (checkOnly) {
+    fail(
+      recordedHash
+        ? `AGENTS.md is STALE: CLAUDE.md changed since AGENTS.md was last generated ` +
+            `(recorded source hash ${recordedHash.slice(0, 12)}…, current ${currentHash.slice(0, 12)}…). ` +
+            `Run 'node tools/wiserepo/bin/sync-agent-docs.mjs' to regenerate it.`
+        : `AGENTS.md has no wiserepo source-hash trailer, so its sync status cannot be verified. ` +
+            `Run 'node tools/wiserepo/bin/sync-agent-docs.mjs' to regenerate and stamp it.`,
+      EXIT_BLOCKING,
+    );
+  }
+
   const prompt =
     `## Current CLAUDE.md (source of truth)\n\`\`\`\`markdown\n${claudeMd}\n\`\`\`\`\n\n` +
     (currentAgentsMd
       ? `## Current AGENTS.md (to be regenerated — reuse its Codex-specific command variants where CLAUDE.md doesn't dictate otherwise)\n\`\`\`\`markdown\n${currentAgentsMd}\n\`\`\`\`\n\n`
       : "") +
     `Regenerate AGENTS.md now.`;
-
-  // If AGENTS.md as committed already satisfies parity, there is nothing to
-  // check and no reason to spend an API call. This is also what makes
-  // --check stable: it compares STRUCTURE, never bytes, so ordinary model
-  // wording variance cannot fail the gate.
-  if (currentAgentsMd) {
-    const existing = checkStructuralParity(claudeMd, currentAgentsMd, {
-      titleOverride: "# AGENTS.md",
-    });
-    if (existing.ok) {
-      console.log("[wiserepo] AGENTS.md is structurally in sync with CLAUDE.md.");
-      return;
-    }
-    if (checkOnly) {
-      fail(
-        `AGENTS.md is OUT OF SYNC with CLAUDE.md:\n  ${existing.reason}\n` +
-          `Run 'node tools/wiserepo/bin/sync-agent-docs.mjs' to regenerate it.`,
-        EXIT_BLOCKING,
-      );
-    }
-  }
 
   let raw;
   try {
@@ -127,9 +146,9 @@ async function main() {
     fail(`AGENTS.md sync failed: ${err.stack || err.message}`, EXIT_BLOCKING);
   }
 
-  const newAgentsMd = raw.trim() + "\n";
+  const generated = raw.trim() + "\n";
 
-  const parity = checkStructuralParity(claudeMd, newAgentsMd, { titleOverride: "# AGENTS.md" });
+  const parity = checkStructuralParity(claudeMd, generated, { titleOverride: "# AGENTS.md" });
   if (!parity.ok) {
     fail(
       `REFUSING to write AGENTS.md — regenerated content failed structural parity:\n  ${parity.reason}\n` +
@@ -138,17 +157,9 @@ async function main() {
     );
   }
 
-  if (checkOnly) {
-    // Reached only when the committed AGENTS.md failed parity but a fresh
-    // regeneration passes — i.e. genuine drift that regenerating would fix.
-    fail(
-      "AGENTS.md is STALE relative to CLAUDE.md. Run without --check to regenerate.",
-      EXIT_BLOCKING,
-    );
-  }
-
+  const newAgentsMd = embedSourceTrailer(generated, currentHash);
   await writeFile(AGENTS_MD, newAgentsMd, "utf8");
-  console.log("[wiserepo] AGENTS.md regenerated from CLAUDE.md.");
+  console.log("[wiserepo] AGENTS.md regenerated from CLAUDE.md and stamped with its source hash.");
 }
 
 main().catch((err) => {

@@ -6,12 +6,20 @@
 //
 // This exists because the regenerated file is a *security-relevant document*:
 // AGENTS.md carries the same critical invariants and upstream-boundary policy
-// as CLAUDE.md, so a model that quietly drops a bullet, deletes a table, or
-// inverts an invariant produces a file that reads as authoritative while being
-// wrong. Heading comparison alone is nowhere near sufficient for that — most
-// of CLAUDE.md's load-bearing content lives in flat bullet lists and one table
-// under a single heading each. So we compare four independent structural
-// signals, and every one of them must hold.
+// as CLAUDE.md, so a model that quietly drops a bullet or deletes a table
+// produces a file that reads as authoritative while being incomplete. Heading
+// comparison alone is nowhere near sufficient for that — most of CLAUDE.md's
+// load-bearing content lives in flat bullet lists and one table under a
+// single heading each. So we compare four independent structural signals,
+// and every one of them must hold.
+//
+// What this deliberately does NOT catch: a bullet whose CONTENT is reworded
+// or inverted while the count stays the same — "shard creation is operator-
+// controlled" silently becoming "shard creation is open" would pass every
+// signal here, because nothing here reads prose. That is a real, known gap,
+// not an oversight: these are STRUCTURAL signals (counts and headings), and
+// a regenerated AGENTS.md should be read, not blindly trusted. See the
+// caveat in the repo README.
 
 /**
  * Strip fenced code blocks, replacing each with a placeholder line so line
@@ -174,7 +182,8 @@ export function checkStructuralParity(sourceMarkdown, regeneratedMarkdown, opts 
         ok: false,
         reason:
           `bullet count mismatch under "${a.heading}": source has ${a.bullets}, regenerated has ${b.bullets}. ` +
-          `This is how a dropped or inverted invariant shows up — compare that section by hand.`,
+          `This is how an added or dropped invariant shows up — compare that section by hand. ` +
+          `(A reworded bullet at the same count would NOT trigger this — count comparison doesn't read prose.)`,
       };
     }
     if (a.tableRows !== b.tableRows) {

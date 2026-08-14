@@ -340,3 +340,5 @@ Key `.env` variables:
 - Always reply to CodeRabbit findings by mentioning `@coderabbitai` in the
   response (fix confirmations and declines alike) — replies feed its
   learnings database, so decisions persist across future reviews.
+
+<!-- wiserepo:source-sha256:792266d988a69bcb40b310d2a8b07e64a81934325c75a4d9bdc3d2ffe5d94e89 -->

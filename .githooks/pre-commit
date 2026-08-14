@@ -94,23 +94,53 @@ if [ -n "$STAGED_CLAUDE_MD" ] && [ "${WISEREPO_SKIP:-0}" != "1" ]; then
     step "wiserepo: sync AGENTS.md from CLAUDE.md"
     if [ ! -d "$ROOT/tools/wiserepo/node_modules" ]; then
         echo "  (skipped — run 'npm install' in tools/wiserepo first)"
-    elif [ -z "${ANTHROPIC_API_KEY:-}${OPENAI_API_KEY:-}" ]; then
-        echo "  (skipped — set ANTHROPIC_API_KEY or OPENAI_API_KEY to enable; or set WISEREPO_SKIP=1 to silence this)"
     else
-        rc=0
-        node tools/wiserepo/bin/sync-agent-docs.mjs || rc=$?
-        if [ "$rc" -eq 0 ]; then
-            git add AGENTS.md
-            pass "AGENTS.md synced"
-        elif [ "$rc" -eq 2 ]; then
-            # Model unavailable (no key / network / timeout) — the check
-            # didn't run, it didn't fail. Non-blocking.
-            echo "  (skipped — wiserepo backend unavailable, see output above)"
+        # sync-agent-docs.mjs reads CLAUDE.md/AGENTS.md straight off disk —
+        # i.e. the WORKING TREE, not the index. If either file has unstaged
+        # edits on top of what's staged, a regeneration reads content that
+        # is not part of this commit, and `git add AGENTS.md` below would
+        # stage a file generated from bytes that never entered the commit.
+        # The two docs can then disagree with what was actually committed,
+        # which is exactly the drift this whole mechanism exists to prevent.
+        # Refuse to run in that situation rather than risk it.
+        UNSTAGED_DOC_CHANGES="$(git diff --name-only -- CLAUDE.md AGENTS.md || true)"
+        if [ -n "$UNSTAGED_DOC_CHANGES" ]; then
+            echo "  (skipped — CLAUDE.md and/or AGENTS.md has unstaged changes on top of what's"
+            echo "   staged; sync would read content outside this commit. Stage or stash the rest"
+            echo "   first, or set WISEREPO_SKIP=1. CI's docs-agent-sync job still hard-gates real"
+            echo "   drift regardless — a stale AGENTS.md will not silently merge.)"
+        elif [ -z "${ANTHROPIC_API_KEY:-}${OPENAI_API_KEY:-}" ]; then
+            # sync-agent-docs.mjs's --check path needs no key at all (it's a
+            # pure content-hash comparison — see src/source-trailer.mjs).
+            # Only an actual REGENERATION, once real drift is found, needs a
+            # model. Run it either way: on the common "nothing changed"
+            # path it exits 0 with no network call.
+            rc=0
+            node tools/wiserepo/bin/sync-agent-docs.mjs --check || rc=$?
+            if [ "$rc" -eq 0 ]; then
+                pass "AGENTS.md already in sync (verified by content hash, no model needed)"
+            else
+                echo "  (AGENTS.md is stale, but no ANTHROPIC_API_KEY/OPENAI_API_KEY is set to"
+                echo "   regenerate it — set one, or set WISEREPO_SKIP=1. CI's docs-agent-sync job"
+                echo "   will hard-gate this on push regardless.)"
+            fi
         else
-            # Structural-parity check failed, or wiserepo itself is broken.
-            # Either way the model's output cannot be trusted into a
-            # security-relevant doc — block the commit deliberately.
-            record_failure "wiserepo AGENTS.md sync"
+            rc=0
+            node tools/wiserepo/bin/sync-agent-docs.mjs || rc=$?
+            if [ "$rc" -eq 0 ]; then
+                git add AGENTS.md
+                pass "AGENTS.md synced"
+            elif [ "$rc" -eq 2 ]; then
+                # Model unavailable (network error / timeout / rate limit) —
+                # the check didn't run, it didn't fail. Non-blocking.
+                echo "  (skipped — wiserepo backend unavailable, see output above)"
+            else
+                # Structural-parity check failed, or wiserepo itself is
+                # broken. Either way the model's output cannot be trusted
+                # into a security-relevant doc — block the commit
+                # deliberately.
+                record_failure "wiserepo AGENTS.md sync"
+            fi
         fi
     fi
 fi

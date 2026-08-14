@@ -79,11 +79,25 @@ test("extractCodeBlocks returns block bodies in order", () => {
 test("REGRESSION: real CLAUDE.md yields no phantom headings from code fences", async () => {
   const claudeMd = await readFile(path.join(repoRoot(), "CLAUDE.md"), "utf8");
   const headings = extractHeadings(claudeMd);
-  const phantom = headings.filter((h) =>
-    /^#\s*(Regenerate SSMF|Keep the embedded-Postgres|Desktop app|Rust$|Frontend$)/.test(h),
+
+  // Pin the actual invariant — no extracted heading may originate inside a
+  // fenced code block — rather than a hardcoded list of today's shell-
+  // comment wording. The original version of this test filtered for
+  // specific strings like "Regenerate SSMF"; if CLAUDE.md's commands are
+  // later reworded, that filter returns [] regardless of whether fence
+  // stripping still works, so the test would keep passing for the wrong
+  // reason. Checking "every heading survives stripFencedCode" can't do
+  // that: it fails for real the moment a fenced `# comment` leaks through,
+  // independent of its wording.
+  const strippedLines = new Set(
+    stripFencedCode(claudeMd)
+      .split("\n")
+      .map((l) => l.trim()),
   );
-  assert.deepEqual(phantom, [], `shell comments leaked in as headings: ${JSON.stringify(phantom)}`);
-  assert.ok(headings.every((h) => /^#{1,6}\s/.test(h)));
+  for (const h of headings) {
+    assert.ok(strippedLines.has(h), `heading originated inside a code fence: ${h}`);
+  }
+  assert.ok(headings.length > 0, "CLAUDE.md has no headings — parsing is broken");
 });
 
 test("REGRESSION: CLAUDE.md is structurally self-consistent (a doc always matches itself)", async () => {

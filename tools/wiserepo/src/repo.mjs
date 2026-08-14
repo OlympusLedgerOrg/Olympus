@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Olympus Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-import { readFile, stat } from "node:fs/promises";
+import { readFile, stat, realpath } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFile } from "node:child_process";
@@ -12,11 +12,27 @@ const execFileAsync = promisify(execFile);
 // tools/wiserepo/src/repo.mjs -> repo root is three levels up.
 const PACKAGE_ROOT = fileURLToPath(new URL("../../..", import.meta.url));
 
+// A stalled git invocation (large pack, filesystem contention, a hung
+// credential/pager helper) must not block the long-lived MCP stdio process
+// or the pre-commit hook indefinitely.
+const GIT_SUBPROCESS_TIMEOUT_MS = 30_000;
+
 export function repoRoot() {
-  return process.env.WISEREPO_ROOT || path.resolve(PACKAGE_ROOT);
+  // path.resolve normalizes a trailing separator and a relative value.
+  // Without this, WISEREPO_ROOT=/srv/Olympus/ makes `root + path.sep` equal
+  // `/srv/Olympus//`, which no resolved path can ever start with — every
+  // call to resolveInRepo then throws "escapes the repo root" and the MCP
+  // server reads nothing. A relative WISEREPO_ROOT=. resolves against cwd
+  // while the unresolved comparison uses the literal string ".", which is
+  // never equal to anything real either.
+  return path.resolve(process.env.WISEREPO_ROOT || PACKAGE_ROOT);
 }
 
-// Resolve a repo-relative path and refuse anything that escapes the repo root.
+// Resolve a repo-relative path and refuse anything that escapes the repo
+// root. This check is LEXICAL ONLY (string comparison on path.resolve's
+// output) — it does not follow symlinks. Callers that then read file
+// contents MUST additionally re-check with resolveInRepoFollowingSymlinks
+// below; resolveInRepo alone is not sufficient to bound what gets read.
 export function resolveInRepo(relPath) {
   const root = repoRoot();
   const resolved = path.resolve(root, relPath);
@@ -24,6 +40,26 @@ export function resolveInRepo(relPath) {
     throw new Error(`Path "${relPath}" escapes the repo root`);
   }
   return resolved;
+}
+
+// Re-checks confinement AFTER resolving symlinks. A repo-tracked symlink
+// (e.g. committed on an untrusted branch) can lexically sit inside the repo
+// while pointing at ~/.ssh/id_rsa or /etc/passwd — resolveInRepo's string
+// check passes, `stat` follows the link and reports a regular file, and
+// `readFile` returns the TARGET's bytes. Those bytes then go straight into
+// a prompt sent to Anthropic or OpenAI (see mcp-server.mjs's gatherContext).
+// This is a real exfiltration path, not a hypothetical: any file readable
+// by the process and reachable via a symlink under the repo becomes
+// readable by whoever can get a symlink committed and a wiserepo tool
+// invoked against it.
+export async function resolveInRepoFollowingSymlinks(relPath) {
+  const abs = resolveInRepo(relPath);
+  const real = await realpath(abs);
+  const root = await realpath(repoRoot());
+  if (real !== root && !real.startsWith(root + path.sep)) {
+    throw new Error(`Path "${relPath}" resolves outside the repo root (symlink escape)`);
+  }
+  return real;
 }
 
 // Truncate to a character budget, appending a note that says how much was
@@ -36,13 +72,22 @@ export function truncateText(text, maxChars, label) {
   return text.slice(0, maxChars) + `\n...[truncated ${cut} of ${text.length} chars from ${label}]`;
 }
 
+// Whether truncateText would cut `text` at `maxChars`. Needed as a separate
+// structural check because truncateText's output can be LONGER than its
+// input for a small overflow (the appended note is ~55 chars), so a naive
+// `result.length < input.length` comparison at the call site can miss a
+// truncation that actually happened.
+export function wouldTruncate(text, maxChars) {
+  return text.length > maxChars;
+}
+
 export async function readRepoFile(relPath, { maxBytes = 60_000 } = {}) {
-  const abs = resolveInRepo(relPath);
-  const st = await stat(abs);
+  const real = await resolveInRepoFollowingSymlinks(relPath);
+  const st = await stat(real);
   if (!st.isFile()) {
     throw new Error(`"${relPath}" is not a file`);
   }
-  const buf = await readFile(abs);
+  const buf = await readFile(real);
   const text = buf.toString("utf8");
   return truncateText(text, maxBytes, relPath);
 }
@@ -147,6 +192,7 @@ export async function gitDiff(args = ["HEAD"], { maxBytes = 100_000 } = {}) {
   const { stdout } = await execFileAsync("git", ["diff", ...safe], {
     cwd: repoRoot(),
     maxBuffer: 20 * 1024 * 1024,
+    timeout: GIT_SUBPROCESS_TIMEOUT_MS,
   });
   return truncateText(stdout, maxBytes, `git diff ${args.join(" ")}`);
 }
@@ -156,18 +202,26 @@ export async function gitGrep(pattern, { globs = [], maxBytes = 30_000 } = {}) {
     throw new Error("grep pattern must be a string");
   }
   // The `--` before the pattern is what makes this safe against option
-  // injection: a pattern like `--output=x` is treated as a pattern, not a flag.
+  // injection: a pattern like `--output=x` is treated as a pattern, not a
+  // flag. It must appear EXACTLY ONCE: git only treats the first `--` as the
+  // options/pathspec separator, so a `--` re-inserted before each glob below
+  // would make every glob after the first parse as a literal pathspec named
+  // `--` instead of the glob itself — silently matching nothing. The
+  // leading-dash rejection in the loop is what keeps a glob from being
+  // parsed as a flag; the single separator above is what keeps the pattern
+  // from being parsed as one.
   const args = ["grep", "-n", "-I", "--", pattern];
   for (const g of globs) {
     if (typeof g !== "string" || g.startsWith("-")) {
       throw new Error(`Disallowed grep pathspec "${g}"`);
     }
-    args.push("--", g);
+    args.push(g);
   }
   try {
     const { stdout } = await execFileAsync("git", args, {
       cwd: repoRoot(),
       maxBuffer: 5 * 1024 * 1024,
+      timeout: GIT_SUBPROCESS_TIMEOUT_MS,
     });
     return truncateText(stdout, maxBytes, `git grep "${pattern}"`);
   } catch (err) {

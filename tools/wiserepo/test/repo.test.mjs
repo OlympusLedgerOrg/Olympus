@@ -4,8 +4,19 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import path from "node:path";
-import { existsSync, rmSync } from "node:fs";
-import { resolveInRepo, truncateText, sanitizeDiffArgs, gitDiff } from "../src/repo.mjs";
+import { existsSync, rmSync, mkdtempSync, writeFileSync, symlinkSync } from "node:fs";
+import os from "node:os";
+import {
+  resolveInRepo,
+  resolveInRepoFollowingSymlinks,
+  readRepoFile,
+  truncateText,
+  wouldTruncate,
+  sanitizeDiffArgs,
+  gitDiff,
+  gitGrep,
+  repoRoot,
+} from "../src/repo.mjs";
 
 test("resolveInRepo allows a plain relative path inside the repo", () => {
   const resolved = resolveInRepo("CLAUDE.md");
@@ -13,8 +24,11 @@ test("resolveInRepo allows a plain relative path inside the repo", () => {
 });
 
 test("resolveInRepo allows the repo root itself", () => {
+  // Asserts the actual contract (equals repoRoot()), not a hardcoded
+  // basename — the old assertion broke in any checkout not named "Olympus"
+  // (a fork, a differently named CI workspace, WISEREPO_ROOT set).
   const resolved = resolveInRepo(".");
-  assert.equal(path.basename(resolved), "Olympus");
+  assert.equal(resolved, path.resolve(repoRoot()));
 });
 
 test("resolveInRepo rejects a simple parent-directory escape", () => {
@@ -108,4 +122,107 @@ test("gitDiff does NOT write a file outside the repo when handed --output", asyn
   rmSync(target, { force: true });
   await assert.rejects(() => gitDiff([`--output=${target}`, "HEAD"]), /not permitted/);
   assert.equal(existsSync(target), false, "guard failed: a file was written outside the repo");
+});
+
+// ── symlink escape (read-side exfiltration) ────────────────────────────────
+// resolveInRepo is a lexical string check; it does not follow symlinks. A
+// repo-tracked symlink pointing outside the repo passes that check, and
+// unguarded stat()/readFile() would follow it and return the TARGET's
+// content — which readRepoFile puts straight into a prompt sent to a third
+// -party model API. This is worse than the diffArgs write bug above: it
+// exfiltrates arbitrary readable files, not just writes one inside a temp
+// dir. Skipped where symlink creation requires elevated privilege (some
+// Windows configurations) rather than failing the suite on an environment
+// limitation unrelated to the code under test.
+
+const canSymlink = (() => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "wiserepo-symlink-check-"));
+  try {
+    const target = path.join(dir, "target.txt");
+    const link = path.join(dir, "link.txt");
+    writeFileSync(target, "x");
+    symlinkSync(target, link);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+})();
+
+test(
+  "resolveInRepoFollowingSymlinks rejects a symlink that escapes the repo root",
+  { skip: !canSymlink && "symlink creation not permitted in this environment" },
+  async () => {
+    const outsideDir = mkdtempSync(path.join(os.tmpdir(), "wiserepo-outside-"));
+    const secret = path.join(outsideDir, "secret.txt");
+    writeFileSync(secret, "outside-repo-content-that-must-not-leak");
+
+    const linkPath = path.join(repoRoot(), "wiserepo-test-symlink-escape.txt");
+    rmSync(linkPath, { force: true });
+    try {
+      symlinkSync(secret, linkPath);
+      // Lexically inside the repo, so resolveInRepo alone would pass this.
+      assert.doesNotThrow(() => resolveInRepo("wiserepo-test-symlink-escape.txt"));
+      // The symlink-aware check must catch what the lexical one misses.
+      await assert.rejects(
+        () => resolveInRepoFollowingSymlinks("wiserepo-test-symlink-escape.txt"),
+        /outside the repo root|resolves outside/,
+      );
+      // readRepoFile is the actual exfiltration path — prove it refuses too.
+      await assert.rejects(() => readRepoFile("wiserepo-test-symlink-escape.txt"));
+    } finally {
+      rmSync(linkPath, { force: true });
+      rmSync(outsideDir, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "resolveInRepoFollowingSymlinks allows a symlink that stays inside the repo",
+  { skip: !canSymlink && "symlink creation not permitted in this environment" },
+  async () => {
+    const linkPath = path.join(repoRoot(), "wiserepo-test-symlink-internal.txt");
+    rmSync(linkPath, { force: true });
+    try {
+      symlinkSync(path.join(repoRoot(), "CLAUDE.md"), linkPath);
+      const real = await resolveInRepoFollowingSymlinks("wiserepo-test-symlink-internal.txt");
+      assert.equal(real, path.resolve(repoRoot(), "CLAUDE.md"));
+    } finally {
+      rmSync(linkPath, { force: true });
+    }
+  },
+);
+
+// ── wouldTruncate ───────────────────────────────────────────────────────────
+
+test("wouldTruncate matches truncateText's actual cut decision, including near the boundary", () => {
+  // truncateText's own output can be LONGER than input for a small overflow
+  // (the appended note adds ~55 chars), so a naive length comparison at a
+  // call site can miss a real truncation. wouldTruncate must not have that
+  // blind spot.
+  const text = "x".repeat(101);
+  assert.equal(wouldTruncate(text, 100), true);
+  assert.ok(
+    truncateText(text, 100, "t").length > text.length,
+    "sanity: note pushed output longer than input",
+  );
+  assert.equal(wouldTruncate("x".repeat(100), 100), false);
+});
+
+// ── gitGrep globs ────────────────────────────────────────────────────────────
+// Regression for the double `--` bug: git only treats the FIRST `--` as the
+// options/pathspec separator. Inserting another `--` before each glob turned
+// every glob after the first into a literal pathspec named `--`, so a
+// caller passing globs got "no matches" even for a pattern that matches.
+// Not reachable via gatherContext today (it never passes globs), but the
+// function is part of the public module surface.
+
+test("gitGrep with globs actually finds matches (regression: double -- silently matched nothing)", async () => {
+  const hits = await gitGrep("Absolute Upstream Boundary", { globs: ["CLAUDE.md"] });
+  assert.match(hits, /CLAUDE\.md/);
+});
+
+test("gitGrep rejects a glob that looks like a flag", async () => {
+  await assert.rejects(() => gitGrep("x", { globs: ["--evil"] }), /Disallowed grep pathspec/);
 });
