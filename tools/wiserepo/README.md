@@ -20,8 +20,10 @@ Two caveats worth stating plainly, since "local" invites over-trust:
   `~/.ssh/id_rsa`) — with a local model that's no longer an exfiltration
   risk, but it's still the tool reading things you didn't ask it to.
 - `WISEREPO_OLLAMA_URL` can be pointed at a non-localhost daemon. If you do
-  that, you've reopened the network-trust question this design closes — the
-  guarantee above is about the default, not about every possible config.
+  that, the repo content this tool gathers (file bodies, diffs, grep hits)
+  will be sent to that configured endpoint, reopening the network-trust
+  question this design closes — the guarantee above is about the default, not
+  about every possible config.
 
 ## Setup
 

@@ -4,9 +4,9 @@
 // Minimal model backend for wiserepo: talks to a local Ollama daemon over
 // fetch, no vendor SDK required. There is deliberately no cloud backend --
 // see README's trust-boundary section. Repo contents (file bodies, diffs,
-// grep hits) are handed to this module verbatim, and keeping the only
-// possible destination a process on localhost is what makes that safe by
-// construction rather than by policy.
+// grep hits) are handed to this module verbatim, and the default destination
+// is a process on localhost (overridable via WISEREPO_OLLAMA_URL), which
+// makes that safe by construction rather than by policy when kept local.
 
 const DEFAULT_OLLAMA_URL = process.env.WISEREPO_OLLAMA_URL || "http://localhost:11434";
 // qwen3-coder:30b: strongest coding-tier model that fits a 24GB card (e.g.
@@ -112,8 +112,22 @@ async function fetchWithTimeout(url, options, timeoutMs) {
     const body = await res.text();
     return { res, body };
   } catch (err) {
+    // Sanitize URL before interpolating into error messages: strip userinfo,
+    // query string, and fragment to prevent credential leakage.
+    let sanitizedUrl;
+    try {
+      const parsed = new URL(url);
+      parsed.username = "";
+      parsed.password = "";
+      parsed.search = "";
+      parsed.hash = "";
+      sanitizedUrl = parsed.href;
+    } catch {
+      sanitizedUrl = "[invalid URL]";
+    }
+
     if (err.name === "AbortError") {
-      throw new ModelUnavailableError(`request to ${url} timed out after ${timeoutMs}ms`, {
+      throw new ModelUnavailableError(`request to ${sanitizedUrl} timed out after ${timeoutMs}ms`, {
         cause: err,
       });
     }
@@ -121,7 +135,7 @@ async function fetchWithTimeout(url, options, timeoutMs) {
     // case: the Ollama daemon isn't running. That's environmental, not a
     // bug in the request, so it stays non-blocking.
     throw new ModelUnavailableError(
-      `request to ${url} failed: ${err.message} (is the Ollama daemon running?)`,
+      `request to ${sanitizedUrl} failed: ${err.message} (is the Ollama daemon running?)`,
       { cause: err },
     );
   } finally {
