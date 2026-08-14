@@ -103,6 +103,7 @@ pg_embed for an embedded PostgreSQL instance. sqlx migrations in `migrations/`
 are applied on startup (both `init_embedded` and `connect_external` paths).
 
 Key files:
+
 - `src-tauri/src/main.rs` — Tauri entry point; module wiring only, the substantive startup logic below lives in `startup.rs`
 - `src-tauri/src/startup.rs` — `resolve_proofs_dir`, the placeholder-artifact gate (`detect_placeholder_artifacts`), `verify_ceremony_manifests`, and `run_server_bringup` (the async server-bringup sequence spawned from `main.rs`)
 - `src-tauri/src/commands/` — Tauri IPC command handlers, split by domain (`files`, `keychain`, `secrets`, `server_state`)
@@ -170,8 +171,8 @@ units stay byte-identical.
 
 The hiding units come from a **format-agnostic
 `Segmenter`** (ADR-0026 §2, `src-tauri/src/zk/segment.rs`): the
-bundle/verifiers consume opaque hiding leaves, so only *extraction* +
-*redaction-application* are per-format. Live segmenters: traditional-xref PDF
+bundle/verifiers consume opaque hiding leaves, so only _extraction_ +
+_redaction-application_ are per-format. Live segmenters: traditional-xref PDF
 (`pdf_objects.rs::PdfSegmenter`), **text/Markdown** line-blocks
 (`segment/text.rs`, ADR-0026 Phase 2), **OOXML** `.docx/.xlsx/.pptx` package
 parts (`segment/ooxml.rs`, canonical Stored-zip repackage), and **modern PDFs**
@@ -243,17 +244,73 @@ fuzzing and offline proof verification. Test vectors in
 - **Canonical JSON**: Always JCS/RFC 8785 raw UTF-8.
 - **SBT scope mapping is hardcoded in `auth.rs`** — fail-closed: unknown `credential_type` grants no scopes. Treat the mapping as security policy, not config.
 - **Shard creation is operator-controlled** — first-use of a new `shard_id` is gated by the `shards` registry (migration `0039_shards.sql`). `POST /ingest/files` (the only endpoint accepting a caller-supplied `shard_id`) calls `api::shards::authorize_write` unconditionally: a `shard_id` absent or inactive in `shards` is rejected `403` (creation must go through the `x-admin-key`-gated `POST /admin/shards`), and a shard bound to `owner_user_id` accepts writes only from that account or an `admin`-scoped key. The gate is always on (fail-closed) — there is no env switch. Migration `0039` seeds the default `files` shard and backfills existing distinct `shard_id`s so enabling it never locks out current data. This operator-controlled model is what removes the need for any hard cap on shard count: the registry, not a counter, bounds shard creation. (`/ledger/ingest/simple` is unaffected — it writes the fixed `DEFAULT_SHARD` and never takes a caller-supplied shard.)
-- **The ledger is insert-only (ADR-0031 §2)** — every persistent SMT update and storage transaction rejects rewriting a committed key to a different complete leaf record (`value_hash` or parser provenance); an identical re-commit is a no-op, and there is **no** leaf-delete/tombstone path (`LeafUpdate` is the only mutation entry — no `remove`, no `DELETE FROM smt_*`). The guard raises a **typed** `smt::WriteOnceViolation` (never string-matched); `api::ingest::files::commit_to_parser_smt` classifies it as a non-retryable client conflict and `POST /ingest/files` maps it to `409`. *Transient* parser-SMT failures stay soft (row keeps `smt_committed = FALSE` as a backfill target — never a `409`/`500`). Every emitted own-checkpoint also carries a BJJ-signed `olympus_crypto::TransitionAttestation` (`OLY:SNAPSHOT:PERSIST:V1`, migration `0049`) binding `original_root → snapshot_root over snapshot_size`, verifiable offline against `persist_message`. A change that introduces a non-write-once ingest caller or any delete path is a security-policy change.
+- **The ledger is insert-only (ADR-0031 §2)** — every persistent SMT update and storage transaction rejects rewriting a committed key to a different complete leaf record (`value_hash` or parser provenance); an identical re-commit is a no-op, and there is **no** leaf-delete/tombstone path (`LeafUpdate` is the only mutation entry — no `remove`, no `DELETE FROM smt_*`). The guard raises a **typed** `smt::WriteOnceViolation` (never string-matched); `api::ingest::files::commit_to_parser_smt` classifies it as a non-retryable client conflict and `POST /ingest/files` maps it to `409`. _Transient_ parser-SMT failures stay soft (row keeps `smt_committed = FALSE` as a backfill target — never a `409`/`500`). Every emitted own-checkpoint also carries a BJJ-signed `olympus_crypto::TransitionAttestation` (`OLY:SNAPSHOT:PERSIST:V1`, migration `0049`) binding `original_root → snapshot_root over snapshot_size`, verifiable offline against `persist_message`. A change that introduces a non-write-once ingest caller or any delete path is a security-policy change.
 - **Quorum signatures are domain-separated** — quorum co-signatures sign `BLAKE3("OLY:SBT:QUORUM:V2" | commit_id_hex)`, disjoint from single-issuer (bare `commit_id`) and revocation (`OLY:SBT:REVOKE:V1`) signatures, so a signature minted in one role can't be replayed in another. The M-of-N signer set and threshold are pinned on the credential row for reproducible offline verification. The `federation_quorum` ZK circuit (feature `quorum-circuit`) is next-phase / ceremony-pending — the explicit signature set is authoritative.
 - **Ceremony manifests are atomic** — any change to a vkey JSON requires regenerating its manifest in the same commit. `cargo build` panics if `blake3(vkey.json) != manifest.artifacts.vkey.blake3`; the runtime additionally refuses to load a `.ark.zkey` whose blake3 disagrees. See `proofs/CEREMONY_INTEGRITY.md`. Never hand-edit `proofs/keys/manifests/*.json` — re-run `setup_circuits.sh`.
 - **`prove_circom` is the only sanctioned proving entry** — `src-tauri/src/zk/zkey.rs::CircomProvingKey` (M-5) seals the proving-key type so callers cannot bypass `CircomReduction` and fall back to `LibsnarkReduction` (root cause of #1011).
 - **Persistent SMT batches are atomic and writers serialise** — every `update_batch` read and both leaf/node writes MUST use the single transaction returned by `NodeBackend::begin_write` (ADR-0039). PostgreSQL uses `pg_advisory_xact_lock`; SQLite uses `BEGIN IMMEDIATE`; memory uses a staged snapshot under `tokio::Mutex`. Refresh the hot cache inside that transaction and publish it only after commit. Direct non-transactional leaf/node write methods are forbidden. Multi-query proofs MUST use `NodeBackend::begin_read`; reuse the hot cache only when its root matches the root established inside that snapshot.
-- **Lazy deep-node SMT storage (ADR-0022)** — `smt_nodes` persists only internal nodes with `depth ≤ LAZY_DEPTH` (`72`, in `src-tauri/src/smt/tree.rs`); deeper nodes are recomputed on read from the leaf "canopy" (the leaves sharing the key's first 72 bits = 9 bytes). Pure-physical: roots/proofs/verifiers are byte-identical (the in-memory `olympus_crypto::smt::SparseMerkleTree` is the parity oracle). `LAZY_DEPTH`/`CANOPY_RECOMPUTE_CAP` (`1024`) are **pinned consts**, mirrored in migration `0044`; a change is a migration-class event. **Over-cap exception:** a canopy with `> CANOPY_RECOMPUTE_CAP` live leaves (only reachable via 72-bit prefix collisions or non-hashed record keys) is *not* recomputed — the read path reads its persisted deep nodes — so the write-path flush MUST keep persisting `depth > 72` nodes for it, evaluated at flush time against the post-batch live count and materialising the *whole* canopy on a cap crossing. Migration `0044` prunes pre-existing deep rows except over-cap canopies.
+- **Lazy deep-node SMT storage (ADR-0022)** — `smt_nodes` persists only internal nodes with `depth ≤ LAZY_DEPTH` (`72`, in `src-tauri/src/smt/tree.rs`); deeper nodes are recomputed on read from the leaf "canopy" (the leaves sharing the key's first 72 bits = 9 bytes). Pure-physical: roots/proofs/verifiers are byte-identical (the in-memory `olympus_crypto::smt::SparseMerkleTree` is the parity oracle). `LAZY_DEPTH`/`CANOPY_RECOMPUTE_CAP` (`1024`) are **pinned consts**, mirrored in migration `0044`; a change is a migration-class event. **Over-cap exception:** a canopy with `> CANOPY_RECOMPUTE_CAP` live leaves (only reachable via 72-bit prefix collisions or non-hashed record keys) is _not_ recomputed — the read path reads its persisted deep nodes — so the write-path flush MUST keep persisting `depth > 72` nodes for it, evaluated at flush time against the post-batch live count and materialising the _whole_ canopy on a cap crossing. Migration `0044` prunes pre-existing deep rows except over-cap canopies.
 - **`/zk/verify` enforces the `treeSize=0` invariant** (H-2) — proofs against the document-existence or unified circuits with `treeSize=0` are rejected unless `root` equals `zk::poseidon::empty_doc_existence_root()`.
+
+## Before every `git push`
+
+Two checks. Both exist because skipping them shipped real defects in this repo,
+not as generic hygiene.
+
+### 1. Do the claims match the code?
+
+Prose here is load-bearing — RFCs and ADRs are the record a future auditor reads,
+and doc comments are what a reviewer trusts instead of re-deriving the logic. A
+claim that outruns the implementation is worse than no claim, because it stops
+anyone from looking.
+
+Re-read every sentence you wrote or touched that asserts behaviour, and confirm
+the code does it:
+
+- **Does a "the verifier checks X" claim correspond to a check that exists?**
+  RFC-0001 said the verifier recomputes `/Length` and rejects a mismatch. It was
+  written twice — RFC and doc comment — and implemented in neither verifier. The
+  value is _elided from the commitment by design_, so that sentence was the only
+  thing standing behind it. Rated Critical in review.
+- **Does a "same X — all reused" claim survive checking?** ADR-0029 said "same
+  offline verifiers — all reused". Both verifiers _refused_ the format outright.
+- **Does a test prove what its name says?** A container-leaf test that recomputes
+  the preimage with the same code that produced it proves _agreement_, not
+  _binding_ — it would pass if the function returned a constant. Prove the
+  negative direction too: mutate a byte the leaf claims to cover and assert the
+  leaf breaks.
+- **Do negative tests assert _why_ they rejected?** `assert!(x.is_err())` and
+  `assert.throws(fn, Error)` pass on any failure, including an unrelated early
+  parse error. Name the expected rejection reason.
+- **Does the PR body still describe the diff?** Claims drift across review
+  rounds. The `pdfjs-dist` licence (Apache-2.0, not MIT) and a since-removed
+  `isEvalSupported` option both survived into a merged description.
+
+### 2. Have the gates run in _every_ scope?
+
+Several directories are outside the default scope, so a repo-root invocation
+silently skips them and CI fails on work that looked clean:
+
+| gate                        | correct invocation                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Rust fmt/clippy             | workspace **and** `verifiers/rust` (excluded from the workspace — `cargo fmt --all` at the root does **not** reach it) and `--manifest-path verifiers/rust/fuzz/Cargo.toml`                                                                                                                                                                                                                                                                                                                                                                                                        |
+| Standalone Cargo workspaces | The repo has **seven** Cargo workspaces; root `--workspace` reaches only one. The others each need `--manifest-path`: `verifiers/rust`, `verifiers/rust/fuzz`, `pg-embed-local`, `clients/cli`, `proofs/zkvm/canonicalization/guest` (pinned zkVM toolchain — built by `proofs/zkvm/build_canonicalization_guest.sh`, not ordinary Cargo), `proofs/zkvm/canonicalization/host-tools`. CI covers `clients/cli` in its own job (`cargo nextest run --locked --manifest-path clients/cli/Cargo.toml --all-features`, plus fmt and clippy)                                             |
+| Python client SDK           | `python -m pip install -e "./clients/python[dev]" && python -m pytest -q clients/python/tests`. No Cargo/pnpm command reaches it. If you touched leaf/SMT hashing, also re-run the vector generator and confirm no diff (CI does exactly this)                                                                                                                                                                                                                                                                                                                                     |
+| Feature-gated code          | clippy **with and without** the feature. A target importing a gated module needs `required-features`, or `--all-targets` fails in the default configuration                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| Frontend lint               | `pnpm exec eslint . --max-warnings 0` **from inside `app/public-ui`** — from the repo root it silently ignores the directory and reports success. The flag is load-bearing: without it eslint exits 0 on warnings                                                                                                                                                                                                                                                                                                                                                                  |
+| Frontend types              | `pnpm exec tsc -b` (what the build runs), not `tsc --noEmit`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| Frontend build              | `pnpm --filter public-ui build` — the pnpm package is named **`public-ui`**, not `app/public-ui`. A path-style filter matches no projects and still **exits 0**, so the build silently never runs. A path filter needs the `./` form (`--filter ./app/public-ui`)                                                                                                                                                                                                                                                                                                                  |
+| JS verifier tests           | `npm ci && npm test` **from inside `verifiers/javascript`** — it is not a pnpm workspace member (`pnpm-workspace.yaml` lists only `app/public-ui` and `proofs`), so a root `pnpm install` never installs its deps and `npm test` dies on a missing module                                                                                                                                                                                                                                                                                                                          |
+| Prettier / TOML / headers   | `pnpm tooling:check` at the repo root — covers `verifiers/javascript` too. **Windows caveat:** its last sub-gate `release-assets:test` always fails locally (`spawnSync … EFTYPE` — Node cannot exec `scripts/verify-release.sh` directly on Windows, and the test has no platform guard). CI runs this job on `ubuntu-latest`, so it is green there. On Windows either run it under WSL, or run the six passing sub-gates individually (`format:prettier:check`, `format:toml:check`, `license:headers`, `license:headers:test`, `release-actions:check`, `release-actions:test`) |
+
+Warnings are errors: `-D warnings` for clippy, `--max-warnings 0` for eslint. Do
+not filter them out of local output — an ignored warning is how three of this
+repo's CI failures started.
 
 ## Environment
 
 Key `.env` variables:
+
 - `OLYMPUS_API_PORT` — HTTP port for the embedded Axum server (default ephemeral; tests pin to 3737)
 - `OLYMPUS_INGEST_SIGNING_KEY` — persistent Ed25519 key (production); use `OLYMPUS_DEV_SIGNING_KEY=true` for dev auto-generation
 - `OLYMPUS_BJJ_AUTHORITY_KEY` — persistent Baby Jubjub authority key (32-byte hex); auto-generated by bootstrap if absent
@@ -277,3 +334,9 @@ Key `.env` variables:
 - PostgreSQL client environment — `PGHOST`, `PGHOSTADDR`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD`, `PGPASSFILE`, `PGSSLMODE`, `PGSSLROOTCERT`, `PGSSLCERT`, `PGSSLKEY`, `PGAPPNAME`, and `PGOPTIONS` must all be unset for external PostgreSQL.
 - `OLYMPUS_DEV_ALLOW_SINGLE_DATABASE_URL=true` — explicit development/CI compatibility path that reuses `DATABASE_URL` for migrations and runtime. It is refused under production gates and cannot be combined with `OLYMPUS_DATABASE_MIGRATION_URL`.
 - `CORS_ORIGINS` — explicit comma-separated origins (no wildcards)
+
+## PR review etiquette
+
+- Always reply to CodeRabbit findings by mentioning `@coderabbitai` in the
+  response (fix confirmations and declines alike) — replies feed its
+  learnings database, so decisions persist across future reviews.
