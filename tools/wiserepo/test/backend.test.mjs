@@ -94,9 +94,10 @@ test("isRestrictedOpenAiModel identifies reasoning/gpt-5 model families", () => 
   }
 });
 
-test("resolveBackend accepts the two supported backends, case-insensitively", () => {
+test("resolveBackend accepts every supported backend, case-insensitively", () => {
   assert.equal(resolveBackend("claude"), "claude");
   assert.equal(resolveBackend("OpenAI"), "openai");
+  assert.equal(resolveBackend("Ollama"), "ollama");
 });
 
 test("resolveBackend rejects an unknown backend as a request error", () => {

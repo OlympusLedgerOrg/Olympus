@@ -7,9 +7,16 @@
 
 const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
 const OPENAI_URL = "https://api.openai.com/v1/chat/completions";
+// No trailing path baked in here (unlike the two above) because the ollama
+// backend appends /api/chat itself — this constant is just the daemon's
+// origin, overridable for a non-default port or a remote/tunneled instance.
+const DEFAULT_OLLAMA_URL = process.env.WISEREPO_OLLAMA_URL || "http://localhost:11434";
 
 const DEFAULT_CLAUDE_MODEL = process.env.WISEREPO_CLAUDE_MODEL || "claude-sonnet-5";
 const DEFAULT_OPENAI_MODEL = process.env.WISEREPO_OPENAI_MODEL || "gpt-5-codex";
+// qwen3-coder:30b: strongest coding-tier model that fits a 24GB card (e.g.
+// RTX 3090) at Q4 with room to spare. See WISEREPO_OLLAMA_MODEL to override.
+const DEFAULT_OLLAMA_MODEL = process.env.WISEREPO_OLLAMA_MODEL || "qwen3-coder:30b";
 
 /**
  * The backend could not be reached or could not produce usable output:
@@ -71,11 +78,13 @@ function isRestrictedOpenAiModel(model) {
   return /^(o\d|gpt-5)/.test(model);
 }
 
+const KNOWN_BACKENDS = ["claude", "openai", "ollama"];
+
 function resolveBackend(explicit) {
   const backend = (explicit || process.env.WISEREPO_BACKEND || "claude").toLowerCase();
-  if (backend !== "claude" && backend !== "openai") {
+  if (!KNOWN_BACKENDS.includes(backend)) {
     throw new ModelRequestError(
-      `Unknown wiserepo backend "${backend}" — expected "claude" or "openai"`,
+      `Unknown wiserepo backend "${backend}" — expected one of: ${KNOWN_BACKENDS.join(", ")}`,
     );
   }
   return backend;
@@ -232,6 +241,47 @@ async function callOpenAI({ system, prompt, maxTokens, temperature, timeoutMs })
   return text;
 }
 
+// Ollama needs no API key (it's a local daemon), so "unavailable" here means
+// "the daemon isn't running" or "the model hasn't been pulled" rather than
+// "no credential configured" — fetchWithTimeout's catch already covers
+// connection-refused (daemon down) by wrapping any fetch() throw as
+// ModelUnavailableError, so this function only needs to handle the HTTP
+// layer (non-2xx) and the response shape.
+async function callOllama({ system, prompt, temperature, timeoutMs }) {
+  const url = `${DEFAULT_OLLAMA_URL.replace(/\/+$/, "")}/api/chat`;
+  const { res, body } = await fetchWithTimeout(
+    url,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: DEFAULT_OLLAMA_MODEL,
+        stream: false,
+        options: { temperature },
+        messages: [
+          { role: "system", content: system },
+          { role: "user", content: prompt },
+        ],
+      }),
+    },
+    timeoutMs,
+  );
+  if (!res.ok) {
+    // A 404 here almost always means "model not pulled yet" (e.g. `ollama
+    // pull qwen3-coder:30b` was never run) — that's a config problem the
+    // caller needs to fix, not a transient condition, so it stays in
+    // classifyHttpFailure's blocking (ModelRequestError) branch same as any
+    // other 4xx that isn't auth/quota/timeout.
+    throw classifyHttpFailure(res.status, body, "Ollama");
+  }
+  const data = parseJsonBody(body, "Ollama");
+  const text = data.message?.content ?? "";
+  if (!text.trim()) {
+    throw new ModelUnavailableError("Ollama returned an empty or unparseable completion");
+  }
+  return text;
+}
+
 /**
  * @param {{ system?: string, prompt: string, backend?: string, maxTokens?: number, temperature?: number, timeoutMs?: number }} args
  * @returns {Promise<string>}
@@ -254,7 +304,16 @@ export async function callModel({
     temperature: resolvedTemperature,
     timeoutMs: resolvedTimeout,
   };
-  return resolved === "claude" ? callClaude(args) : callOpenAI(args);
+  if (resolved === "claude") return callClaude(args);
+  if (resolved === "openai") return callOpenAI(args);
+  return callOllama(args);
 }
 
-export { resolveBackend, isRestrictedOpenAiModel, classifyHttpFailure, redactSecrets, numericEnv };
+export {
+  resolveBackend,
+  isRestrictedOpenAiModel,
+  classifyHttpFailure,
+  redactSecrets,
+  numericEnv,
+  KNOWN_BACKENDS,
+};
