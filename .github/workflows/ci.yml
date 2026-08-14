@@ -35,6 +35,7 @@ jobs:
       proofs-js: ${{ steps.filter.outputs.proofs-js }}
       js-verifier: ${{ steps.filter.outputs.js-verifier }}
       docs: ${{ steps.filter.outputs.docs }}
+      agent-docs: ${{ steps.filter.outputs.agent-docs }}
       tooling: ${{ steps.filter.outputs.tooling }}
       # A manual dispatch is an explicit request for the complete suite, even
       # when the most recent commit touched only docs.
@@ -98,6 +99,11 @@ jobs:
             docs:
               - 'docs/adr/**'
               - 'scripts/check_adr_index.mjs'
+            agent-docs:
+              - 'CLAUDE.md'
+              - 'AGENTS.md'
+              - 'CODEX.md'
+              - 'tools/wiserepo/**'
             tooling:
               - '.license-header-baseline'
               - '.prettierignore'
@@ -182,6 +188,92 @@ jobs:
 
       - name: Check ADR index/status drift
         run: node scripts/check_adr_index.mjs
+
+  # ── AGENTS.md drift gate (wiserepo) ──────────────────────────────────────────
+  # CLAUDE.md and AGENTS.md carry the same guidance for two different
+  # assistants and have drifted apart for real in this repo before (commit
+  # 4f5e270f). wiserepo's own unit tests (structural-parity check, path-guard)
+  # run unconditionally; the actual drift check needs a model API key and is
+  # a soft gate — see the step below for why.
+  docs-agent-sync:
+    name: AGENTS.md drift check (wiserepo)
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.agent-docs == 'true' || needs.changes.outputs.ci == 'true'
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22.14.0"
+          cache: npm
+          cache-dependency-path: tools/wiserepo/package-lock.json
+
+      - name: Install wiserepo dependencies
+        run: npm ci
+        working-directory: tools/wiserepo
+
+      - name: wiserepo unit tests
+        run: npm test
+        working-directory: tools/wiserepo
+
+      - name: Check AGENTS.md is in sync with CLAUDE.md
+        env:
+          # SECURITY: only exposed on `push` (i.e. post-merge on a protected
+          # branch), never on `pull_request`. `pull_request` checks out the
+          # PR head and runs `node bin/sync-agent-docs.mjs`, which imports
+          # code FROM that checkout — a same-repository PR could modify
+          # backend.mjs (or anything else executed in this step) to read
+          # process.env.ANTHROPIC_API_KEY and exfiltrate it, regardless of
+          # whether the model is ever actually called. Gating on event_name
+          # here, rather than moving this to `pull_request_target` (which
+          # would keep the secret but run trusted workflow code against an
+          # untrusted checkout — a well-known worse mistake), means a PR run
+          # always sees an empty key and exercises only the two model-free
+          # paths: the unit tests above, and sync-agent-docs.mjs's own
+          # structural short-circuit (see that script — it skips the model
+          # entirely when the committed AGENTS.md already satisfies parity
+          # against a content-hash-verified CLAUDE.md). Real drift beyond
+          # that circuit is caught by the post-merge push run instead.
+          ANTHROPIC_API_KEY: ${{ github.event_name == 'push' && secrets.WISEREPO_ANTHROPIC_API_KEY || '' }}
+        run: |
+          # This is a soft gate, not a hard one: sync-agent-docs.mjs exits 2
+          # (non-blocking) when the model backend is unavailable — no repo
+          # secret configured, network hiccup, timeout — and only exits 1
+          # (blocking, fails this job) when the model DID respond but
+          # dropped or reordered content relative to CLAUDE.md, or when
+          # --check finds genuine drift. See the exit code contract
+          # documented at the top of that script.
+          #
+          # The `if node ...; then / else rc=$? / fi` capture below is
+          # required, not decorative: a bare `node bin/sync-agent-docs.mjs
+          # --check` as the last command in this step would let its exit
+          # code become the step's exit code directly, and GitHub Actions
+          # fails the step on ANY nonzero code — including exit 2, which the
+          # whole point of this contract is to treat as non-blocking.
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            if [ "${GITHUB_EVENT_NAME:-}" = "pull_request" ]; then
+              echo "::notice::AGENTS.md drift is checked structurally (no model call) on pull_request; the model-backed check runs post-merge on push to main."
+            else
+              echo "::warning::WISEREPO_ANTHROPIC_API_KEY repo secret is not set — AGENTS.md drift is NOT being checked in CI. Set the secret to enable this gate (see tools/wiserepo/README.md)."
+            fi
+          fi
+          if node bin/sync-agent-docs.mjs --check; then
+            exit 0
+          else
+            rc=$?
+            if [ "$rc" -eq 2 ]; then
+              echo "::warning::wiserepo backend unavailable; AGENTS.md drift was not checked."
+              exit 0
+            fi
+            exit "$rc"
+          fi
+        working-directory: tools/wiserepo
 
   # ── Formatting + per-file license headers ───────────────────────────────────
   repo-tooling:
@@ -1156,6 +1248,14 @@ jobs:
           #     pnpm auditConfig.ignoreGhsas), so the severity floor is the only
           #     lever available until then.
           npm audit --prefix proofs --audit-level=critical
+          # tools/wiserepo is a standalone npm package (NOT a pnpm workspace
+          # member — pnpm-workspace.yaml lists only app/public-ui and proofs),
+          # so neither the pnpm audit above nor a root install reaches it. It
+          # is dev tooling that never ships in a binary or bundle, but it does
+          # run on developer machines with an API key in the environment and
+          # in the pre-commit path, so it gets the same `high` floor as the
+          # other first-party JS.
+          npm audit --prefix tools/wiserepo --audit-level=high
 
       # ── License + source policy (deny.toml) ──────────────────────────────────
       # Machine-enforced version of THIRD_PARTY_LICENSES.md. Catches a new

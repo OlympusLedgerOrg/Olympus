@@ -122,6 +122,7 @@ Key files:
 - `src-tauri/src/api/` — Axum route handlers (`ingest`, `ledger`, `redaction`, `admin`, `admin_users`, `keys`, `zk`, `user_auth`, `credentials`, `shards`, `trusted_issuers`)
 - `src-tauri/src/api/shards.rs` — shard registry + `authorize_write` gate (operator-controlled shard creation; see Critical Invariants)
 - `src-tauri/src/api/trusted_issuers.rs` — multi-entry BJJ trusted-issuer set for SBT scope resolution (audit M-3); loaded at startup from bootstrap key + `OLYMPUS_BJJ_TRUSTED_ISSUERS_JSON`
+- `src-tauri/src/smt/backend.rs` — transaction-bound SMT storage contract plus PostgreSQL, SQLite, and in-memory implementations; see the writer-serialisation invariant below
 - `src-tauri/src/routes/public_stats.rs` — public ledger statistics endpoint
 - `src-tauri/src/api/zk/` — `/zk/verify`, `/zk/prove` (scope-gated)
 - `src-tauri/src/api/credentials/` — Olympus-native SBTs (issue / list / revoke / verify); optional M-of-N federation quorum (`quorum: true`)
