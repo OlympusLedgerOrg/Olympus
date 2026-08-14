@@ -64,7 +64,7 @@ use olympus_tauri_lib::api::middleware::auth::derive_api_key_from_bjj;
 use olympus_tauri_lib::api::trusted_issuers::load_trusted_issuers;
 use olympus_tauri_lib::bootstrap;
 use olympus_tauri_lib::server;
-use olympus_tauri_lib::state::AppState;
+use olympus_tauri_lib::state::{self, AppState};
 
 /// Everything a test needs to reach the shared server. Plain, `Send +
 /// Sync` data only — the pool and the `PgEmbed` handle deliberately live
@@ -83,6 +83,14 @@ pub struct TestHarness {
     /// `/admin/*` routes from tests (the bootstrap system user has
     /// `role = 'system'`, not `'admin'`).
     pub admin_key: String,
+    /// The bootstrapped BJJ authority private key — needed by tests that
+    /// must produce a checkpoint synchronously (`anchoring::own_checkpoint::
+    /// build_and_persist`) rather than wait on the anchor cron's real
+    /// interval (e.g. `tests/api_db/monitor.rs`).
+    pub bjj_authority_key: [u8; 32],
+    /// The bootstrapped BJJ authority public key, paired with
+    /// [`Self::bjj_authority_key`].
+    pub bjj_authority_pubkey: olympus_tauri_lib::zk::witness::baby_jubjub::BabyJubJubPubKey,
     /// Async client. Built without a runtime (reqwest only needs one when
     /// a request is actually awaited), so each test's own runtime drives
     /// its outbound calls.
@@ -161,7 +169,14 @@ pub async fn boot() -> &'static TestHarness {
 }
 
 fn boot_blocking() -> TestHarness {
-    let (ready_tx, ready_rx) = mpsc::channel::<(SocketAddr, String, String, String)>();
+    let (ready_tx, ready_rx) = mpsc::channel::<(
+        SocketAddr,
+        String,
+        String,
+        String,
+        [u8; 32],
+        olympus_tauri_lib::zk::witness::baby_jubjub::BabyJubJubPubKey,
+    )>();
 
     std::thread::Builder::new()
         .name("olympus-test-server".into())
@@ -182,9 +197,18 @@ fn boot_blocking() -> TestHarness {
                     database_url,
                     api_key,
                     admin_key,
+                    bjj_authority_key,
+                    bjj_authority_pubkey,
                 } = init().await;
                 ready_tx
-                    .send((addr, database_url, api_key, admin_key))
+                    .send((
+                        addr,
+                        database_url,
+                        api_key,
+                        admin_key,
+                        bjj_authority_key,
+                        bjj_authority_pubkey,
+                    ))
                     .expect("send server-ready signal");
                 // Park this runtime forever. The per-test `#[tokio::test]`
                 // runtimes come and go; this one — and everything it owns —
@@ -194,15 +218,18 @@ fn boot_blocking() -> TestHarness {
         })
         .expect("spawn dedicated test-server thread");
 
-    let (addr, database_url, api_key, admin_key) = ready_rx
-        .recv()
-        .expect("dedicated server thread failed during init");
+    let (addr, database_url, api_key, admin_key, bjj_authority_key, bjj_authority_pubkey) =
+        ready_rx
+            .recv()
+            .expect("dedicated server thread failed during init");
 
     TestHarness {
         addr,
         database_url,
         api_key,
         admin_key,
+        bjj_authority_key,
+        bjj_authority_pubkey,
         // `pool_max_idle_per_host(0)` is load-bearing: this one client is
         // shared across every `#[tokio::test]`, and each test runs on its
         // OWN current-thread runtime that is dropped when the test returns.
@@ -230,6 +257,8 @@ struct Booted {
     database_url: String,
     api_key: String,
     admin_key: String,
+    bjj_authority_key: [u8; 32],
+    bjj_authority_pubkey: olympus_tauri_lib::zk::witness::baby_jubjub::BabyJubJubPubKey,
 }
 
 async fn init() -> Booted {
@@ -293,6 +322,14 @@ async fn init() -> Booted {
     )));
     state.bjj_authority_pubkey = Some(bootstrap_result.bjj_authority_pubkey);
     state.bjj_trusted_issuers = trusted;
+    // Mirrors startup.rs / bin/olympus-server.rs: without this, every
+    // redactable upload (any valid-UTF-8 text, PDF, or OOXML body —
+    // `zk::segment::detect_format`) 503s under `requires_redaction_blind_secret`
+    // because `AppState::new` defaults `redaction_blind_secret` to `None`, and
+    // `OLYMPUS_ENV=test` above never gets a chance to fall back to the
+    // BJJ-derived dev secret unless this is wired up explicitly.
+    state.redaction_blind_secret =
+        state::resolve_redaction_blind_secret(state::secret_bytes(&state.bjj_authority_key));
 
     let addr = server::start(state)
         .await
@@ -313,6 +350,8 @@ async fn init() -> Booted {
         database_url,
         api_key,
         admin_key: admin_key.to_owned(),
+        bjj_authority_key: bootstrap_result.bjj_authority_key,
+        bjj_authority_pubkey: bootstrap_result.bjj_authority_pubkey,
     }
 }
 

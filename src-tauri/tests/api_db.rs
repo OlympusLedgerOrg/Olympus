@@ -40,10 +40,14 @@ mod external_pg_roles;
 mod ingest_signing_key_registry;
 #[path = "api_db/ledger.rs"]
 mod ledger;
+#[path = "api_db/monitor.rs"]
+mod monitor;
 #[path = "api_db/public_stats.rs"]
 mod public_stats;
 #[path = "api_db/redaction.rs"]
 mod redaction;
+#[path = "api_db/redaction_blind_secret_registry.rs"]
+mod redaction_blind_secret_registry;
 #[path = "api_db/shards.rs"]
 mod shards;
 #[path = "api_db/signing_keys.rs"]

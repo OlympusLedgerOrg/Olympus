@@ -27,10 +27,12 @@
 //!
 //! Phase 2 PR-1 (this file): the V2 message + verifier, the signing primitive,
 //! and the persistence (`store_*`/`load_*`, table in migration 0048). The live
-//! producer — collecting peer co-signatures over Tor (the checkpoint analogue of
-//! `federation::cosign`) and persisting them in the gossip loop — is PR-2 and is
-//! the first non-test caller of the persistence pair; those two functions carry
-//! targeted `#[allow(dead_code)]` until PR-2 lands.
+//! producer — collecting peer co-signatures over Tor and persisting them in the
+//! gossip loop — is [`crate::federation::checkpoint_cosign`] (PR-2, ADR-0033
+//! "Remaining producer work"), gated behind the `federation` feature like the
+//! rest of Tor peering; `store_*`/`load_*` carry a feature-conditional
+//! `#[allow(dead_code)]` since a default (non-`federation`) build genuinely has
+//! no caller for them.
 
 use ark_bn254::Fr;
 use ark_ff::PrimeField;
@@ -51,6 +53,41 @@ use crate::zk::witness::baby_jubjub::{self, BabyJubJubError, BabyJubJubPubKey};
 /// element. `V2` adds the `chain_id` + `epoch` binding over the `V1` (root-only)
 /// Phase-1 format, which had no producer and minted no signatures.
 pub const CHECKPOINT_QUORUM_PREFIX: &[u8] = b"OLY:CHECKPOINT:QUORUM:V2";
+
+/// Environment variable holding the default checkpoint-quorum threshold `M`.
+/// Distinct from [`super::QUORUM_THRESHOLD_ENV`] (`OLYMPUS_FEDERATION_QUORUM_THRESHOLD`,
+/// which scopes SBT credential quorums) so an operator can run different
+/// M-of-N policies for "how many institutions must co-sign a credential" vs.
+/// "how many institutions must co-sign this node's checkpoint root".
+pub const CHECKPOINT_QUORUM_THRESHOLD_ENV: &str = "OLYMPUS_CHECKPOINT_QUORUM_THRESHOLD";
+
+/// The configured default checkpoint-quorum threshold `M`, read from
+/// [`CHECKPOINT_QUORUM_THRESHOLD_ENV`].
+///
+/// Defaults to `1` (single-signer — the collector then never needs a peer
+/// co-signature) when unset, and clamps `0` up to `1` for the same reason
+/// [`super::configured_threshold`] does: a zero threshold is never vacuously
+/// satisfied by [`verify_checkpoint_quorum`], so pinning one would just
+/// produce a checkpoint quorum that can never be satisfied. An unparseable
+/// (but present) value also falls back to `1` — fail-open on the weakest
+/// policy, matching `configured_threshold` — but logs a warning, since `1`
+/// silently downgrades an intended M-of-N to 1-of-N with no other signal an
+/// operator's env var has a typo.
+pub fn configured_checkpoint_threshold() -> u32 {
+    let Ok(raw) = std::env::var(CHECKPOINT_QUORUM_THRESHOLD_ENV) else {
+        return 1;
+    };
+    match raw.trim().parse::<u32>() {
+        Ok(m) => m.max(1),
+        Err(_) => {
+            tracing::warn!(
+                "{CHECKPOINT_QUORUM_THRESHOLD_ENV}={raw:?} is not a valid non-negative integer; \
+                 defaulting the checkpoint-quorum threshold to 1"
+            );
+            1
+        }
+    }
+}
 
 /// Derive the checkpoint-quorum co-sign message (a BN254 `Fr`) every signer
 /// signs.
@@ -137,6 +174,17 @@ pub fn verify_checkpoint_quorum(
     threshold: u32,
     sigs: &[CollectedSignature],
 ) -> QuorumStatus {
+    // WIRING PREREQUISITE (audit L-5): this primitive counts valid, distinct,
+    // in-set co-signatures and reports `satisfied` for `valid >= threshold >= 1`
+    // — 1-of-1 included, which is intentional and pinned by the domain-separation
+    // test in `mod.rs`. Any *acceptance* policy — a minimum M/N, and above all the
+    // issuer-anchor the SBT path enforces (`issuer_anchors_quorum`, which is what
+    // stops a DB-tier signer-set graft) — must be applied by the future Phase-2
+    // producer that wires this to a real acceptance path. This verifier has no
+    // authority anchor of its own, so it must not be exposed on an acceptance
+    // path without one; the degenerate-bounds check belongs there too, not here,
+    // because this counting primitive legitimately serves any `threshold >= 1`.
+    //
     // The message binds (chain_id, epoch, root) + threshold + the pinned set, so
     // a post-hoc tamper to any of them makes every stored signature verify
     // against a different message and drop out in the shared loop.
@@ -189,7 +237,10 @@ pub fn cosign_checkpoint(
 /// Persist the collected checkpoint-quorum signatures for an `own_checkpoints`
 /// row. Idempotent per `(checkpoint, signer)` via the UNIQUE constraint in
 /// migration 0048. Mirrors [`super::store_quorum_signatures_tx`] for credentials.
-#[allow(dead_code)] // PR-2 (gossip-loop producer) is the first caller — see module doc
+// PR-2 (the federation gossip-loop producer, `federation::checkpoint_cosign`)
+// is the first caller; it only exists under the `federation` feature, so a
+// default build still has no caller for these two.
+#[cfg_attr(not(feature = "federation"), allow(dead_code))]
 pub async fn store_checkpoint_quorum_signatures(
     pool: &PgPool,
     checkpoint_id: Uuid,
@@ -215,7 +266,7 @@ pub async fn store_checkpoint_quorum_signatures(
 }
 
 /// Load all stored checkpoint-quorum signatures for an `own_checkpoints` row.
-#[allow(dead_code)] // PR-2 (gossip-loop producer) is the first caller — see module doc
+#[cfg_attr(not(feature = "federation"), allow(dead_code))]
 pub async fn load_checkpoint_quorum_signatures(
     pool: &PgPool,
     checkpoint_id: Uuid,

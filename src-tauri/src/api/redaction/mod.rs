@@ -22,6 +22,8 @@
 
 mod bundle_v3;
 mod describe;
+// ADR-0037: object-based redaction selection, staging, and commit flow
+// (`get_page_objects` / `stage_redaction` / `commit_redaction`).
 /// `pub` (not just crate-visible) so DB-backed integration tests
 /// (`tests/api_db/ingest_signing_key_registry.rs`) can call `get_issuer_key`
 /// directly with a manually assembled `AppState` — the shared test harness's
@@ -33,6 +35,7 @@ mod describe;
 pub mod issuer_key;
 mod manifest;
 mod redact;
+mod selection;
 pub(crate) mod staging;
 mod types;
 
@@ -59,6 +62,10 @@ pub fn router() -> Router<AppState> {
         )
         .route("/redaction/describe", post(describe::describe_redaction))
         .route("/redaction/redact", post(redact::redact_redaction))
+        // ADR-0037 selection flow: get_page_objects / stage_redaction / commit_redaction.
+        .route("/redaction/page-objects", post(selection::get_page_objects))
+        .route("/redaction/stage", post(selection::stage_redaction))
+        .route("/redaction/commit", post(selection::commit_redaction))
         // Unauthenticated: the bundle-signing public key is public by design.
         .route("/redaction/issuer-key", get(issuer_key::get_issuer_key))
 }

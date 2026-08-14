@@ -129,6 +129,30 @@ pub(crate) fn int_after(region: &[u8], key: &[u8]) -> Option<u64> {
     std::str::from_utf8(&region[start..i]).ok()?.parse().ok()
 }
 
+/// Read the signed integer scalar immediately following `key` — `/Rotate 90`,
+/// `/Rotate -90`. Unlike [`int_after`] this accepts a leading sign, and unlike
+/// [`reals_after`] it reads a bare scalar, not a `[ … ]` array. `None` for a
+/// missing key or a token that isn't a plain signed integer (a fraction, or a
+/// malformed value).
+pub(crate) fn signed_int_after(region: &[u8], key: &[u8]) -> Option<i64> {
+    let mut i = find_top_level(region, key)? + key.len();
+    while i < region.len() && is_ws(region[i]) {
+        i += 1;
+    }
+    let start = i;
+    if i < region.len() && matches!(region[i], b'+' | b'-') {
+        i += 1;
+    }
+    let digits_start = i;
+    while i < region.len() && region[i].is_ascii_digit() {
+        i += 1;
+    }
+    if i == digits_start {
+        return None;
+    }
+    std::str::from_utf8(&region[start..i]).ok()?.parse().ok()
+}
+
 /// Read indirect-object ids referenced by `key`, handling both a single
 /// `key N G R` and an array `key [N G R M G R …]`. Returns object numbers in
 /// order (e.g. `/Kids [3 0 R 9 0 R]` → `[3, 9]`, `/Contents 4 0 R` → `[4]`).

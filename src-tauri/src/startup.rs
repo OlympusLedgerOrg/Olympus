@@ -864,13 +864,58 @@ pub(crate) async fn run_server_bringup(
             }
         }
         // Server blinding secret for object-level redaction
-        // (ADR-0026): derived deterministically from the
-        // persisted BJJ authority (or an explicit override)
-        // so per-object blindings are stable across restarts
-        // and re-ingest reproduces the same committed root.
+        // (ADR-0026): production requires the independent,
+        // explicit secret; dev derives a stable fallback from
+        // the persisted BJJ authority for zero-setup local use.
         app_state.redaction_blind_secret = crate::state::resolve_redaction_blind_secret(
             crate::state::secret_bytes(&app_state.bjj_authority_key),
         );
+        // Blind-secret rotation registry (migration 0059,
+        // docs/key-rotation.md): detect a changed
+        // OLYMPUS_REDACTION_BLIND_SECRET fingerprint against
+        // the last one this database recorded. Unlike the
+        // ingest signing key above, a mismatch here is NOT
+        // silently adopted — it is refused unless the operator
+        // opts in with OLYMPUS_BLIND_SECRET_ROTATION=confirm,
+        // because an unnoticed change makes every
+        // previously-redacted object's blinding permanently
+        // unreproducible. `pool` is always `Some` here — this
+        // whole block is inside `bjj_result`, which only exists
+        // when bootstrap ran against a real pool. Production-only:
+        // dev has no such guarantee to lean on and lower stakes.
+        if crate::env::is_production() {
+            if let (Some(pool), Some(secret)) = (
+                app_state.pool.as_ref(),
+                crate::state::secret_bytes(&app_state.redaction_blind_secret),
+            ) {
+                let fingerprint = crate::state::fingerprint_redaction_blind_secret(secret);
+                match crate::bootstrap::ensure_redaction_blind_secret_fingerprint(
+                    pool,
+                    &fingerprint,
+                )
+                .await
+                {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        // Fail closed: discard the mismatched secret so
+                        // object-redaction ingest/issue 503s instead of
+                        // silently producing blindings the registry can't
+                        // account for.
+                        app_state.redaction_blind_secret = None;
+                    }
+                    Err(e) => {
+                        // Fail closed here too: a registry error means the
+                        // fingerprint could not be confirmed, so the caller
+                        // must not treat the secret as authorized — same
+                        // reasoning as the `Ok(false)` arm above (see
+                        // `ensure_redaction_blind_secret_fingerprint`'s doc
+                        // comment).
+                        tracing::warn!("bootstrap: redaction blind secret registry: {e}");
+                        app_state.redaction_blind_secret = None;
+                    }
+                }
+            }
+        }
         // Audit M-3: resolve the full trusted-issuer set
         // (primary bootstrap pubkey + any rotation entries
         // in OLYMPUS_BJJ_TRUSTED_ISSUERS_JSON + the

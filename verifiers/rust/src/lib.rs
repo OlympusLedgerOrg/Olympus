@@ -25,9 +25,18 @@ pub mod empty_root;
 /// the `OLY:SNAPSHOT:PERSIST:V1` signing digest.
 pub mod transition;
 
+/// ADR-0044 BLAKE3 CD-HS-ST SMT root attestations — independent re-derivation
+/// of the `OLY:SMT:ROOT:V1` signing digest.
+pub mod smt_root;
+
 /// Baby Jubjub EdDSA-Poseidon signature verification, so the signed digests
 /// this crate re-derives can also be authenticated rather than trusted.
 pub mod eddsa;
+
+/// Independent offline verifier for the SBT credential M-of-N quorum
+/// (`OLY:SBT:QUORUM:V2`) — re-derives the full co-sign pre-image and re-runs the
+/// member-only, distinct, threshold-gated counting (audit L6).
+pub mod sbt_quorum;
 
 /// ADR-0030 V3 signed-Merkle redaction bundle offline verifier (Phase 3).
 pub mod redaction;

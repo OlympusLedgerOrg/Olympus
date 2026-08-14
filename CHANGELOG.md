@@ -6,6 +6,89 @@ All notable changes to the Olympus protocol are documented in this file.
 
 ### Added
 
+- **ADR-0021 Monitor API + Maximum Merge Delay policy, implemented.**
+  Of ADR-0021's four CT-inspired operational controls, witness cosigning
+  (ADR-0033) and gossip/equivocation detection (`federation::gossip`) were
+  already implemented under later ADRs; this closes the remaining two:
+  - New unauthenticated (rate-limited only) `src-tauri/src/api/monitor/`
+    surface, mounted on both the loopback listener and, under the
+    `federation` feature, the Tor-facing listener:
+    - `GET /monitor/checkpoints` / `GET /monitor/checkpoints/latest` — recent
+      / latest signed `own_checkpoints` rows for a shard (a CT
+      get-sth/get-sth-history equivalent), with every field needed to
+      independently recompute and check the checkpoint's BJJ/Ed25519
+      signatures.
+    - `GET /monitor/proof/{content_hash}` — the raw, offline-verifiable
+      Poseidon ledger-snapshot inclusion witness for a committed record (a
+      get-proof-by-hash equivalent), reusing the exact parse/lookup
+      `POST /ingest/proofs/verify` already used server-side (factored into
+      the new `api::ingest::snapshot_evidence`) so the two endpoints can
+      never disagree about what a stored witness means.
+    - `GET /monitor/mmd/{content_hash}` — Maximum Merge Delay status: how
+      long after ingest a record's first covering signed checkpoint
+      appeared (or has been waiting, if none yet), classified against the
+      new `OLYMPUS_MMD_SECONDS` policy (default 24h,
+      `src-tauri/src/mmd.rs`) as `covered_within_policy` /
+      `covered_late_breach` / `pending_within_policy` / `pending_breach`.
+      The covering checkpoint half of this is signed and independently
+      verifiable; the ingest-timestamp half (`ingest_records.ts`) is an
+      unsigned server column, so the endpoint is a server-reported policy
+      classification and audit signal, not a non-repudiable proof — see the
+      module doc comment and ADR-0021 for the full reasoning.
+  - **Known, documented limitation**: the proof/MMD endpoints serve
+    inclusion witnesses against the Poseidon ledger-snapshot tree (the tree
+    `own_checkpoints` actually signs), not the separate BLAKE3 CD-HS-ST
+    parser-bound SMT ADR-0003/0004/0005 describe as the canonical per-leaf
+    commitment — nothing in this codebase signs that tree's root today. See
+    ADR-0021's "Known limitation" section.
+  - `docs/adr/ADR-0021-smt-with-ct-operational-hardening.md` updated from
+    "Proposed (scaffold)" to "Accepted; implemented", cross-linking
+    ADR-0032/ADR-0033 and the federation gossip module for the two pieces
+    that were already done.
+- **Redaction blind-secret rotation registry (key-rotation series, part 4.6).**
+  Follow-up to making `OLYMPUS_REDACTION_BLIND_SECRET` mandatory-and-independent
+  in production: rotating that secret (accidentally or otherwise) previously had
+  no error and no record — every previously-redacted object's blinding just
+  became silently unreproducible. `bootstrap::ensure_redaction_blind_secret_fingerprint`
+  now records a domain-separated BLAKE3 **fingerprint** of the resolved secret
+  (never the secret itself) in `account_signing_keys`
+  (`purpose = 'redaction_blind_secret'`, migration 0059) at startup, mirroring
+  the ingest-signing-key registry's supersession shape. Unlike that registry, a
+  fingerprint change is refused by default — the mismatched secret is discarded
+  (object-redaction ingest/issue then fail closed with 503) unless the operator
+  opts in with the new `OLYMPUS_BLIND_SECRET_ROTATION=confirm`, mirroring
+  `OLYMPUS_AUTHORITY_ROTATION`'s anti-accidental-swap posture. Production-only
+  (gated on `OLYMPUS_ENV=production` and a DB pool). See
+  `docs/key-rotation.md`'s "Avoid rotating `OLYMPUS_REDACTION_BLIND_SECRET`"
+  section for the full procedure.
+- **ADR-0037 object redaction selection/staging/commit flow, implemented.**
+  The three-step `get_page_objects` / `stage_redaction` / `commit_redaction`
+  flow the ADR specified is now live over HTTP for the two PDF object
+  commitment formats (`pdf-object`, `pdf-xref-stream`):
+  - `POST /redaction/page-objects` — selectable objects on one page in
+    ADR-0037's normalized coordinate contract (bottom-left origin,
+    `/Rotate` applied, zero-based `page_num`, every rect finite and
+    clipped to the page extent). New `crate::zk::pdf_page_objects`.
+  - `POST /redaction/stage` — canonicalizes a proposed selection against
+    the live manifest and computes backend-derived, severity-bearing
+    warnings (new `crate::zk::pdf_redaction_warnings`): `SharedXObject`
+    and `SharedStream` (an XObject or content stream referenced from more
+    than one page/form) as `Warning`, and `AnnotationAppearanceStream` (an
+    annotation selected without its `/AP` appearance stream) as
+    `Blocking`. `AmbiguousTextSpan` stays UI-surfaced/Info-only by design —
+    it names a frontend click ambiguity, not a backend-observable object
+    relationship. Wires the previously-dead-code `RedactionStagingTable`
+    (in-memory, 15-minute TTL, already present for a prior PR) to HTTP.
+  - `POST /redaction/commit` — re-validates the staging entry against the
+    *live* manifest (drift, expiry, warning-digest, blocking severity) and
+    produces the redacted artifact + V3 bundle via the same
+    `perform_redaction` core `POST /redaction/redact` uses, so both paths
+    are byte-identical for the same selection.
+
+  OOXML and text-line commitments are unaffected — they redact directly via
+  `POST /redaction/redact` (there is no per-page object geometry to stage
+  against for those formats).
+
 - **Historical redaction/ingest issuer keys (key-rotation series, part 4.5).**
   `GET /redaction/issuer-key` now serves every Ed25519 signing key this
   instance has successfully _registered_, not just the live one. Every

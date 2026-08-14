@@ -20,29 +20,31 @@
 //! (env `OLYMPUS_ADMIN_KEY` via `x-admin-key`, or an `admin`-role + `admin`-scope
 //! API key) — the same gate the rest of `/admin/*` uses.
 //!
-//! Lifecycle scope (current): only `register` (POST) and `list` (GET) are
-//! exposed. There is no endpoint that sets `active = false` or rewrites
-//! `owner_user_id`, so the `!active` branch in [`authorize_write`] is reachable
-//! only by editing the `shards` row directly in the DB. Deactivating or
-//! re-binding a shard is therefore a manual operator action for now; a
-//! `PATCH /admin/shards/{shard_id}` is the natural place to wire it up later.
-//! The `active` check stays regardless — it is the fail-closed enforcement
-//! point once a row is deactivated by any means.
+//! Lifecycle scope (current): `register`/`list` (POST/GET `/admin/shards`) plus
+//! one targeted mutation, `PATCH /admin/shards/{shard_id}/checkpoint-quorum-threshold`
+//! (ADR-0033's per-shard checkpoint-quorum threshold override — see
+//! [`set_quorum_threshold`]). There is still no endpoint that sets
+//! `active = false` or rewrites `owner_user_id`, so the `!active` branch in
+//! [`authorize_write`] is reachable only by editing the `shards` row directly
+//! in the DB. Deactivating or re-binding a shard is therefore a manual
+//! operator action for now; a `PATCH /admin/shards/{shard_id}` is the natural
+//! place to wire it up later. The `active` check stays regardless — it is the
+//! fail-closed enforcement point once a row is deactivated by any means.
 //!
 //! Note: these handlers use sqlx's runtime query API (`query`/`query_as`) — the
 //! same style as the rest of `api/` — so the new `shards` table needs no
 //! compile-time offline query-cache entry.
 
 use axum::{
-    extract::State,
+    extract::{Path, State},
     http::{HeaderMap, StatusCode},
-    routing::post,
+    routing::{patch, post},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::api::admin_routes::ADMIN_SHARDS;
+use crate::api::admin_routes::{ADMIN_SHARDS, ADMIN_SHARD_QUORUM_THRESHOLD};
 use crate::api::ingest::sanitize_shard;
 use crate::api::middleware::auth::{require_admin_auth, AuthenticatedKey};
 use crate::state::AppState;
@@ -92,6 +94,20 @@ pub struct ShardRecord {
     pub label: Option<String>,
     pub created_by: String,
     pub active: bool,
+    /// ADR-0033 per-shard checkpoint-quorum threshold override. `NULL` means
+    /// "use `OLYMPUS_CHECKPOINT_QUORUM_THRESHOLD`" — see
+    /// [`set_quorum_threshold`].
+    pub checkpoint_quorum_threshold_override: Option<i32>,
+}
+
+/// `PATCH /admin/shards/{shard_id}/checkpoint-quorum-threshold` request body.
+/// `threshold: None` (or the field omitted) clears the override back to the
+/// env default; `Some(n)` pins `n` as this shard's checkpoint-quorum
+/// threshold on the next unpinned checkpoint (see the handler doc).
+#[derive(Debug, Deserialize)]
+pub struct SetCheckpointQuorumThresholdRequest {
+    #[serde(default)]
+    pub threshold: Option<u32>,
 }
 
 // ── Shard-id validation ───────────────────────────────────────────────────────
@@ -161,7 +177,8 @@ async fn register_shard(
         INSERT INTO shards (shard_id, owner_user_id, label, created_by)
         VALUES ($1, $2, $3, 'admin')
         ON CONFLICT (shard_id) DO NOTHING
-        RETURNING shard_id, owner_user_id, label, created_by, active
+        RETURNING shard_id, owner_user_id, label, created_by, active,
+                  checkpoint_quorum_threshold_override
         "#,
     )
     .bind(shard_id)
@@ -192,7 +209,8 @@ async fn list_shards(
 
     let rows: Vec<ShardRecord> = sqlx::query_as::<_, ShardRecord>(
         r#"
-        SELECT shard_id, owner_user_id, label, created_by, active
+        SELECT shard_id, owner_user_id, label, created_by, active,
+               checkpoint_quorum_threshold_override
         FROM shards
         ORDER BY created_at ASC
         "#,
@@ -202,6 +220,105 @@ async fn list_shards(
     .map_err(db_err)?;
 
     Ok(Json(rows))
+}
+
+// ── Route: PATCH /admin/shards/{shard_id}/checkpoint-quorum-threshold ──────────
+
+/// Set (or clear) this shard's checkpoint-quorum threshold override
+/// (ADR-0033 "per-checkpoint threshold override"). Admin-gated, like the rest
+/// of `/admin/shards`.
+///
+/// `threshold: Some(n)` (`n >= 1`) pins the shard's next *unpinned* checkpoint
+/// quorum collection round to threshold `n` instead of
+/// `OLYMPUS_CHECKPOINT_QUORUM_THRESHOLD` — see
+/// [`checkpoint_quorum_threshold_override`], read by
+/// `federation::checkpoint_cosign::collect_and_store_checkpoint_quorum`.
+/// `threshold: None` clears the override back to the env default. Since a
+/// checkpoint's `(threshold, signers)` are pinned once on first collection
+/// attempt (`own_checkpoint::set_checkpoint_quorum_params`'s one-shot guard —
+/// ADR-0033 "why pin on first attempt, not first success"), setting or
+/// clearing this override never retroactively changes an already-pinned
+/// checkpoint row; it only takes effect on the next one.
+///
+/// Deliberately does NOT validate `threshold` against the live trusted-peer
+/// count — that set is dynamic and already checked at pin time (an
+/// unsatisfiable threshold is skipped-and-logged there, not pinned), so
+/// duplicating the check here would just be a second, driftable source of
+/// truth. `Some(0)` is rejected (`422`) the same way
+/// `configured_checkpoint_threshold` floors a zero env value to `1` — a zero
+/// threshold is never satisfiable — but here it is a hard rejection rather
+/// than a silent clamp, since this is an explicit operator action.
+async fn set_quorum_threshold(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(shard_id): Path<String>,
+    Json(req): Json<SetCheckpointQuorumThresholdRequest>,
+) -> Result<Json<ShardRecord>, ApiError> {
+    let pool = state
+        .pool
+        .as_ref()
+        .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable."))?;
+    require_admin_auth(&headers, pool, &state.bjj_trusted_issuers).await?;
+
+    if let Some(t) = req.threshold {
+        // Upper-bounded by i32::MAX: the column is a Postgres INTEGER, and an
+        // unchecked `as i32` cast below would wrap a larger u32 negative,
+        // surfacing as a DB CHECK-constraint failure (a 500-ish error) instead
+        // of a clean 422.
+        if t < 1 || t > i32::MAX as u32 {
+            return Err(err(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "threshold must be in 1..=2147483647 (a zero checkpoint-quorum threshold can \
+                 never be satisfied, and the column is a Postgres INTEGER); omit threshold or \
+                 pass null to clear the override.",
+            ));
+        }
+    }
+
+    let rec: Option<ShardRecord> = sqlx::query_as::<_, ShardRecord>(
+        r#"
+        UPDATE shards
+           SET checkpoint_quorum_threshold_override = $1
+         WHERE shard_id = $2
+        RETURNING shard_id, owner_user_id, label, created_by, active,
+                  checkpoint_quorum_threshold_override
+        "#,
+    )
+    .bind(req.threshold.map(|t| t as i32))
+    .bind(&shard_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(db_err)?;
+
+    rec.map(Json).ok_or_else(|| {
+        err(
+            StatusCode::NOT_FOUND,
+            "shard_id is not registered — register it via POST /admin/shards first.",
+        )
+    })
+}
+
+/// Read a shard's pinned checkpoint-quorum threshold override, if any.
+///
+/// `Ok(None)` covers both "no override set" and "shard_id not registered" —
+/// the caller (`collect_and_store_checkpoint_quorum`) already falls back to
+/// [`crate::quorum::checkpoint::configured_checkpoint_threshold`] in either
+/// case, matching its existing no-op-on-missing-data posture. A stored value
+/// `< 1` (unreachable through [`set_quorum_threshold`], which
+/// rejects it, but the column has no `CHECK` beyond the migration's `>= 1`
+/// constraint on write, not on read) is defensively clamped up to `1`, the
+/// same floor `configured_checkpoint_threshold` applies to a bad env value.
+pub async fn checkpoint_quorum_threshold_override(
+    pool: &sqlx::PgPool,
+    shard_id: &str,
+) -> Result<Option<u32>, sqlx::Error> {
+    let row: Option<(Option<i32>,)> = sqlx::query_as(
+        "SELECT checkpoint_quorum_threshold_override FROM shards WHERE shard_id = $1",
+    )
+    .bind(shard_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.and_then(|(t,)| t).map(|t| (t.max(1)) as u32))
 }
 
 // ── Fail-closed write gate ──────────────────────────────────────────────────────
@@ -265,7 +382,9 @@ pub async fn authorize_write(
 // ── Router ──────────────────────────────────────────────────────────────────────
 
 pub fn router() -> Router<AppState> {
-    Router::new().route(ADMIN_SHARDS, post(register_shard).get(list_shards))
+    Router::new()
+        .route(ADMIN_SHARDS, post(register_shard).get(list_shards))
+        .route(ADMIN_SHARD_QUORUM_THRESHOLD, patch(set_quorum_threshold))
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────────

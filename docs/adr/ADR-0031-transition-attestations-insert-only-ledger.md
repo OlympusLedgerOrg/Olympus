@@ -182,3 +182,13 @@ never PR2 alone (it would otherwise stub the constants locally, violating the
   equivocation rather than an invisible state swap.
 - The peer-coverage gap is explicitly named and deferred to a human decision
   (§4) instead of being papered over.
+
+## Related: ADR-0044 (BLAKE3 SMT root attestation)
+
+ADR-0044 adds a second attestation type, `SmtRootAttestation`, that reuses
+this ADR's `TransitionAttestation` shape and BJJ-EdDSA-over-reduced-digest
+signing pattern to sign the BLAKE3 CD-HS-ST SMT's root (which, unlike the
+Poseidon `snapshot_root` this ADR covers, had no signed statement at all
+before ADR-0044). The two attestations are domain-separated
+(`OLY:SNAPSHOT:PERSIST:V1` vs `OLY:SMT:ROOT:V1`) and independent — see
+ADR-0044 for the BLAKE3-side statement and its own scope boundary.

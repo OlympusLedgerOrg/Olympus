@@ -176,7 +176,7 @@ async fn get_latest_checkpoint(State(state): State<AppState>) -> Result<Response
 
     let proofs_dir = state.proofs_dir.as_deref();
     match checkpoint::build_own_checkpoint(pool, bjj_key, bjj_pubkey, proofs_dir).await {
-        Ok(Some(cp)) => {
+        Ok(Some((cp, _id))) => {
             let bytes = checkpoint::canonical_checkpoint_bytes(&cp)
                 .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e))?;
             Response::builder()
@@ -359,6 +359,12 @@ pub fn tor_router() -> Router<AppState> {
             "/federation/cosign",
             post(super::cosign::cosign_credential)
                 .layer(DefaultBodyLimit::max(super::cosign::MAX_COSIGN_BYTES)),
+        )
+        .route(
+            "/federation/checkpoint-cosign",
+            post(super::checkpoint_cosign::checkpoint_cosign).layer(DefaultBodyLimit::max(
+                super::checkpoint_cosign::MAX_CHECKPOINT_COSIGN_BYTES,
+            )),
         )
 }
 

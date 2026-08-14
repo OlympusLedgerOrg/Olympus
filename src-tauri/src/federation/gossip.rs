@@ -120,7 +120,7 @@ async fn sync_round(
 
     for p in &peers {
         // Push our checkpoint to the peer.
-        if let Some(ref cp) = own_checkpoint {
+        if let Some((ref cp, _)) = own_checkpoint {
             if let Err(e) = push_checkpoint(client, &p.onion_address, cp).await {
                 tracing::debug!("federation: push to {} failed: {e}", p.onion_address);
             }
@@ -152,6 +152,39 @@ async fn sync_round(
                 tracing::debug!("federation: pull from {} failed: {e}", p.onion_address);
                 let _ = peer::record_pull_error(pool, p.id, &format!("pull: {e}")).await;
             }
+        }
+    }
+
+    // ADR-0033 "Remaining producer work": now that the push loop above has
+    // attempted delivery to every trusted peer (see `checkpoint_cosign`'s
+    // module doc for why that ordering matters — a peer the push reached has
+    // already verified-and-stored it; a peer it didn't just rejects this
+    // round's request and the next round retries), try to collect
+    // checkpoint-quorum co-signatures for it. A failure here is logged, not
+    // propagated — quorum collection is opportunistic and must not make an
+    // otherwise-successful gossip round look failed. `warn!`, not `debug!`:
+    // unlike a single peer's push/pull failure (routine, expected), a
+    // whole-function collection failure (DB error, corrupt pinned state) is
+    // not something the retry-next-round loop self-heals on its own.
+    //
+    // Issue #1633: pass the exact row `id` the push loop just attempted
+    // delivery for, rather than letting the collector independently re-query
+    // "latest gossipable". The anchor cron is an independent producer — if it
+    // inserts a newer row in the window between the push loop above and this
+    // call, an identity-less re-query would target a checkpoint no peer has
+    // actually received yet. Collecting by this exact id is unaffected by
+    // that race: it always targets what was just pushed.
+    if let Some((_, checkpoint_id)) = own_checkpoint {
+        if let Err(e) = super::checkpoint_cosign::collect_and_store_checkpoint_quorum(
+            pool,
+            bjj_key,
+            bjj_pubkey,
+            client,
+            checkpoint_id,
+        )
+        .await
+        {
+            tracing::warn!("federation: checkpoint quorum collection failed: {e}");
         }
     }
 
@@ -241,7 +274,7 @@ async fn pull_checkpoint(
 /// Verify and store a checkpoint received from a peer.
 ///
 /// Audit H-11 / H-5 / H-12: delegates the entire verify-then-store
-/// pipeline (BJJ signature → unified Groth16 vkey [no fallback] →
+/// pipeline (BJJ signature → document_existence Groth16 vkey [no fallback] →
 /// equivocation → conditional auto-block → store) to the shared
 /// `super::verify::verify_and_store`. The push handler in `api.rs`
 /// uses the same call, so push and pull can never drift.

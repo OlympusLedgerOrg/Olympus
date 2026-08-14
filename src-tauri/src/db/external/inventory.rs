@@ -20,17 +20,44 @@ use sqlx::postgres::PgConnection;
 /// latent, not active), and the `COLLATE "C"` form reproduces it identically,
 /// which is why the pinned value did not change with the query hardening.
 ///
-/// Regenerated for migration `0057_ingest_signing_key_registry`, which adds
-/// the single-active-ingest-key partial index (`purpose = 'ingest_signing'`,
-/// docs/key-rotation.md — historical redaction/ingest issuer keys) — 674
-/// inventory rows before, 675 after. The previous value was
-/// `3acd13debe1ec1ee801f782027e210e84142191958c7f1a90760533a6d46860e` (itself
-/// set by `0056_authority_key_registry`, 671 -> 674). Each regeneration
-/// is validated by re-applying the migration set *without* the new migration
-/// and confirming it still reproduces the prior constant exactly — see the
-/// `regen_semantic_inventory_digest` ignored maintenance test below.
+/// Regenerated for the merged migration set ending in
+/// `0060_own_checkpoints_smt_root_attestation`, applied on top of
+/// `0059_redaction_blind_secret_registry`:
+///
+/// - `0058_peer_checkpoints_v3_indexes` drops the three `wire_version = 2`
+///   partial indexes on `peer_checkpoints` (`peer_checkpoints_v2_statement_unique`,
+///   `_v2_equivocation_height`, `_v2_equivocation_timestamp`) and recreates
+///   them under new names predicated on `wire_version IN (2, 3)`. Object count
+///   unchanged (675 -> 675): three index *definitions* change, not the number
+///   of inventory objects.
+/// - `0059_redaction_blind_secret_registry` adds the
+///   single-active-redaction-blind-secret partial index
+///   (`purpose = 'redaction_blind_secret'`, docs/key-rotation.md — redaction
+///   blind-secret rotation registry) — 675 inventory rows before, 676 after.
+/// - `0060_own_checkpoints_smt_root_attestation` (ADR-0044) adds four nullable
+///   columns to `own_checkpoints` (`blake3_smt_root`, `blake3_smt_sig_r8x`,
+///   `blake3_smt_sig_r8y`, `blake3_smt_sig_s`) — 676 inventory rows before,
+///   680 after.
+/// - `0061_own_checkpoints_quorum_params` (ADR-0033 producer) adds two
+///   nullable columns to `own_checkpoints` (`checkpoint_quorum_threshold`,
+///   `checkpoint_quorum_signers`) plus the guarded
+///   `ck_own_checkpoints_quorum_threshold_positive` CHECK constraint — 680
+///   inventory rows before, 683 after.
+/// - `0062_shards_checkpoint_quorum_threshold` (ADR-0033 per-shard threshold
+///   override) adds one nullable column to `shards`
+///   (`checkpoint_quorum_threshold_override`) plus the guarded
+///   `ck_shards_checkpoint_quorum_threshold_positive` CHECK constraint — 683
+///   inventory rows before, 685 after.
+///
+/// The previous value was
+/// `d552c8ced722cec672e1c71ad698c12b3aeaeaa8298d643eab708349aaeb0572` (itself
+/// set by `0061_own_checkpoints_quorum_params`, 680 -> 683; verified
+/// unchanged by reproducing it against the pre-`0062` migration set before
+/// regenerating). Regenerated 2026-08-14 by applying the full migration set
+/// against a real PostgreSQL 16.13 database and running
+/// `regen_semantic_inventory_digest` — see the ignored maintenance test below.
 const EXTERNAL_PG_SEMANTIC_INVENTORY_BLAKE3: &str =
-    "09cf92379bc8ff74e67e9489c7cd3f4d8a6940b2240b12ff4186fc9a03cf77a5";
+    "f4a75b468899d53e052916b79c160b03b64348388fd301740e00eca695cffb2d";
 
 #[derive(Clone, Debug, PartialEq, Eq, sqlx::FromRow)]
 pub(super) struct ExternalPgTrustedBoundaryProbe {

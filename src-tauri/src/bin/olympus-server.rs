@@ -170,6 +170,41 @@ async fn main() {
         app_state.redaction_blind_secret = state::resolve_redaction_blind_secret(
             state::secret_bytes(&app_state.bjj_authority_key),
         );
+        // Blind-secret rotation registry (migration 0059, docs/key-rotation.md):
+        // mirrors main.rs. Uses the same fail-closed classifier
+        // `resolve_redaction_blind_secret` itself gates on
+        // (`state::is_production`, a public wrapper around the crate-private
+        // `env::is_production` this bin can't reach directly) rather than a
+        // literal `production`/`prod` match. The literal exit(2) guard above
+        // only refuses that exact value — an operator running this binary
+        // with e.g. `OLYMPUS_ENV=staging` and an explicit
+        // `OLYMPUS_REDACTION_BLIND_SECRET` would have the secret resolved
+        // under production rules (no BJJ-derived fallback) but, under a
+        // literal-only check here, skip the rotation-safety net entirely.
+        // Keeping the two checks in sync closes that gap.
+        if state::is_production() {
+            if let (Some(pool), Some(secret)) = (
+                app_state.pool.as_ref(),
+                state::secret_bytes(&app_state.redaction_blind_secret),
+            ) {
+                let fingerprint = state::fingerprint_redaction_blind_secret(secret);
+                match bootstrap::ensure_redaction_blind_secret_fingerprint(pool, &fingerprint).await
+                {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        app_state.redaction_blind_secret = None;
+                    }
+                    Err(e) => {
+                        // Fail closed here too — a registry error must not
+                        // authorize use of the secret (see
+                        // `ensure_redaction_blind_secret_fingerprint`'s doc
+                        // comment and the mirrored `startup.rs` call site).
+                        tracing::warn!("bootstrap: redaction blind secret registry: {e}");
+                        app_state.redaction_blind_secret = None;
+                    }
+                }
+            }
+        }
         app_state.bjj_trusted_issuers =
             api::trusted_issuers::load_trusted_issuers(app_state.bjj_authority_pubkey.as_ref());
 

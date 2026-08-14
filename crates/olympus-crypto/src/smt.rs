@@ -497,5 +497,89 @@ pub fn verify_proof(proof: &Proof, expected_root: Option<&[u8; 32]>) -> bool {
     }
 }
 
+// ── shard-scoped verification (ADR-0044 proof-serving) ──────────────────────
+//
+// `verify_existence_proof`/`verify_nonexistence_proof` above fold all 256
+// siblings and compare against `proof.root_hash` — the tree's **global**
+// root. But `SmtRootAttestation` (ADR-0044) BJJ-signs the **shard subtree**
+// root, the node at depth `SHARD_PREFIX_BITS` (64) along the shard's prefix
+// (`SparseMerkleTree::shard_subtree_root`) — the same node the tree's own
+// `update` pass materialises after exactly `SMT_DEPTH - SHARD_PREFIX_BITS`
+// (192) fold steps, before continuing on to the global root. A full
+// 256-sibling proof therefore does not verify against a signed shard root
+// as-is: these two functions fold only the leaf-side 192 siblings — the
+// levels strictly below the shard-prefix node — and compare the result
+// directly to a caller-supplied shard root instead of `proof.root_hash`.
+// `Proof`/`ExistenceProof`/`NonExistenceProof` and `prove()`/`prove_batch()`
+// are untouched — this only reinterprets an already-produced full proof
+// against a different, already-signed root.
+
+/// Verify an existence proof against a **shard-subtree** root (not the
+/// global tree root) — see the section doc above. `shard_id` must match what
+/// the proof's own leaf claims (checked explicitly, not just implied by the
+/// fold outcome): this is defense in depth, since a proof for a different
+/// shard would need a hash collision to coincidentally fold to another
+/// shard's root, but making the binding an explicit precondition keeps that
+/// property from resting solely on an astronomically-unlikely collision.
+pub fn verify_existence_proof_against_shard_root(
+    proof: &ExistenceProof,
+    shard_id: &str,
+    shard_root: &[u8; 32],
+) -> bool {
+    if proof.shard_id.is_empty()
+        || proof.parser_id.is_empty()
+        || proof.canonical_parser_version.is_empty()
+        || proof.model_hash.is_empty()
+        || proof.siblings.len() != SMT_DEPTH
+        || proof.shard_id != shard_id
+    {
+        return false;
+    }
+    if !shard_id_matches_key(&proof.shard_id, &proof.key) {
+        return false;
+    }
+    let start = leaf_hash(
+        proof.shard_id.as_bytes(),
+        &proof.key,
+        &proof.value_hash,
+        proof.parser_id.as_bytes(),
+        proof.canonical_parser_version.as_bytes(),
+        proof.model_hash.as_bytes(),
+    );
+    let leaf_side_siblings = &proof.siblings[..SMT_DEPTH - SHARD_PREFIX_BITS];
+    fold_to_root(&proof.key, start, leaf_side_siblings) == *shard_root
+}
+
+/// Verify a non-existence proof against a **shard-subtree** root — see the
+/// section doc above. `shard_id` must match the key's 64-bit prefix (a
+/// non-existence proof carries no in-leaf `shard_id` field to cross-check,
+/// so this is the only shard-binding check available; still defense in
+/// depth for the same reason as the existence-proof variant).
+pub fn verify_nonexistence_proof_against_shard_root(
+    proof: &NonExistenceProof,
+    shard_id: &str,
+    shard_root: &[u8; 32],
+) -> bool {
+    if proof.siblings.len() != SMT_DEPTH || !shard_id_matches_key(shard_id, &proof.key) {
+        return false;
+    }
+    let leaf_side_siblings = &proof.siblings[..SMT_DEPTH - SHARD_PREFIX_BITS];
+    fold_to_root(&proof.key, empty_hashes()[0], leaf_side_siblings) == *shard_root
+}
+
+/// Verify either proof kind against a shard-subtree root.
+pub fn verify_proof_against_shard_root(
+    proof: &Proof,
+    shard_id: &str,
+    shard_root: &[u8; 32],
+) -> bool {
+    match proof {
+        Proof::Existence(p) => verify_existence_proof_against_shard_root(p, shard_id, shard_root),
+        Proof::NonExistence(p) => {
+            verify_nonexistence_proof_against_shard_root(p, shard_id, shard_root)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests;

@@ -26,7 +26,7 @@ use std::collections::{BTreeMap, HashSet};
 
 use ark_bn254::Fr;
 use ark_ff::{BigInteger, PrimeField, Zero};
-use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, VerifyingKey};
 use light_poseidon::{Poseidon, PoseidonBytesHasher};
 use num_bigint::BigUint;
 
@@ -1495,7 +1495,10 @@ pub fn verify_bundle(
         .try_into()
         .map_err(|_| RejectReason("signature not 64 bytes"))?;
     let sig = Signature::from_bytes(&sig_arr);
-    if issuer_pubkey.verify(&payload, &sig).is_err() {
+    // `verify_strict` (not `verify`): reject the low-order/non-canonical `A`
+    // torsion components ed25519_dalek's permissive `verify` would accept, for
+    // cross-impl determinism with the JS side (`{ zip215: false }`). L7.
+    if issuer_pubkey.verify_strict(&payload, &sig).is_err() {
         return reject("Ed25519 signature invalid");
     }
 
@@ -1511,6 +1514,11 @@ pub fn verify_bundle(
 #[cfg(test)]
 mod tests {
     use super::*;
+    // `verify_strict` (an inherent method) replaced the sole non-test use of the
+    // `Verifier` trait; the byte-dump self-check below still exercises the
+    // permissive `.verify()`, so the trait import lives here in test scope to
+    // avoid an unused-import warning in the non-test lib build. (issue L7)
+    use ed25519_dalek::Verifier;
     use proptest::prelude::*;
     use serde_json::Value;
 
@@ -1625,8 +1633,19 @@ mod tests {
         (c, b)
     }
 
-    fn must_reject(c: &Ctx, b: &Bundle, label: &str) {
-        assert!(verify(c, b, true).is_err(), "{label} unexpectedly verified");
+    /// Assert `verify` rejects `b` *for the expected reason*. A bare `.is_err()`
+    /// also passes on an unrelated early failure (e.g. a parse error before the
+    /// property under test is reached), so every call pins the specific
+    /// `RejectReason` substring — mirroring the stricter `assert.throws(fn,
+    /// /pattern/)` on the JavaScript side (`test_redaction.js`). (issue L8)
+    fn must_reject(c: &Ctx, b: &Bundle, label: &str, expected: &str) {
+        match verify(c, b, true) {
+            Ok(()) => panic!("{label}: bundle unexpectedly verified"),
+            Err(RejectReason(got)) => assert!(
+                got.contains(expected),
+                "{label}: expected rejection reason containing {expected:?}, got {got:?}"
+            ),
+        }
     }
 
     #[test]
@@ -2079,39 +2098,84 @@ mod tests {
     fn adversarial_segment_table_mutations_reject() {
         let (c, base) = text_bundle();
 
+        // Swapping two whole segments (id included) makes the ids non-monotonic.
         let mut swapped = base.clone();
         swapped.segments.swap(0, 1);
-        must_reject(&c, &swapped, "swapped segments");
+        must_reject(
+            &c,
+            &swapped,
+            "swapped segments",
+            "ids not strictly ascending",
+        );
 
         let mut duplicate = base.clone();
         duplicate.segments[1].segment_id = duplicate.segments[0].segment_id;
-        must_reject(&c, &duplicate, "duplicate segment ids");
+        must_reject(
+            &c,
+            &duplicate,
+            "duplicate segment ids",
+            "ids not strictly ascending",
+        );
 
+        // Rewriting a redacted leaf to a different value breaks the signed fold.
         let mut duplicate_leaf = base.clone();
         duplicate_leaf.segments[1].leaf_hex = Some("00".repeat(32));
-        must_reject(&c, &duplicate_leaf, "duplicate/mutated redacted leaf");
+        must_reject(
+            &c,
+            &duplicate_leaf,
+            "duplicate/mutated redacted leaf",
+            "fold != original_root",
+        );
 
+        // Offset/length/overlap all break the gap-free, exact-coverage partition.
         let mut offset = base.clone();
         offset.segments[0].artifact_offset += 1;
-        must_reject(&c, &offset, "offset manipulation");
+        must_reject(
+            &c,
+            &offset,
+            "offset manipulation",
+            "artifact bytes not fully covered",
+        );
 
         let mut length = base.clone();
         length.segments[0].artifact_length -= 1;
-        must_reject(&c, &length, "length manipulation");
+        must_reject(
+            &c,
+            &length,
+            "length manipulation",
+            "artifact bytes not fully covered",
+        );
 
         let mut overlap = base.clone();
         overlap.segments[1].artifact_offset = 0;
-        must_reject(&c, &overlap, "overlapping segments");
+        must_reject(
+            &c,
+            &overlap,
+            "overlapping segments",
+            "artifact bytes not fully covered",
+        );
 
+        // A duplicated trailing segment repeats an id, so ids stop ascending.
         let mut inserted = base.clone();
         inserted.segment_count += 1;
         inserted.segments.push(inserted.segments[1].clone());
-        must_reject(&c, &inserted, "segment insertion");
+        must_reject(
+            &c,
+            &inserted,
+            "segment insertion",
+            "ids not strictly ascending",
+        );
 
+        // Truncating the 2-segment bundle drops N below the [2, 2^16] floor.
         let mut deleted = base.clone();
         deleted.segment_count -= 1;
         deleted.segments.pop();
-        must_reject(&c, &deleted, "segment deletion / bundle truncation");
+        must_reject(
+            &c,
+            &deleted,
+            "segment deletion / bundle truncation",
+            "N out of [2, 2^16]",
+        );
     }
 
     #[test]
@@ -2122,42 +2186,79 @@ mod tests {
         let mut artifact = hex::decode(hidden.artifact_hex.as_deref().unwrap()).unwrap();
         artifact.extend_from_slice(b"hidden\n");
         hidden.artifact_hex = Some(hex::encode(artifact));
-        must_reject(&c, &hidden, "hidden bytes");
+        must_reject(
+            &c,
+            &hidden,
+            "hidden bytes",
+            "artifact bytes not fully covered",
+        );
 
         let mut malformed = base.clone();
         malformed.artifact_hex = Some("zz".to_string());
-        must_reject(&c, &malformed, "malformed artifact");
+        must_reject(&c, &malformed, "malformed artifact", "bad artifact_hex");
 
+        // A text bundle re-tagged as PDF fails to parse as a PDF cross-ref table.
         let mut parser_substitution = base.clone();
         parser_substitution.format = "pdf-object".to_string();
-        must_reject(&c, &parser_substitution, "parser substitution");
+        must_reject(
+            &c,
+            &parser_substitution,
+            "parser substitution",
+            "pdf startxref missing",
+        );
 
+        // Recipient is bound by the signed payload, so a replay fails the signature.
         let mut replay = base.clone();
         replay.recipient_id = "99999".to_string();
-        must_reject(&c, &replay, "signature replay across recipient");
+        must_reject(
+            &c,
+            &replay,
+            "signature replay across recipient",
+            "Ed25519 signature invalid",
+        );
 
         let mut downgrade = base.clone();
         downgrade.format = "text-line-v2".to_string();
-        must_reject(&c, &downgrade, "protocol/format downgrade");
+        must_reject(
+            &c,
+            &downgrade,
+            "protocol/format downgrade",
+            "unknown format",
+        );
 
         let (pc, pdf) = pdf_bundle();
         let mut pdf_hidden = pdf.clone();
         let mut pdf_artifact = hex::decode(pdf_hidden.artifact_hex.as_deref().unwrap()).unwrap();
         pdf_artifact.extend_from_slice(b"not-whitespace-after-eof");
         pdf_hidden.artifact_hex = Some(hex::encode(pdf_artifact));
-        must_reject(&pc, &pdf_hidden, "pdf hidden bytes after EOF");
+        must_reject(
+            &pc,
+            &pdf_hidden,
+            "pdf hidden bytes after EOF",
+            "hidden bytes after pdf EOF",
+        );
 
         let mut pdf_trailer = pdf.clone();
         let mut pdf_artifact = hex::decode(pdf_trailer.artifact_hex.as_deref().unwrap()).unwrap();
         let root = find_sub(&pdf_artifact, b"/Root 1 0 R").expect("pdf trailer root");
         pdf_artifact[root + b"/Root ".len()] ^= 0x01;
         pdf_trailer.artifact_hex = Some(hex::encode(pdf_artifact));
-        must_reject(&pc, &pdf_trailer, "pdf trailer mutation");
+        must_reject(
+            &pc,
+            &pdf_trailer,
+            "pdf trailer mutation",
+            "pdf root is not an active object",
+        );
 
         let (oc, ooxml) = ooxml_bundle();
         let mut label = ooxml.clone();
         label.segments[0].label = Some("word/document.xml".to_string());
-        must_reject(&oc, &label, "inconsistent ooxml label");
+        must_reject(
+            &oc,
+            &label,
+            "inconsistent ooxml label",
+            "bundle label != artifact-derived label",
+        );
 
         let mut ooxml_central = ooxml.clone();
         let mut ooxml_artifact =
@@ -2165,14 +2266,24 @@ mod tests {
         let central = find_sub(&ooxml_artifact, ZIP_CENTRAL).expect("ooxml central directory");
         ooxml_artifact[central + 16] ^= 0x01;
         ooxml_central.artifact_hex = Some(hex::encode(ooxml_artifact));
-        must_reject(&oc, &ooxml_central, "ooxml central directory mutation");
+        must_reject(
+            &oc,
+            &ooxml_central,
+            "ooxml central directory mutation",
+            "non-canonical ooxml zip entry",
+        );
 
         let mut ooxml_hidden = ooxml.clone();
         let mut ooxml_artifact =
             hex::decode(ooxml_hidden.artifact_hex.as_deref().unwrap()).unwrap();
         ooxml_artifact.extend_from_slice(b"hidden-after-eocd");
         ooxml_hidden.artifact_hex = Some(hex::encode(ooxml_artifact));
-        must_reject(&oc, &ooxml_hidden, "ooxml hidden bytes after EOCD");
+        must_reject(
+            &oc,
+            &ooxml_hidden,
+            "ooxml hidden bytes after EOCD",
+            "hidden bytes after ooxml EOCD",
+        );
     }
 
     proptest! {
@@ -2197,7 +2308,27 @@ mod tests {
                     b.segments[1].leaf_hex = Some("01".repeat(32));
                 }
             }
-            prop_assert!(verify(&c, &b, true).is_err());
+            // Reject for a reason in this mutation's legitimate set — not a bare
+            // `is_err()`, which would also pass on an unrelated early failure. A
+            // random artifact byte-flip (kind 6) breaks either the fold or a
+            // redacted-token destruction check depending on which byte moved, so it
+            // admits two reasons; every other kind is single-valued.
+            let allowed: &[&str] = match kind {
+                0 | 1 => &["artifact bytes not fully covered"],
+                2 => &["fold != original_root"],
+                3 => &["ids not strictly ascending"],
+                4 => &["Ed25519 signature invalid"],
+                5 => &["pdf startxref missing"],
+                6 => &["fold != original_root", "redacted text bytes not destroyed"],
+                _ => &["fold != original_root"],
+            };
+            match verify(&c, &b, true) {
+                Ok(()) => prop_assert!(false, "kind {kind} unexpectedly verified"),
+                Err(RejectReason(got)) => prop_assert!(
+                    allowed.iter().any(|a| got.contains(a)),
+                    "kind {kind} (byte_idx {byte_idx}): reason {got:?} not in {allowed:?}"
+                ),
+            }
         }
     }
 }

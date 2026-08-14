@@ -2,7 +2,21 @@
 
 ## Status
 
-Accepted.
+Accepted; implemented (2026-08-12).
+
+`get_page_objects` (`POST /redaction/page-objects`), `stage_redaction` (`POST
+/redaction/stage`), and `commit_redaction` (`POST /redaction/commit`) are live
+for the two PDF object commitment formats (`pdf-object`, `pdf-xref-stream`);
+OOXML and text-line stay on the direct `POST /redaction/redact` path (no
+page/object geometry to stage against). Landed: the in-memory
+`RedactionStagingTable` (already present) is now reachable over HTTP;
+backend-derived structured warnings (`SharedXObject`, `SharedStream`,
+`AnnotationAppearanceStream`) computed from the committed object graph —
+`AmbiguousTextSpan` remains a UI-surfaced, Info-only hint by design, not
+backend-detected; and the rotation-normalized, zero-based-page coordinate
+contract (`crate::zk::pdf_page_objects`). `commit` delegates to the same core
+`perform_redaction` `POST /redaction/redact` uses, so both paths produce
+identical V3 bundles for the same selection.
 
 This ADR was supplied as `ADR-0031`, but the repository already uses ADR-0031 for
 transition attestations and insert-only ledger enforcement. It is therefore

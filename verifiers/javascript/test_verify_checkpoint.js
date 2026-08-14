@@ -5,10 +5,10 @@
  * against it, and assert the JS-side checks accept it. Then mutate
  * each field in turn and assert the verifier rejects.
  *
- * The Groth16 (check 4) is not exercised here — that's the Rust
- * verifier's job (`verifiers/rust/src/bin/verify.rs`). The synthetic
- * bundle ships a placeholder proof block; verify.js prints the cargo
- * invocation and exits 0 if checks 1–3 pass.
+ * The Groth16 pairing (part of check 6) is not exercised here — that's
+ * the Rust verifier's job (`verifiers/rust/src/bin/verify.rs`). The
+ * synthetic bundle ships a placeholder proof block; verify.js prints
+ * the cargo invocation and exits 0 if checks 1–6 pass.
  */
 
 "use strict";
@@ -201,6 +201,33 @@ async function buildSyntheticBundle() {
     message_doc: "test",
   };
 
+  // ADR-0044: BLAKE3 CD-HS-ST SMT root attestation, jointly bound to this
+  // checkpoint's (shard_id, ledger_root, tree_size).
+  const blake3SmtRoot = new Uint8Array(32).fill(0x55);
+  const blake3SmtRootHex = toHex(blake3SmtRoot);
+  const smtRootDigest = blake3(
+    concatBytes(
+      enc.encode("OLY:SMT:ROOT:V1"),
+      lp(enc.encode(checkpoint.shard_id)),
+      lp(bigIntToBE32(ledgerRoot)),
+      lp(i64ToBE8(1)),
+      lp(blake3SmtRoot),
+    ),
+  );
+  const smtRootMessage = bigEndianBigInt(smtRootDigest) % BABYJUBJUB_SUBGROUP_ORDER;
+  const smtRootSig = eddsa.signPoseidon(bjjPriv, F.e(smtRootMessage));
+  const smtRootAttestation = {
+    scheme: "BLAKE3-CD-HS-ST-root + BabyJubJub-EdDSA",
+    blake3_smt_root_hex: blake3SmtRootHex,
+    signature: {
+      r8x: F.toObject(smtRootSig.R8[0]).toString(),
+      r8y: F.toObject(smtRootSig.R8[1]).toString(),
+      s: smtRootSig.S.toString(),
+    },
+    message: smtRootMessage.toString(),
+    message_doc: "test",
+  };
+
   const anchorHash = computeAnchorHash(
     {
       ...checkpoint,
@@ -216,10 +243,11 @@ async function buildSyntheticBundle() {
   const edSig = ed25519.sign(anchorHash, edSk);
 
   return {
-    schema: "olympus-checkpoint-bundle/v3",
+    schema: "olympus-checkpoint-bundle/v4",
     checkpoint,
     bjj_eddsa_poseidon: bjjBlock,
     append_transition: appendTransition,
+    smt_root_attestation: smtRootAttestation,
     ed25519: {
       scheme: "Ed25519 (RFC 8032)",
       pubkey_hex: toHex(edPk),
@@ -238,7 +266,12 @@ async function buildSyntheticBundle() {
       circuit: "document_existence",
       vkey_ref: "proofs/keys/verification_keys/document_existence_vkey.json",
       proof: { pi_a: [], pi_b: [], pi_c: [] },
-      public_signals: [],
+      // document_existence public signals are [root, leafIndex, treeSize]. verify.js
+      // now BINDS signals[0]==ledger_root and signals[2]==tree_size to the signed
+      // checkpoint before the Rust pairing hand-off, so the fixture must carry the
+      // matching root and size (the proof itself stays a placeholder — the pairing
+      // is the Rust verifier's job, not exercised here).
+      public_signals: [ledgerRoot, "0", checkpoint.tree_size],
     },
   };
 }
@@ -309,6 +342,25 @@ async function main() {
   fs.writeFileSync(tTransitionPath, JSON.stringify(tTransition));
   runVerifier(tTransitionPath, 1);
   console.log("PASS  tamper append-consistency path → reject");
+
+  // Tamper smt_root_attestation.blake3_smt_root_hex → check 5 rejects (the
+  // message no longer matches the recomputed digest for the new root).
+  const tSmtRoot = JSON.parse(JSON.stringify(bundle));
+  tSmtRoot.smt_root_attestation.blake3_smt_root_hex = "0".repeat(64);
+  const tSmtRootPath = path.join(tmp, "t-smt-root.json");
+  fs.writeFileSync(tSmtRootPath, JSON.stringify(tSmtRoot));
+  runVerifier(tSmtRootPath, 1);
+  console.log("PASS  tamper SMT root attestation root → reject");
+
+  // Tamper smt_root_attestation.signature.s → check 5 rejects.
+  const tSmtRootSig = JSON.parse(JSON.stringify(bundle));
+  tSmtRootSig.smt_root_attestation.signature.s = (
+    BigInt(tSmtRootSig.smt_root_attestation.signature.s) + 1n
+  ).toString();
+  const tSmtRootSigPath = path.join(tmp, "t-smt-root-sig.json");
+  fs.writeFileSync(tSmtRootSigPath, JSON.stringify(tSmtRootSig));
+  runVerifier(tSmtRootSigPath, 1);
+  console.log("PASS  tamper SMT root attestation signature → reject");
 
   // 5. Tamper authority_pubkey_hash → check 3a rejects
   const t4 = JSON.parse(JSON.stringify(bundle));
@@ -404,6 +456,34 @@ async function main() {
   fs.writeFileSync(tLowOrderPath, JSON.stringify(tLowOrder));
   runVerifier(tLowOrderPath, 1);
   console.log("PASS  low-order BJJ pubkey → reject");
+
+  // 13. Groth16 public_signals[0] (root) attesting a DIFFERENT tree than the
+  // signed checkpoint → the binding gate rejects (exit 1). Without it, a valid
+  // proof for an unrelated tree would sail through the Rust pairing hand-off.
+  const tSignalRoot = JSON.parse(JSON.stringify(bundle));
+  tSignalRoot.groth16.public_signals[0] = "12345";
+  const tSignalRootPath = path.join(tmp, "t-signal-root.json");
+  fs.writeFileSync(tSignalRootPath, JSON.stringify(tSignalRoot));
+  runVerifier(tSignalRootPath, 1);
+  console.log("PASS  Groth16 signal root != checkpoint ledger_root → reject");
+
+  // 14. Groth16 public_signals[2] (treeSize) disagreeing with the checkpoint
+  // tree_size → binding gate rejects (exit 1).
+  const tSignalSize = JSON.parse(JSON.stringify(bundle));
+  tSignalSize.groth16.public_signals[2] = "2";
+  const tSignalSizePath = path.join(tmp, "t-signal-size.json");
+  fs.writeFileSync(tSignalSizePath, JSON.stringify(tSignalSize));
+  runVerifier(tSignalSizePath, 1);
+  console.log("PASS  Groth16 signal treeSize != checkpoint tree_size → reject");
+
+  // 15. A structurally malformed public_signals array (wrong length, e.g. the
+  // old empty placeholder) is a parse error, not a verification failure (exit 2).
+  const tSignalShape = JSON.parse(JSON.stringify(bundle));
+  tSignalShape.groth16.public_signals = [];
+  const tSignalShapePath = path.join(tmp, "t-signal-shape.json");
+  fs.writeFileSync(tSignalShapePath, JSON.stringify(tSignalShape));
+  runVerifier(tSignalShapePath, 2);
+  console.log("PASS  malformed Groth16 public_signals length → reject");
 
   console.log("\nAll verify.js smoke tests passed.");
 }

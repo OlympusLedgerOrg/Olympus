@@ -97,11 +97,13 @@ pub struct AppState {
     /// redaction-leaf helper from `(secret, content_hash, obj_id)`, so this
     /// secret must be **stable across restarts** or already-
     /// committed object roots become un-reproducible. Resolved by
-    /// [`resolve_redaction_blind_secret`]: explicit
-    /// `OLYMPUS_REDACTION_BLIND_SECRET` (32-byte hex) takes precedence; otherwise
-    /// derived deterministically from the persisted BJJ authority key. `None`
-    /// only when no BJJ key is configured — object-redaction ingest/issue then
-    /// fails closed.
+    /// [`resolve_redaction_blind_secret`]: an explicit,
+    /// operator-provided `OLYMPUS_REDACTION_BLIND_SECRET` (32-byte hex) is
+    /// required in production. Dev derives a stable fallback from the persisted
+    /// BJJ authority key for zero-setup local work. `None` makes
+    /// object-redaction ingest/issue fail closed with 503. Keeping the production
+    /// secret independent limits a BJJ-key compromise: it must not retroactively
+    /// reveal the blindings of historical redactions.
     pub redaction_blind_secret: Option<SharedSecret32>,
     /// Ephemeral ADR-0037 object-redaction staging table. This is UI-session
     /// state only: selections are validated against the live manifest again at
@@ -121,6 +123,10 @@ pub struct AppState {
     /// leaf committed into the parser-bound SMT is stamped with this triple so
     /// the ledger records which parser + model produced each value.
     pub ingest_provenance: crate::ingest_provenance::IngestProvenance,
+    /// Maximum Merge Delay policy (ADR-0021), resolved once at startup from
+    /// `OLYMPUS_MMD_SECONDS`. Consumed by `api::monitor::mmd` to judge
+    /// whether a record's first covering checkpoint arrived within policy.
+    pub mmd_policy: crate::mmd::MmdPolicy,
     /// External anchoring config (RFC 3161 / Rekor / OTS). Resolved once
     /// at startup from `OLYMPUS_ANCHOR_*` env vars. All-`None` config is
     /// the default and disables outbound anchoring submissions.
@@ -201,6 +207,7 @@ impl AppState {
             ),
             proofs_dir: None,
             ingest_provenance: crate::ingest_provenance::IngestProvenance::from_env(),
+            mmd_policy: crate::mmd::MmdPolicy::from_env(),
             anchoring: crate::anchoring::AnchoringConfig::from_env(),
             anchor_http: crate::anchoring::build_http_client(std::time::Duration::from_secs(30)),
             #[cfg(feature = "federation")]
@@ -218,6 +225,17 @@ impl AppState {
 /// owned copy of the secret.
 pub fn secret_bytes(secret: &Option<SharedSecret32>) -> Option<&[u8; 32]> {
     secret.as_deref().map(std::ops::Deref::deref)
+}
+
+/// Public wrapper around the crate-private fail-closed `OLYMPUS_ENV`
+/// classifier (`env::is_production`), so callers outside the lib crate — the
+/// `olympus-server` headless binary is a separate crate and cannot reach
+/// `crate::env::is_production` directly — use the same unset/invalid/
+/// unrecognized-treated-as-production semantics as every in-lib call site
+/// (e.g. [`resolve_redaction_blind_secret`], [`resolve_ingest_signing_key`])
+/// instead of a narrower ad hoc literal match.
+pub fn is_production() -> bool {
+    crate::env::is_production()
 }
 
 /// Resolve the Ed25519 ingest/redaction signing key once at startup.
@@ -272,14 +290,14 @@ fn derive_dev_ingest_key(bjj_authority_key: &[u8; 32]) -> [u8; 32] {
 ///
 /// Precedence:
 ///  1. `OLYMPUS_REDACTION_BLIND_SECRET` (32-byte hex) — explicit operator secret.
-///  2. A stable secret derived from the persisted BJJ authority key via
-///     domain-separated BLAKE3.
+///  2. **Dev only** — a stable secret derived from the persisted BJJ authority
+///     key via domain-separated BLAKE3.
 ///
-/// Unlike the signing key, this is derived in **both** dev and production: the
-/// blinding is a server-side salt (not a signature key), and binding it to the
-/// already-persisted BJJ authority keeps it stable across restarts — required so
-/// re-ingesting a file reproduces the same per-object blindings (and root).
-/// Returns `None` only when no BJJ key is configured.
+/// Production requires the explicit secret and returns `None` if it is absent
+/// or invalid. This prevents a compromise of the BJJ authority key from also
+/// recovering the blinding secret and retroactively de-hiding historical
+/// redactions. The development fallback remains stable across restarts so
+/// re-ingesting a local file reproduces the same per-object blindings and root.
 pub fn resolve_redaction_blind_secret(
     bjj_authority_key: Option<&[u8; 32]>,
 ) -> Option<SharedSecret32> {
@@ -288,6 +306,9 @@ pub fn resolve_redaction_blind_secret(
         if hex::decode_to_slice(h.trim(), &mut out).is_ok() {
             return Some(Arc::new(Zeroizing::new(out)));
         }
+    }
+    if crate::env::is_production() {
+        return None;
     }
     bjj_authority_key
         .map(derive_redaction_blind_secret)
@@ -303,9 +324,104 @@ fn derive_redaction_blind_secret(bjj_authority_key: &[u8; 32]) -> [u8; 32] {
     *hasher.finalize().as_bytes()
 }
 
+/// A 64-char lowercase-hex, domain-separated BLAKE3 fingerprint of a resolved
+/// [`resolve_redaction_blind_secret`] value — **not** a way to recover the
+/// secret. Used to detect "did the operator's configured secret change since
+/// last boot" (`bootstrap::ensure_redaction_blind_secret_fingerprint`,
+/// migration 0059) without ever persisting the secret itself, encrypted or
+/// otherwise: the blind secret must remain non-recoverable from anything the
+/// registry stores, unlike the ingest signing key (whose registry stores the
+/// full public verifying key, because it is not a secret).
+///
+/// Domain-separated from every other BLAKE3 use in this codebase (leaf
+/// hashing, node hashing, the secret's own derivation from the BJJ key above)
+/// so this fingerprint cannot collide with or be confused for any of them.
+pub fn fingerprint_redaction_blind_secret(secret: &[u8; 32]) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"OLY:REDACTION:BLIND-SECRET:FINGERPRINT:V1");
+    hasher.update(secret);
+    hasher.finalize().to_hex().to_string()
+}
+
 #[cfg(test)]
-mod ingest_signing_key_tests {
-    use super::derive_dev_ingest_key;
+mod secret_resolution_tests {
+    use super::{
+        derive_dev_ingest_key, derive_redaction_blind_secret, fingerprint_redaction_blind_secret,
+        resolve_redaction_blind_secret,
+    };
+
+    #[test]
+    fn blind_secret_fingerprint_is_stable_deterministic_and_secret_sensitive() {
+        let a = fingerprint_redaction_blind_secret(&[7u8; 32]);
+        let a_again = fingerprint_redaction_blind_secret(&[7u8; 32]);
+        let b = fingerprint_redaction_blind_secret(&[8u8; 32]);
+
+        assert_eq!(a, a_again, "same secret must fingerprint identically");
+        assert_ne!(a, b, "different secrets must fingerprint differently");
+        assert_eq!(a.len(), 64, "fingerprint must be 64 lowercase-hex chars");
+        assert!(
+            a.chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+            "fingerprint must be lowercase hex: {a}"
+        );
+    }
+
+    #[test]
+    fn blind_secret_fingerprint_never_contains_the_raw_secret() {
+        // The fingerprint is a BLAKE3 digest, so the raw secret bytes cannot
+        // appear verbatim in its hex encoding — this asserts the property
+        // directly rather than trusting the hash function's opacity.
+        let secret = [0xABu8; 32];
+        let raw_hex = hex::encode(secret);
+        let fingerprint = fingerprint_redaction_blind_secret(&secret);
+        assert_ne!(
+            fingerprint, raw_hex,
+            "fingerprint must not equal the raw secret's own hex encoding"
+        );
+        assert!(
+            !fingerprint.contains(&raw_hex),
+            "fingerprint must not embed the raw secret's hex substring"
+        );
+    }
+
+    #[test]
+    fn blind_secret_fingerprint_is_domain_separated_from_its_own_derivation() {
+        // Same input bytes, two different domain-separated BLAKE3 uses in this
+        // module — they must not collide, or a dev-derived secret's own
+        // derivation digest could be mistaken for its fingerprint (or vice
+        // versa) by anything that only checks 64-hex shape.
+        let seed = [3u8; 32];
+        let derived_secret = derive_redaction_blind_secret(&seed);
+        let fingerprint_of_seed = fingerprint_redaction_blind_secret(&seed);
+        assert_ne!(hex::encode(derived_secret), fingerprint_of_seed);
+    }
+
+    struct BlindSecretEnvGuard {
+        _guard: tokio::sync::MutexGuard<'static, ()>,
+        old: Option<String>,
+    }
+
+    impl Drop for BlindSecretEnvGuard {
+        fn drop(&mut self) {
+            match self.old.take() {
+                Some(value) => std::env::set_var("OLYMPUS_REDACTION_BLIND_SECRET", value),
+                None => std::env::remove_var("OLYMPUS_REDACTION_BLIND_SECRET"),
+            }
+        }
+    }
+
+    static REDACTION_BLIND_SECRET_TEST_LOCK: tokio::sync::Mutex<()> =
+        tokio::sync::Mutex::const_new(());
+
+    async fn with_blind_secret(value: Option<&str>) -> BlindSecretEnvGuard {
+        let lock = REDACTION_BLIND_SECRET_TEST_LOCK.lock().await;
+        let old = std::env::var("OLYMPUS_REDACTION_BLIND_SECRET").ok();
+        match value {
+            Some(value) => std::env::set_var("OLYMPUS_REDACTION_BLIND_SECRET", value),
+            None => std::env::remove_var("OLYMPUS_REDACTION_BLIND_SECRET"),
+        }
+        BlindSecretEnvGuard { _guard: lock, old }
+    }
 
     #[test]
     fn dev_derivation_is_stable_nonzero_and_binds_to_bjj() {
@@ -320,7 +436,6 @@ mod ingest_signing_key_tests {
 
     #[test]
     fn redaction_blind_secret_derivation_is_stable_nonzero_and_binds_to_bjj() {
-        use super::derive_redaction_blind_secret;
         let a = derive_redaction_blind_secret(&[7u8; 32]);
         // Stable across restarts (so re-ingest reproduces the same object root)...
         assert_eq!(a, derive_redaction_blind_secret(&[7u8; 32]));
@@ -329,5 +444,40 @@ mod ingest_signing_key_tests {
         assert_ne!(a, derive_redaction_blind_secret(&[8u8; 32]));
         // ...and domain-separated from the ingest signing key derivation.
         assert_ne!(a, derive_dev_ingest_key(&[7u8; 32]));
+    }
+
+    #[tokio::test]
+    async fn production_requires_explicit_redaction_blind_secret() {
+        let _env = crate::env::with_olympus_env(Some("production")).await;
+        let _secret = with_blind_secret(None).await;
+        assert!(resolve_redaction_blind_secret(Some(&[7u8; 32])).is_none());
+    }
+
+    #[tokio::test]
+    async fn production_rejects_an_invalid_redaction_blind_secret() {
+        let _env = crate::env::with_olympus_env(Some("production")).await;
+        let _secret = with_blind_secret(Some("not-32-byte-hex")).await;
+        assert!(resolve_redaction_blind_secret(Some(&[7u8; 32])).is_none());
+    }
+
+    #[tokio::test]
+    async fn production_uses_explicit_redaction_blind_secret_independent_of_bjj() {
+        let _env = crate::env::with_olympus_env(Some("production")).await;
+        let expected = [0xabu8; 32];
+        let _secret = with_blind_secret(Some(&hex::encode(expected))).await;
+        let resolved = resolve_redaction_blind_secret(Some(&[7u8; 32]))
+            .expect("production accepts an explicit blind secret");
+        assert_eq!(**resolved, expected);
+        assert_ne!(**resolved, derive_redaction_blind_secret(&[7u8; 32]));
+    }
+
+    #[tokio::test]
+    async fn development_falls_back_to_bjj_derived_redaction_blind_secret() {
+        let _env = crate::env::with_olympus_env(Some("development")).await;
+        let _secret = with_blind_secret(None).await;
+        let bjj = [7u8; 32];
+        let resolved = resolve_redaction_blind_secret(Some(&bjj))
+            .expect("development derives a redaction blind secret");
+        assert_eq!(**resolved, derive_redaction_blind_secret(&bjj));
     }
 }

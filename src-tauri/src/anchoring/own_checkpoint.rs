@@ -18,6 +18,15 @@
 //! builds whenever `OLYMPUS_ANCHOR_*` env vars are configured. The
 //! federation feature only controls whether the row is then gossiped
 //! over Tor.
+//!
+//! ADR-0044: the same row also BJJ-signs the shard's BLAKE3 CD-HS-ST
+//! parser-bound SMT subtree root (`olympus_crypto::SmtRootAttestation`),
+//! bound to this checkpoint's `(ledger_root, tree_size)` so it cannot be
+//! replayed against a different snapshot. This is a second, independent
+//! attestation alongside the Poseidon `TransitionAttestation` above — until
+//! now nothing signed or anchored the BLAKE3 tree's root, so a
+//! `PersistentSmt::prove` witness had no signed statement to verify
+//! against.
 
 use std::path::Path;
 
@@ -70,6 +79,22 @@ pub struct OwnCheckpointRow {
     pub transition_sig_r8x: Option<String>,
     pub transition_sig_r8y: Option<String>,
     pub transition_sig_s: Option<String>,
+    // ADR-0044 / migration 0060: BJJ-signed attestation of the shard's BLAKE3
+    // CD-HS-ST SMT subtree root at this checkpoint's (ledger_root, tree_size).
+    pub blake3_smt_root: Option<String>,
+    pub blake3_smt_sig_r8x: Option<String>,
+    pub blake3_smt_sig_r8y: Option<String>,
+    pub blake3_smt_sig_s: Option<String>,
+    // ADR-0033 / migration 0061: the M-of-N checkpoint-quorum parameters this
+    // row was co-signed under, pinned once at first collection so a later
+    // change to `OLYMPUS_CHECKPOINT_QUORUM_THRESHOLD` or the trusted-peer set
+    // cannot silently re-scope an in-flight or already-collected quorum.
+    /// `M`. `NULL` until the gossip loop first attempts quorum collection for
+    /// this checkpoint.
+    pub checkpoint_quorum_threshold: Option<i32>,
+    /// The pinned `N` signer set (JSON array of `{"x": <dec>, "y": <dec>}`),
+    /// same shape as `key_credentials.quorum_signers`.
+    pub checkpoint_quorum_signers: Option<serde_json::Value>,
 }
 
 /// Resolve the Ed25519 signing key from the same env var precedence
@@ -166,7 +191,26 @@ pub async fn build_and_persist(
             );
         }
     }
-    let canonical = validate_canonical_snapshot(pool, &snap, bjj_pubkey).await?;
+    // Open one REPEATABLE READ transaction so the canonical Poseidon leaf
+    // read and the BLAKE3 SMT subtree-root read observe the same database
+    // snapshot. Without this, a concurrent ingest committing between the two
+    // reads could sign a BLAKE3 root reflecting a later state than the
+    // (ledger_root, tree_size) this checkpoint asserts — the two attestations
+    // must describe one committed instant (review finding on PR #1631).
+    let mut consistency_tx = pool
+        .begin()
+        .await
+        .map_err(|e| format!("open snapshot-consistency transaction: {e}"))?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+        .execute(&mut *consistency_tx)
+        .await
+        .map_err(|e| format!("set REPEATABLE READ isolation: {e}"))?;
+    let canonical = validate_canonical_snapshot(&mut consistency_tx, &snap, bjj_pubkey).await?;
+    let blake3_subtree_root = shard_subtree_root_in_tx(&mut consistency_tx, &snap.shard_id).await?;
+    consistency_tx
+        .commit()
+        .await
+        .map_err(|e| format!("commit snapshot-consistency transaction: {e}"))?;
 
     // Snapshot roots are persisted as 32-byte hexadecimal field values. V2
     // stores and emits their one canonical decimal representation so the
@@ -302,6 +346,35 @@ pub async fn build_and_persist(
         None => (None, None, None, None, None, None),
     };
 
+    // 4d. ADR-0044: bind a signed SmtRootAttestation for the shard's BLAKE3
+    //     CD-HS-ST SMT subtree root to this same checkpoint. Sign the root
+    //     already captured above (in the same REPEATABLE READ transaction as
+    //     the canonical Poseidon leaf read) jointly with the already-committed
+    //     Poseidon `(ledger_root, tree_size)`, so the two attestations
+    //     describe the same instant and neither can be replayed against a
+    //     different snapshot. The signing-bytes domain (`OLY:SMT:ROOT:V1`)
+    //     lives in `olympus-crypto`, so every offline verifier recomputes the
+    //     same digest.
+    let (blake3_smt_root, blake3_smt_sig_r8x, blake3_smt_sig_r8y, blake3_smt_sig_s) = match bjj_key
+    {
+        Some(key) => {
+            let attestation = olympus_crypto::SmtRootAttestation {
+                shard_id: snap.shard_id.as_bytes().to_vec(),
+                ledger_root: hex_to_bytes32(&snap.snapshot_root)?,
+                tree_size: snap.snapshot_size,
+                blake3_smt_root: blake3_subtree_root,
+            };
+            let (r8x, r8y, s) = sign_smt_root(key, &attestation)?;
+            (
+                Some(hex::encode(blake3_subtree_root)),
+                Some(r8x),
+                Some(r8y),
+                Some(s),
+            )
+        }
+        None => (None, None, None, None),
+    };
+
     // 5. Insert. UUID generated in Rust so the return value carries it
     //    without a second round-trip.
     //
@@ -329,9 +402,11 @@ pub async fn build_and_persist(
              anchor_hash, groth16_proof, public_signals,
              ed25519_pubkey_hex, ed25519_signature_hex,
              transition_original_root, transition_leaf, transition_path, transition_sig_r8x,
-             transition_sig_r8y, transition_sig_s, dedup_enforced)
+             transition_sig_r8y, transition_sig_s,
+             blake3_smt_root, blake3_smt_sig_r8x, blake3_smt_sig_r8y, blake3_smt_sig_s,
+             dedup_enforced)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-                 $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, TRUE)
+                 $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, TRUE)
          ON CONFLICT (format_version, checkpoint_scope, shard_id, ledger_root, tree_size)
          WHERE dedup_enforced IS TRUE
          DO NOTHING",
@@ -360,6 +435,10 @@ pub async fn build_and_persist(
     .bind(transition_sig_r8x.as_deref())
     .bind(transition_sig_r8y.as_deref())
     .bind(transition_sig_s.as_deref())
+    .bind(blake3_smt_root.as_deref())
+    .bind(blake3_smt_sig_r8x.as_deref())
+    .bind(blake3_smt_sig_r8y.as_deref())
+    .bind(blake3_smt_sig_s.as_deref())
     .execute(pool)
     .await
     .map_err(|e| format!("insert own_checkpoints: {e}"))?;
@@ -420,6 +499,14 @@ pub async fn build_and_persist(
         transition_sig_r8x,
         transition_sig_r8y,
         transition_sig_s,
+        blake3_smt_root,
+        blake3_smt_sig_r8x,
+        blake3_smt_sig_r8y,
+        blake3_smt_sig_s,
+        // Pinned later, once, by `set_checkpoint_quorum_params` — a freshly
+        // inserted row has not attempted quorum collection yet.
+        checkpoint_quorum_threshold: None,
+        checkpoint_quorum_signers: None,
     }))
 }
 
@@ -427,6 +514,10 @@ pub async fn build_and_persist(
 /// (`GET /api/admin/checkpoints/{id}/bundle`); the row's BJJ sig +
 /// Groth16 proof + Ed25519 sig are checked separately by the caller
 /// and a missing field surfaces as `409 Conflict` rather than `404`.
+/// Also used by `federation::checkpoint_cosign::collect_and_store_checkpoint_quorum`
+/// (issue #1633) to target the exact row a gossip round pushed, rather than
+/// independently re-deriving "latest gossipable" and risking a race against
+/// the anchor cron inserting a newer row mid-round.
 pub async fn fetch_by_id(pool: &PgPool, id: Uuid) -> Result<Option<OwnCheckpointRow>, String> {
     let row: Option<CheckpointDbRow> = sqlx::query_as(
         "SELECT id, format_version, checkpoint_scope, shard_id,
@@ -436,7 +527,9 @@ pub async fn fetch_by_id(pool: &PgPool, id: Uuid) -> Result<Option<OwnCheckpoint
                 anchor_hash, groth16_proof, public_signals,
                 ed25519_pubkey_hex, ed25519_signature_hex,
                 transition_original_root, transition_leaf, transition_path, transition_sig_r8x,
-                transition_sig_r8y, transition_sig_s
+                transition_sig_r8y, transition_sig_s,
+                blake3_smt_root, blake3_smt_sig_r8x, blake3_smt_sig_r8y, blake3_smt_sig_s,
+                checkpoint_quorum_threshold, checkpoint_quorum_signers
          FROM own_checkpoints
          WHERE id = $1",
     )
@@ -477,6 +570,13 @@ struct CheckpointDbRow {
     transition_sig_r8x: Option<String>,
     transition_sig_r8y: Option<String>,
     transition_sig_s: Option<String>,
+    // ADR-0044 / migration 0060: signed BLAKE3 SMT root attestation.
+    blake3_smt_root: Option<String>,
+    blake3_smt_sig_r8x: Option<String>,
+    blake3_smt_sig_r8y: Option<String>,
+    blake3_smt_sig_s: Option<String>,
+    checkpoint_quorum_threshold: Option<i32>,
+    checkpoint_quorum_signers: Option<serde_json::Value>,
 }
 
 /// Map a raw DB row into an [`OwnCheckpointRow`], enforcing the schema
@@ -542,6 +642,12 @@ fn row_to_own_checkpoint(r: CheckpointDbRow) -> Result<OwnCheckpointRow, String>
         transition_sig_r8x: r.transition_sig_r8x,
         transition_sig_r8y: r.transition_sig_r8y,
         transition_sig_s: r.transition_sig_s,
+        blake3_smt_root: r.blake3_smt_root,
+        blake3_smt_sig_r8x: r.blake3_smt_sig_r8x,
+        blake3_smt_sig_r8y: r.blake3_smt_sig_r8y,
+        blake3_smt_sig_s: r.blake3_smt_sig_s,
+        checkpoint_quorum_threshold: r.checkpoint_quorum_threshold,
+        checkpoint_quorum_signers: r.checkpoint_quorum_signers,
     })
 }
 
@@ -561,7 +667,9 @@ pub async fn fetch_latest_gossipable(pool: &PgPool) -> Result<Option<OwnCheckpoi
                 anchor_hash, groth16_proof, public_signals,
                 ed25519_pubkey_hex, ed25519_signature_hex,
                 transition_original_root, transition_leaf, transition_path, transition_sig_r8x,
-                transition_sig_r8y, transition_sig_s
+                transition_sig_r8y, transition_sig_s,
+                blake3_smt_root, blake3_smt_sig_r8x, blake3_smt_sig_r8y, blake3_smt_sig_s,
+                checkpoint_quorum_threshold, checkpoint_quorum_signers
          FROM own_checkpoints
          WHERE groth16_proof IS NOT NULL
            AND format_version = 2
@@ -590,6 +698,168 @@ pub async fn fetch_latest_gossipable(pool: &PgPool) -> Result<Option<OwnCheckpoi
     row.map(row_to_own_checkpoint).transpose()
 }
 
+/// The most recent signed checkpoint for one shard (ADR-0021 Monitor API's
+/// "get-sth" equivalent) — the newest `own_checkpoints` row carrying a BJJ
+/// signature (`sig_r8x`/`sig_r8y`/`sig_s` all present), regardless of whether
+/// a Groth16 proof was also generated for it (unlike
+/// [`fetch_latest_gossipable`], a monitor cares about the newest *signed
+/// root*, not the newest gossip-ready envelope).
+pub async fn latest_for_shard(
+    pool: &PgPool,
+    checkpoint_scope: &str,
+    shard_id: &str,
+) -> Result<Option<OwnCheckpointRow>, String> {
+    let row: Option<CheckpointDbRow> = sqlx::query_as(
+        "SELECT id, format_version, checkpoint_scope, shard_id,
+                ledger_root, tree_size, checkpoint_timestamp,
+                authority_pubkey_hash, sig_r8x, sig_r8y, sig_s,
+                authority_pubkey_x, authority_pubkey_y,
+                anchor_hash, groth16_proof, public_signals,
+                ed25519_pubkey_hex, ed25519_signature_hex,
+                transition_original_root, transition_leaf, transition_path, transition_sig_r8x,
+                transition_sig_r8y, transition_sig_s,
+                blake3_smt_root, blake3_smt_sig_r8x, blake3_smt_sig_r8y, blake3_smt_sig_s,
+                checkpoint_quorum_threshold, checkpoint_quorum_signers
+         FROM own_checkpoints
+         WHERE checkpoint_scope = $1
+           AND shard_id = $2
+           AND sig_r8x IS NOT NULL
+           AND sig_r8y IS NOT NULL
+           AND sig_s   IS NOT NULL
+         ORDER BY checkpoint_timestamp DESC, id DESC
+         LIMIT 1",
+    )
+    .bind(checkpoint_scope)
+    .bind(shard_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| format!("query latest own_checkpoint for shard: {e}"))?;
+
+    row.map(row_to_own_checkpoint).transpose()
+}
+
+/// Recent signed checkpoints for one shard, newest first, capped at `limit`
+/// (ADR-0021 Monitor API's checkpoint-history listing). Same signedness
+/// filter as [`latest_for_shard`].
+pub async fn list_recent_for_shard(
+    pool: &PgPool,
+    checkpoint_scope: &str,
+    shard_id: &str,
+    limit: i64,
+) -> Result<Vec<OwnCheckpointRow>, String> {
+    let rows: Vec<CheckpointDbRow> = sqlx::query_as(
+        "SELECT id, format_version, checkpoint_scope, shard_id,
+                ledger_root, tree_size, checkpoint_timestamp,
+                authority_pubkey_hash, sig_r8x, sig_r8y, sig_s,
+                authority_pubkey_x, authority_pubkey_y,
+                anchor_hash, groth16_proof, public_signals,
+                ed25519_pubkey_hex, ed25519_signature_hex,
+                transition_original_root, transition_leaf, transition_path, transition_sig_r8x,
+                transition_sig_r8y, transition_sig_s,
+                blake3_smt_root, blake3_smt_sig_r8x, blake3_smt_sig_r8y, blake3_smt_sig_s,
+                checkpoint_quorum_threshold, checkpoint_quorum_signers
+         FROM own_checkpoints
+         WHERE checkpoint_scope = $1
+           AND shard_id = $2
+           AND sig_r8x IS NOT NULL
+           AND sig_r8y IS NOT NULL
+           AND sig_s   IS NOT NULL
+         ORDER BY checkpoint_timestamp DESC, id DESC
+         LIMIT $3",
+    )
+    .bind(checkpoint_scope)
+    .bind(shard_id)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("query recent own_checkpoints for shard: {e}"))?;
+
+    rows.into_iter().map(row_to_own_checkpoint).collect()
+}
+
+/// The most recent checkpoint for one shard carrying a **BLAKE3 SMT root
+/// attestation** (ADR-0044) — i.e. `blake3_smt_root` and its BJJ signature
+/// are all present, not just the Poseidon signature [`latest_for_shard`]
+/// requires. The BLAKE3-proof-serving endpoint (`api::monitor::proof_blake3`)
+/// serves a proof against this row's `blake3_smt_root`, so an unsigned or
+/// pre-ADR-0044 checkpoint row is not a candidate.
+pub async fn latest_smt_attestation_for_shard(
+    pool: &PgPool,
+    checkpoint_scope: &str,
+    shard_id: &str,
+) -> Result<Option<OwnCheckpointRow>, String> {
+    let row: Option<CheckpointDbRow> = sqlx::query_as(
+        "SELECT id, format_version, checkpoint_scope, shard_id,
+                ledger_root, tree_size, checkpoint_timestamp,
+                authority_pubkey_hash, sig_r8x, sig_r8y, sig_s,
+                authority_pubkey_x, authority_pubkey_y,
+                anchor_hash, groth16_proof, public_signals,
+                ed25519_pubkey_hex, ed25519_signature_hex,
+                transition_original_root, transition_leaf, transition_path, transition_sig_r8x,
+                transition_sig_r8y, transition_sig_s,
+                blake3_smt_root, blake3_smt_sig_r8x, blake3_smt_sig_r8y, blake3_smt_sig_s,
+                checkpoint_quorum_threshold, checkpoint_quorum_signers
+         FROM own_checkpoints
+         WHERE checkpoint_scope = $1
+           AND shard_id = $2
+           AND blake3_smt_root     IS NOT NULL
+           AND blake3_smt_sig_r8x IS NOT NULL
+           AND blake3_smt_sig_r8y IS NOT NULL
+           AND blake3_smt_sig_s   IS NOT NULL
+         ORDER BY checkpoint_timestamp DESC, id DESC
+         LIMIT 1",
+    )
+    .bind(checkpoint_scope)
+    .bind(shard_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| format!("query latest smt-attested own_checkpoint for shard: {e}"))?;
+
+    row.map(row_to_own_checkpoint).transpose()
+}
+
+/// The earliest signed checkpoint for one shard whose `tree_size` is at
+/// least `min_tree_size` — i.e. the first checkpoint that could possibly
+/// cover a leaf committed at that ordinal position (ADR-0021 MMD evidence).
+/// Same signedness filter as [`latest_for_shard`]: an unsigned row is not a
+/// published commitment a submitter could ever have relied on as evidence.
+pub async fn first_covering_for_shard(
+    pool: &PgPool,
+    checkpoint_scope: &str,
+    shard_id: &str,
+    min_tree_size: i64,
+) -> Result<Option<OwnCheckpointRow>, String> {
+    let row: Option<CheckpointDbRow> = sqlx::query_as(
+        "SELECT id, format_version, checkpoint_scope, shard_id,
+                ledger_root, tree_size, checkpoint_timestamp,
+                authority_pubkey_hash, sig_r8x, sig_r8y, sig_s,
+                authority_pubkey_x, authority_pubkey_y,
+                anchor_hash, groth16_proof, public_signals,
+                ed25519_pubkey_hex, ed25519_signature_hex,
+                transition_original_root, transition_leaf, transition_path, transition_sig_r8x,
+                transition_sig_r8y, transition_sig_s,
+                blake3_smt_root, blake3_smt_sig_r8x, blake3_smt_sig_r8y, blake3_smt_sig_s,
+                checkpoint_quorum_threshold, checkpoint_quorum_signers
+         FROM own_checkpoints
+         WHERE checkpoint_scope = $1
+           AND shard_id = $2
+           AND tree_size >= $3
+           AND sig_r8x IS NOT NULL
+           AND sig_r8y IS NOT NULL
+           AND sig_s   IS NOT NULL
+         ORDER BY checkpoint_timestamp ASC, id ASC
+         LIMIT 1",
+    )
+    .bind(checkpoint_scope)
+    .bind(shard_id)
+    .bind(min_tree_size)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| format!("query first covering own_checkpoint: {e}"))?;
+
+    row.map(row_to_own_checkpoint).transpose()
+}
+
 /// Fetch an existing checkpoint for a given `(ledger_root, tree_size)`
 /// snapshot, if one was already persisted. Used by [`build_and_persist`] to
 /// dedup repeated cron ticks over an unchanged ledger snapshot.
@@ -607,7 +877,9 @@ async fn fetch_existing_for_snapshot(
                 anchor_hash, groth16_proof, public_signals,
                 ed25519_pubkey_hex, ed25519_signature_hex,
                 transition_original_root, transition_leaf, transition_path, transition_sig_r8x,
-                transition_sig_r8y, transition_sig_s
+                transition_sig_r8y, transition_sig_s,
+                blake3_smt_root, blake3_smt_sig_r8x, blake3_smt_sig_r8y, blake3_smt_sig_s,
+                checkpoint_quorum_threshold, checkpoint_quorum_signers
          FROM own_checkpoints
          WHERE format_version = 2
            AND checkpoint_scope = 'shard'
@@ -626,6 +898,45 @@ async fn fetch_existing_for_snapshot(
     .map_err(|e| format!("query existing own_checkpoint: {e}"))?;
 
     row.map(row_to_own_checkpoint).transpose()
+}
+
+/// Pin the M-of-N checkpoint-quorum parameters a row was co-signed under
+/// (ADR-0033 "Producer — implemented"). One-shot: the `WHERE
+/// checkpoint_quorum_threshold IS NULL` guard means a checkpoint's `(M, N)`
+/// is set exactly once, on the first *viable* collection attempt (not the
+/// first time threshold is satisfied) — see the ADR's "Why pin on first
+/// attempt, not first success" section: reusing the pinned set is what lets
+/// signatures accumulate across gossip rounds, since `checkpoint_quorum_message`
+/// binds threshold + signer set into the signed digest, so a later env-var
+/// change or trusted-peer-list edit cannot silently re-scope an
+/// already-pinned checkpoint's quorum out from under its stored signatures.
+/// Returns the number of rows updated (0 if the row was already pinned or
+/// doesn't exist) so the caller can tell "pinned now" from "already pinned".
+pub async fn set_checkpoint_quorum_params(
+    pool: &PgPool,
+    checkpoint_id: Uuid,
+    threshold: u32,
+    signers: &[crate::quorum::QuorumSigner],
+) -> Result<u64, sqlx::Error> {
+    // Fail closed: `QuorumSigner` is two plain strings, so this can't
+    // realistically fail, but a silent `[]` fallback would pin `threshold >=
+    // 1` against an empty signer set — an unsatisfiable quorum locked in by
+    // the one-shot guard above. Propagate instead.
+    let signers_json = serde_json::to_value(signers)
+        .map_err(|e| sqlx::Error::Protocol(format!("serialize quorum signers: {e}")))?;
+    let result = sqlx::query(
+        "UPDATE own_checkpoints
+            SET checkpoint_quorum_threshold = $1,
+                checkpoint_quorum_signers = $2
+          WHERE id = $3
+            AND checkpoint_quorum_threshold IS NULL",
+    )
+    .bind(threshold as i32)
+    .bind(signers_json)
+    .bind(checkpoint_id)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected())
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────
@@ -745,8 +1056,13 @@ struct CanonicalSnapshot {
 /// Rebuild the selected shard tip from its canonical ordered leaves, compare
 /// every persisted witness field, and verify the ingest-time snapshot
 /// signature before the root is checkpoint-signed or externally anchored.
+///
+/// Runs against a caller-supplied transaction (rather than the pool) so it
+/// can share one REPEATABLE READ database snapshot with
+/// [`shard_subtree_root_in_tx`] — see the call site in [`build_and_persist`]
+/// for why that matters.
 async fn validate_canonical_snapshot(
-    pool: &PgPool,
+    tx: &mut sqlx::PgConnection,
     snap: &Snapshot,
     authority: &BabyJubJubPubKey,
 ) -> Result<CanonicalSnapshot, String> {
@@ -771,7 +1087,7 @@ async fn validate_canonical_snapshot(
           ORDER BY snapshot_index ASC",
     )
     .bind(&snap.shard_id)
-    .fetch_all(pool)
+    .fetch_all(&mut *tx)
     .await
     .map_err(|e| format!("load canonical snapshot leaves: {e}"))?;
     if stored_rows.len() != snap.snapshot_size as usize {
@@ -894,6 +1210,42 @@ async fn validate_canonical_snapshot(
     })
 }
 
+/// Read the shard's BLAKE3 SMT subtree root against `tx`, so it observes the
+/// same REPEATABLE READ database snapshot [`validate_canonical_snapshot`]
+/// just read the canonical Poseidon leaf set against. Without this, a
+/// concurrent `/ingest/files` commit landing between the two reads could sign
+/// a BLAKE3 root reflecting a later state than the `(ledger_root, tree_size)`
+/// this checkpoint asserts — breaking ADR-0044's "both attestations describe
+/// one instant" property (found in review of PR #1631).
+///
+/// Mirrors `smt::PersistentSmt::shard_subtree_root` exactly, but is
+/// duplicated here rather than reused: `PersistentSmt`/`PgBackend` always
+/// acquire their own pool connection per query and cannot be bound to a
+/// caller's transaction. `SHARD_PREFIX_BITS` (64) is byte-aligned, so the
+/// packed `path_bits` for the shard-prefix node is exactly
+/// `shard_prefix(shard_id)` with no bit-packing needed.
+async fn shard_subtree_root_in_tx(
+    tx: &mut sqlx::PgConnection,
+    shard_id: &str,
+) -> Result<[u8; 32], String> {
+    let prefix = olympus_crypto::smt::shard_prefix(shard_id);
+    let row: Option<(Vec<u8>,)> =
+        sqlx::query_as("SELECT hash FROM smt_nodes WHERE depth = $1 AND path_bits = $2")
+            .bind(olympus_crypto::smt::SHARD_PREFIX_BITS as i16)
+            .bind(&prefix[..])
+            .fetch_optional(tx)
+            .await
+            .map_err(|e| format!("read BLAKE3 SMT shard subtree root: {e}"))?;
+    match row {
+        Some((hash,)) => hash
+            .try_into()
+            .map_err(|v: Vec<u8>| format!("smt_nodes.hash is {} bytes; expected 32", v.len())),
+        None => Ok(olympus_crypto::smt::empty_subtree_hash(
+            olympus_crypto::smt::SMT_DEPTH - olympus_crypto::smt::SHARD_PREFIX_BITS,
+        )),
+    }
+}
+
 fn parse_snapshot_path(v: &serde_json::Value) -> Result<(Vec<Fr>, Vec<u8>), String> {
     let path_obj = v
         .as_object()
@@ -944,12 +1296,12 @@ fn hex_to_bytes32(h: &str) -> Result<[u8; 32], String> {
         .map_err(|v: Vec<u8>| format!("expected 32-byte root, got {} bytes", v.len()))
 }
 
-/// Reduce the 32-byte transition digest into a BN254 scalar via the "mod l"
-/// recipe shared with SBT-open signing
+/// Reduce a 32-byte attestation digest (transition or SMT-root) into a BN254
+/// scalar via the "mod l" recipe shared with SBT-open signing
 /// (`api::credentials::crypto::digest_jcs_to_subgroup_scalar`): reduce the digest
 /// modulo the BabyJubjub prime-subgroup order `l`, then map into `Fr`. The
 /// BJJ-EdDSA signer/verifier consume this `Fr` as the message scalar.
-fn persist_digest_to_subgroup_scalar(digest: &[u8; 32]) -> Fr {
+fn digest_to_subgroup_scalar(digest: &[u8; 32]) -> Fr {
     // Single source of truth for l (shared with the subgroup guards and the
     // SBT-open reduction) so the two signing-digest reductions can't drift.
     let l: num_bigint::BigUint = crate::zk::witness::baby_jubjub::BABYJ_SUBGROUP_ORDER
@@ -967,9 +1319,26 @@ fn sign_transition(
     bjj_key: &[u8; 32],
     attestation: &olympus_crypto::TransitionAttestation,
 ) -> Result<SigTriple, String> {
-    let msg = persist_digest_to_subgroup_scalar(&attestation.message());
+    let msg = digest_to_subgroup_scalar(&attestation.message());
     let sig = crate::zk::witness::baby_jubjub::sign(bjj_key, msg)
         .map_err(|e| format!("BJJ sign transition: {e}"))?;
+    Ok((
+        fr_to_decimal(&sig.r8x),
+        fr_to_decimal(&sig.r8y),
+        fr_to_decimal(&sig.s),
+    ))
+}
+
+/// BJJ-EdDSA-sign an SMT root attestation's digest (reduced mod l) under the
+/// authority key, returning `(r8x, r8y, s)` as canonical decimal `Fr` strings —
+/// the same encoding the row's other checkpoint signatures use. See ADR-0044.
+fn sign_smt_root(
+    bjj_key: &[u8; 32],
+    attestation: &olympus_crypto::SmtRootAttestation,
+) -> Result<SigTriple, String> {
+    let msg = digest_to_subgroup_scalar(&attestation.message());
+    let sig = crate::zk::witness::baby_jubjub::sign(bjj_key, msg)
+        .map_err(|e| format!("BJJ sign SMT root: {e}"))?;
     Ok((
         fr_to_decimal(&sig.r8x),
         fr_to_decimal(&sig.r8y),
@@ -1030,7 +1399,7 @@ pub fn verify_append_transition(
         snapshot_root: hex_to_bytes32(&current_root_hex)?,
         snapshot_size: current_size,
     };
-    let message = persist_digest_to_subgroup_scalar(&attestation.message());
+    let message = digest_to_subgroup_scalar(&attestation.message());
     let parse_signature_component = |name: &str, value: &str| -> Result<Fr, String> {
         let parsed = crate::zk::proof::parse_fr(value)
             .map_err(|e| format!("parse transition {name}: {e}"))?;
@@ -1048,6 +1417,50 @@ pub fn verify_append_transition(
     };
     if !crate::zk::witness::baby_jubjub::verify_signature(authority, &sig, message) {
         return Err("append transition signature does not verify".to_owned());
+    }
+    Ok(message)
+}
+
+/// Verify a persisted BLAKE3 SMT root attestation and its authority
+/// signature. Rebuilds the digest from the claimed shard/root/checkpoint
+/// fields — never trusting a caller-supplied digest — then authenticates
+/// the BJJ-EdDSA signature over it. Returns the exact message scalar signed,
+/// for bundle export. See ADR-0044.
+pub fn verify_smt_root_attestation(
+    shard_id: &str,
+    ledger_root_hex: &str,
+    tree_size: i64,
+    blake3_smt_root_hex: &str,
+    authority: &BabyJubJubPubKey,
+    signature: (&str, &str, &str),
+) -> Result<Fr, String> {
+    if tree_size <= 0 {
+        return Err("SMT root attestation tree_size must be positive".to_owned());
+    }
+    let attestation = olympus_crypto::SmtRootAttestation {
+        shard_id: shard_id.as_bytes().to_vec(),
+        ledger_root: hex_to_bytes32(ledger_root_hex)?,
+        tree_size,
+        blake3_smt_root: hex_to_bytes32(blake3_smt_root_hex)?,
+    };
+    let message = digest_to_subgroup_scalar(&attestation.message());
+    let parse_signature_component = |name: &str, value: &str| -> Result<Fr, String> {
+        let parsed = crate::zk::proof::parse_fr(value)
+            .map_err(|e| format!("parse smt root attestation {name}: {e}"))?;
+        if fr_to_decimal(&parsed) != value {
+            return Err(format!(
+                "smt root attestation {name} is not a canonical decimal field element"
+            ));
+        }
+        Ok(parsed)
+    };
+    let sig = crate::zk::witness::baby_jubjub::BabyJubJubSignature {
+        r8x: parse_signature_component("r8x", signature.0)?,
+        r8y: parse_signature_component("r8y", signature.1)?,
+        s: parse_signature_component("s", signature.2)?,
+    };
+    if !crate::zk::witness::baby_jubjub::verify_signature(authority, &sig, message) {
+        return Err("SMT root attestation signature does not verify".to_owned());
     }
     Ok(message)
 }

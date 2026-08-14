@@ -6,6 +6,8 @@
 pub const ADMIN_SCOPE: &str = "admin";
 
 pub const ADMIN_SHARDS: &str = "/admin/shards";
+pub const ADMIN_SHARD_QUORUM_THRESHOLD: &str =
+    "/admin/shards/{shard_id}/checkpoint-quorum-threshold";
 pub const ADMIN_USERS: &str = "/admin/users";
 pub const ADMIN_USER_KEYS: &str = "/admin/users/{user_id}/keys";
 pub const ADMIN_USER_ROLE: &str = "/admin/users/{user_id}/role";
@@ -48,6 +50,11 @@ pub const SIGNED_ADMIN_MUTATION_ROUTES: &[SignedAdminMutationRoute] = &[
     SignedAdminMutationRoute {
         method: "POST",
         path_pattern: ADMIN_SHARDS,
+        scope: ADMIN_SCOPE,
+    },
+    SignedAdminMutationRoute {
+        method: "PATCH",
+        path_pattern: ADMIN_SHARD_QUORUM_THRESHOLD,
         scope: ADMIN_SCOPE,
     },
     SignedAdminMutationRoute {
@@ -118,6 +125,7 @@ mod tests {
 
     const EXPECTED_ADMIN_SCOPE_MUTATIONS: &[(&str, &str)] = &[
         ("POST", ADMIN_SHARDS),
+        ("PATCH", ADMIN_SHARD_QUORUM_THRESHOLD),
         ("POST", ADMIN_USER_KEYS),
         ("PATCH", ADMIN_USER_ROLE),
         ("PATCH", ADMIN_KEY_SCOPES),
@@ -193,6 +201,7 @@ mod tests {
 
     const ADMIN_SCOPE_PATH_CONSTANTS: &[(&str, &str)] = &[
         ("ADMIN_SHARDS", ADMIN_SHARDS),
+        ("ADMIN_SHARD_QUORUM_THRESHOLD", ADMIN_SHARD_QUORUM_THRESHOLD),
         ("ADMIN_USER_KEYS", ADMIN_USER_KEYS),
         ("ADMIN_USER_ROLE", ADMIN_USER_ROLE),
         ("ADMIN_KEY_SCOPES", ADMIN_KEY_SCOPES),

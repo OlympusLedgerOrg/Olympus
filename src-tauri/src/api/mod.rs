@@ -7,6 +7,7 @@ pub mod ingest;
 pub mod keys;
 pub mod ledger;
 pub mod middleware;
+pub mod monitor;
 pub mod pagination;
 pub mod redaction;
 pub mod shards;

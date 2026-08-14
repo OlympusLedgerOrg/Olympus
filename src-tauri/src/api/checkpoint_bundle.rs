@@ -5,7 +5,8 @@
 //! Red-team C1 closure: the documented `node verify.js verify-checkpoint
 //! --bundle <bundle.json>` command had no producer. This route reads the
 //! `own_checkpoints` row by id, validates its pinned historical signing key and
-//! signatures, and returns a v3 bundle with an append-consistency witness.
+//! signatures, and returns a v4 bundle with an append-consistency witness and
+//! a BLAKE3 CD-HS-ST SMT root attestation (ADR-0044).
 //!
 //! All cryptographic fields the JS verifier hashes/signs are returned as
 //! strings (decimal Fr or lowercase hex). Numeric fields the cryptography
@@ -40,6 +41,7 @@ pub struct CheckpointBundle {
     pub checkpoint: CheckpointFields,
     pub bjj_eddsa_poseidon: BjjEddsa,
     pub append_transition: AppendTransitionBlock,
+    pub smt_root_attestation: SmtRootAttestationBlock,
     pub ed25519: Ed25519Block,
     pub anchor_hash: AnchorHashBlock,
     pub groth16: Groth16Block,
@@ -54,6 +56,17 @@ pub struct AppendTransitionBlock {
     pub current_tree_size: String,
     pub appended_leaf_hex: String,
     pub path: serde_json::Value,
+    pub signature: BjjSig,
+    pub message: String,
+    pub message_doc: &'static str,
+}
+
+/// ADR-0044: the BJJ-signed attestation of the shard's BLAKE3 CD-HS-ST SMT
+/// subtree root at this checkpoint's `(ledger_root, tree_size)`.
+#[derive(Serialize)]
+pub struct SmtRootAttestationBlock {
+    pub scheme: &'static str,
+    pub blake3_smt_root_hex: String,
     pub signature: BjjSig,
     pub message: String,
     pub message_doc: &'static str,
@@ -270,6 +283,24 @@ async fn get_checkpoint_bundle(
         )
     })?;
 
+    let (
+        Some(blake3_smt_root),
+        Some(blake3_smt_sig_r8x),
+        Some(blake3_smt_sig_r8y),
+        Some(blake3_smt_sig_s),
+    ) = (
+        row.blake3_smt_root.as_deref(),
+        row.blake3_smt_sig_r8x.as_deref(),
+        row.blake3_smt_sig_r8y.as_deref(),
+        row.blake3_smt_sig_s.as_deref(),
+    )
+    else {
+        return Err(err(
+            StatusCode::CONFLICT,
+            "Checkpoint lacks a complete signed BLAKE3 SMT root attestation.",
+        ));
+    };
+
     let ledger_root_fr = crate::zk::proof::parse_fr(&row.ledger_root).map_err(|e| {
         tracing::error!("checkpoint bundle: stored ledger root is invalid: {e}");
         err(
@@ -283,6 +314,22 @@ async fn get_checkpoint_bundle(
             "Stored ledger root is not canonical decimal Fr.",
         ));
     }
+    let ledger_root_hex = crate::zk::chunk::fr_to_hex(ledger_root_fr);
+    let smt_root_message = crate::anchoring::own_checkpoint::verify_smt_root_attestation(
+        shard_id,
+        &ledger_root_hex,
+        row.tree_size,
+        blake3_smt_root,
+        &pk,
+        (blake3_smt_sig_r8x, blake3_smt_sig_r8y, blake3_smt_sig_s),
+    )
+    .map_err(|e| {
+        tracing::error!("checkpoint bundle: invalid SMT root attestation: {e}");
+        err(
+            StatusCode::CONFLICT,
+            "Checkpoint BLAKE3 SMT root attestation is invalid.",
+        )
+    })?;
     let authority_hash_fr = crate::zk::proof::parse_fr(authority_hash).map_err(|e| {
         tracing::error!("checkpoint bundle: stored authority hash is invalid: {e}");
         err(
@@ -382,8 +429,56 @@ async fn get_checkpoint_bundle(
             )
         })?;
 
+    // Bind the Groth16 document-existence proof to THIS checkpoint's authenticated
+    // (ledger_root, tree_size). The proof's public signals are
+    // `[root, leafIndex, treeSize]`, and the own-checkpoint's snapshot tree IS the
+    // document-existence tree, so signal[0] must equal `ledger_root` and signal[2]
+    // the `tree_size`. Without this an otherwise-valid proof over an UNRELATED tree
+    // (e.g. `[otherRoot, idx, otherSize]`) would be exported inside a bundle that
+    // presents it as "the existence proof of this checkpoint" — a "verifies X"
+    // claim with no backing check (red-team F-1; the federation receive path already
+    // binds this in federation/verify.rs, the exported-bundle path did not).
+    if signals.len() != 3 {
+        return Err(err(
+            StatusCode::CONFLICT,
+            "Stored document_existence proof must expose exactly 3 public signals \
+             [root, leafIndex, treeSize].",
+        ));
+    }
+    let signal_root = crate::zk::proof::parse_fr(&signals[0]).map_err(|_| {
+        err(
+            StatusCode::CONFLICT,
+            "Groth16 public signal[0] (root) is not canonical decimal Fr.",
+        )
+    })?;
+    if signal_root != ledger_root_fr {
+        return Err(err(
+            StatusCode::CONFLICT,
+            "Groth16 proof root signal does not match the signed checkpoint ledger_root.",
+        ));
+    }
+    let expected_tree_size_fr =
+        crate::zk::proof::parse_fr(&row.tree_size.to_string()).map_err(|_| {
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Checkpoint tree_size is not a representable field element.",
+            )
+        })?;
+    let signal_tree_size = crate::zk::proof::parse_fr(&signals[2]).map_err(|_| {
+        err(
+            StatusCode::CONFLICT,
+            "Groth16 public signal[2] (treeSize) is not canonical decimal Fr.",
+        )
+    })?;
+    if signal_tree_size != expected_tree_size_fr {
+        return Err(err(
+            StatusCode::CONFLICT,
+            "Groth16 proof treeSize signal does not match the signed checkpoint tree_size.",
+        ));
+    }
+
     Ok(Json(CheckpointBundle {
-        schema: "olympus-checkpoint-bundle/v3",
+        schema: "olympus-checkpoint-bundle/v4",
         checkpoint: CheckpointFields {
             id: row.id,
             format_version: row.format_version.to_string(),
@@ -427,6 +522,17 @@ async fn get_checkpoint_bundle(
             },
             message: fr_to_decimal(&transition_message),
             message_doc: "Fold zero and appended_leaf over path to reconstruct previous/current roots; BJJ-EdDSA signs reduce_mod_l(BLAKE3(OLY:SNAPSHOT:PERSIST:V1 || lp(previous_root_be32) || lp(current_root_be32) || lp(current_tree_size_u64be))).",
+        },
+        smt_root_attestation: SmtRootAttestationBlock {
+            scheme: "BLAKE3-CD-HS-ST-root + BabyJubJub-EdDSA",
+            blake3_smt_root_hex: blake3_smt_root.to_owned(),
+            signature: BjjSig {
+                r8x: blake3_smt_sig_r8x.to_owned(),
+                r8y: blake3_smt_sig_r8y.to_owned(),
+                s: blake3_smt_sig_s.to_owned(),
+            },
+            message: fr_to_decimal(&smt_root_message),
+            message_doc: "BJJ-EdDSA signs reduce_mod_l(BLAKE3(OLY:SMT:ROOT:V1 || lp(shard_id) || lp(ledger_root_be32) || lp(tree_size_u64be) || lp(blake3_smt_root_be32))). Independently ties the shard's BLAKE3 CD-HS-ST SMT subtree root to this checkpoint's (ledger_root, tree_size).",
         },
         ed25519: Ed25519Block {
             scheme: "Ed25519 (RFC 8032)",

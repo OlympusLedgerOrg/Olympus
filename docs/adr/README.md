@@ -13,7 +13,7 @@ are valid history; new ADRs use the `ADR-NNNN-` form.
 | [ADR-0004](0004-model-hash-leaf-domain-separator.md)                   | Model-hash binding in the leaf hash domain separator                               | Accepted                                                     |
 | [ADR-0005](0005-structured-leaf-prefix-shard-binding.md)               | Structured leaf prefix + shard-ID binding                                          | Accepted                                                     |
 | [ADR-0009](ADR-0009-poseidon-hash-suite.md)                            | Poseidon hash suite contract (poseidon-bn254-v1)                                   | Accepted                                                     |
-| [ADR-0021](ADR-0021-smt-with-ct-operational-hardening.md)              | CD-HS-ST with CT-style operational hardening                                       | Proposed (scaffold)                                          |
+| [ADR-0021](ADR-0021-smt-with-ct-operational-hardening.md)              | CD-HS-ST with CT-style operational hardening                                       | Accepted; implemented (2026-08-13)                            |
 | [ADR-0022](ADR-0022-smt-lazy-deep-node-storage.md)                     | Lazy deep-node storage for the persistent SMT                                      | Accepted, implemented                                        |
 | [ADR-0023](ADR-0023-rasterized-tile-redaction.md)                      | In-house rasterized tile redaction                                                 | **Rejected** (2026-06-07)                                    |
 | [ADR-0024](ADR-0024-zk-tile-redaction.md)                              | Hybrid rasterized ZK tile redaction                                                | **Rejected** (2026-06-08)                                    |
@@ -25,17 +25,18 @@ are valid history; new ADRs use the `ADR-NNNN-` form.
 | [ADR-0030](ADR-0030-redaction-signed-merkle-drop-groth16.md)           | Redaction via signed Merkle fold; drop redaction Groth16                           | Accepted, implemented (2026-06-15)                           |
 | [ADR-0031](ADR-0031-transition-attestations-insert-only-ledger.md)     | Transition attestations + enforced insert-only ledger                              | Accepted, implemented (2026-06-16)                           |
 | [ADR-0032](ADR-0032-retire-witness-over-root-cosignature.md)           | Retire the witness-over-root cosignature scaffold                                  | Accepted (2026-06-16)                                        |
-| [ADR-0033](ADR-0033-checkpoint-quorum-cosignatures.md)                 | Checkpoint-quorum co-signatures (OLY:CHECKPOINT:QUORUM:V2)                         | Accepted; amended in implementation                          |
+| [ADR-0033](ADR-0033-checkpoint-quorum-cosignatures.md)                 | Checkpoint-quorum co-signatures (OLY:CHECKPOINT:QUORUM:V2)                         | Accepted; implemented (2026-08-13)                            |
 | [ADR-0034](ADR-0034-fixed-width-redaction-tokens.md)                   | Standardized fixed-width redaction tokens + format-specific sanitization           | Accepted, implemented (2026-06-24)                           |
 | [ADR-0035](ADR-0035-crypto-agility-signature-envelopes.md)             | Crypto-agility signature envelopes                                                 | Accepted; scaffold implemented                               |
 | [ADR-0036](ADR-0036-network-security-and-request-envelopes.md)         | Network security and signed request envelopes                                      | Accepted; extractor + opt-in admin mutation gate implemented |
-| [ADR-0037](ADR-0037-object-redaction-selection-staging-commit-flow.md) | Object-based redaction selection, staging, and commit flow                         | Accepted (2026-07-04)                                        |
+| [ADR-0037](ADR-0037-object-redaction-selection-staging-commit-flow.md) | Object-based redaction selection, staging, and commit flow                         | Accepted; implemented (2026-08-12)                            |
 | [ADR-0038](ADR-0038-experimental-post-quantum-hybrid-envelopes.md)     | Experimental post-quantum hybrid envelopes                                         | Proposed; experimental only                                  |
 | [ADR-0039](ADR-0039-transactional-database-agnostic-smt-storage.md)    | Transactional database-agnostic SMT storage                                        | Accepted (2026-07-13)                                        |
 | [ADR-0040](ADR-0040-risc-zero-canonicalization-receipts.md)            | RISC Zero canonicalization receipts composed with Groth16 inclusion                | Accepted (2026-07-18)                                        |
 | [ADR-0041](ADR-0041-role-separated-trust-list-rotation.md)             | Role-separated trust-list rotation, quorum enforcement, and signer activation      | Proposed (2026-07-21)                                        |
 | [ADR-0042](ADR-0042-realm-identity-authority-epochs.md)                | Realm identity and authority epochs                                                | Proposed (2026-07-21; revised 2026-07-23)                    |
 | [ADR-0043](ADR-0043-local-secret-storage-and-recovery.md)              | Local secret storage and recovery — OS-keychain-first with encrypted-blob fallback | Proposed (2026-08-11; research/design only)                  |
+| [ADR-0044](ADR-0044-smt-root-attestation.md)                           | BLAKE3 CD-HS-ST SMT root attestation                                               | Accepted, implemented (2026-08-13)                            |
 
 When adding an ADR: pick the next unused number, use the `ADR-NNNN-slug.md`
 naming form, include a Status line near the top, and add a row here in the

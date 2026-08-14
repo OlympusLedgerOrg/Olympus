@@ -6,21 +6,32 @@
  *
  *   node verify.js verify-checkpoint --bundle <bundle.json>
  *
- * Bundle schema: docs/checkpoint-bundle-schema.md (v3).
+ * Bundle schema: docs/checkpoint-bundle-schema.md (v4).
  *
- * Runs four independent JS-side checks, then emits the exact command for the
+ * Runs six independent JS-side checks, then emits the exact command for the
  * separate Rust Groth16 check. Exit 0 covers only the checks performed here.
  *
  *   1. Anchor digest reconstruction (BLAKE3 over the domain-separated
  *      OLY:CHECKPOINT_ANCHOR:V2 field tuple).
- *   2. Ed25519 verify over `anchor_hash` bytes (RFC 8032 via @noble/curves).
+ *   2. Ed25519 verify over `anchor_hash` bytes (strict RFC 8032 / FIPS 186-5
+ *      via @noble/curves — `zip215: false`, matching the Rust `verify_strict`).
  *   3. BJJ-EdDSA-Poseidon verify over the complete scoped v2 statement (local iden3-compatible
  *      primitives, byte-compatible with the Rust babyjubjub-permissive
  *      signer the desktop uses).
- *   4. Groth16 over BN254 — prints the cargo invocation the Rust
- *      verifier crate (`cargo run -p olympus-verifier`) exposes;
+ *   4. Append-consistency witness (Poseidon one-leaf-append + BJJ-EdDSA over
+ *      OLY:SNAPSHOT:PERSIST:V1, ADR-0031).
+ *   5. BLAKE3 CD-HS-ST SMT root attestation (BJJ-EdDSA over OLY:SMT:ROOT:V1,
+ *      ADR-0044) — independently ties the shard's BLAKE3 parser-bound SMT
+ *      subtree root to this checkpoint's (ledger_root, tree_size).
+ *   6. Groth16 over BN254 — first BINDS the proof's public signals to the
+ *      authenticated checkpoint (signals[0] == ledger_root, signals[2] ==
+ *      tree_size) as a hard JS gate, then prints the cargo invocation the Rust
+ *      verifier crate (`cargo run -p olympus-verifier`) exposes for the pairing;
  *      the operator runs that out-of-band. The JS verifier itself is
- *      deliberately kept Groth16-free to avoid pulling snarkjs at runtime.
+ *      deliberately kept snarkjs-free at runtime. The binding is essential: the
+ *      Rust CLI checks only the pairing over the signals it is handed and cannot
+ *      see the checkpoint, so without it a valid proof for an unrelated tree
+ *      would pass.
  *
  * Exit codes:
  *   0  all checks passed
@@ -171,6 +182,8 @@ function validateBundleEncoding(bundle) {
   const anchor = requireObject(bundle.anchor_hash, "bundle.anchor_hash");
   const transition = requireObject(bundle.append_transition, "bundle.append_transition");
   const transitionSig = requireObject(transition.signature, "bundle.append_transition.signature");
+  const smtRoot = requireObject(bundle.smt_root_attestation, "bundle.smt_root_attestation");
+  const smtRootSig = requireObject(smtRoot.signature, "bundle.smt_root_attestation.signature");
 
   if (
     checkpoint.format_version !== "2" ||
@@ -249,6 +262,23 @@ function validateBundleEncoding(bundle) {
   if (!transitionPath.path_indices.every((value) => value === 0 || value === 1)) {
     throw new Error("bundle append transition path indices must be binary");
   }
+
+  if (smtRoot.scheme !== "BLAKE3-CD-HS-ST-root + BabyJubJub-EdDSA") {
+    throw new Error(`unsupported SMT root attestation scheme: ${JSON.stringify(smtRoot.scheme)}`);
+  }
+  requireLowerHex(
+    smtRoot.blake3_smt_root_hex,
+    "bundle.smt_root_attestation.blake3_smt_root_hex",
+    64,
+  );
+  requireCanonicalFr(smtRootSig.r8x, "bundle.smt_root_attestation.signature.r8x");
+  requireCanonicalFr(smtRootSig.r8y, "bundle.smt_root_attestation.signature.r8y");
+  requireCanonicalUnsignedDecimal(
+    smtRootSig.s,
+    "bundle.smt_root_attestation.signature.s",
+    BABYJUBJUB_SUBGROUP_ORDER - 1n,
+  );
+  requireCanonicalFr(smtRoot.message, "bundle.smt_root_attestation.message");
 }
 
 function checkpointSigningMessage(checkpoint) {
@@ -308,7 +338,12 @@ function verifyEd25519(block, anchorHashHex) {
   const msg = fromHex(block.message_hex);
   let ok;
   try {
-    ok = ed25519.verify(sig, msg, pubkey);
+    // Strict RFC 8032 (FIPS 186-5) acceptance — `zip215: false` disables the
+    // @noble/curves default cofactored/ZIP-215 batch rule so this matches the
+    // Rust desktop's `verify_strict`. A signature accepted here is accepted
+    // there and vice versa; otherwise a non-canonical encoding could pass one
+    // side and fail the other.
+    ok = ed25519.verify(sig, msg, pubkey, { zip215: false });
   } catch (e) {
     return { ok: false, detail: `RFC 8032 verify threw: ${e.message}` };
   }
@@ -426,6 +461,38 @@ async function verifyAppendTransition(block, checkpoint, pubkey) {
   return { ok: true };
 }
 
+// ── check #5: BLAKE3 SMT root attestation (ADR-0044) ──────────────────────────
+
+async function verifySmtRootAttestation(block, checkpoint, pubkey) {
+  const enc = new TextEncoder();
+  const digest = blake3(
+    concatBytes(
+      enc.encode("OLY:SMT:ROOT:V1"),
+      lp(enc.encode(checkpoint.shard_id)),
+      lp(bigIntToBE32(checkpoint.ledger_root)),
+      lp(i64ToBE8(checkpoint.tree_size)),
+      lp(fromHex(block.blake3_smt_root_hex)),
+    ),
+  );
+  const message = bigEndianBigInt(digest) % BABYJUBJUB_SUBGROUP_ORDER;
+  if (message.toString() !== block.message) {
+    return {
+      ok: false,
+      detail: "SMT root attestation message does not match reconstructed digest",
+    };
+  }
+  const eddsa = await buildEddsa();
+  const A = [eddsa.F.e(BigInt(pubkey.x)), eddsa.F.e(BigInt(pubkey.y))];
+  const sig = {
+    R8: [eddsa.F.e(BigInt(block.signature.r8x)), eddsa.F.e(BigInt(block.signature.r8y))],
+    S: BigInt(block.signature.s),
+  };
+  if (!bjjInPrimeSubgroup(sig.R8) || !eddsa.verifyPoseidon(eddsa.F.e(message), sig, A)) {
+    return { ok: false, detail: "SMT root attestation BJJ signature is invalid" };
+  }
+  return { ok: true };
+}
+
 // ── CLI ───────────────────────────────────────────────────────────────────────
 
 function parseArgs(argv) {
@@ -459,7 +526,7 @@ async function main() {
   }
 
   // Schema gate — refuse mixed versions.
-  if (bundle.schema !== "olympus-checkpoint-bundle/v3") {
+  if (bundle.schema !== "olympus-checkpoint-bundle/v4") {
     die(2, `unsupported bundle schema: ${bundle.schema}`);
   }
   if (
@@ -484,19 +551,19 @@ async function main() {
   const anchorHex = toHex(anchorHash);
   if (anchorHex !== bundle.anchor_hash.value_hex) {
     console.error(
-      `FAIL [1/5 anchor digest]: reconstructed ${anchorHex} != stored ${bundle.anchor_hash.value_hex}`,
+      `FAIL [1/6 anchor digest]: reconstructed ${anchorHex} != stored ${bundle.anchor_hash.value_hex}`,
     );
     process.exit(1);
   }
-  console.log(`OK   [1/5 anchor digest]   BLAKE3 = ${anchorHex}`);
+  console.log(`OK   [1/6 anchor digest]   BLAKE3 = ${anchorHex}`);
 
   // ── Check 2: Ed25519 over anchor_hash ────────────────────────────────────
   const ed = verifyEd25519(bundle.ed25519, anchorHex);
   if (!ed.ok) {
-    console.error(`FAIL [2/5 Ed25519]: ${ed.detail}`);
+    console.error(`FAIL [2/6 Ed25519]: ${ed.detail}`);
     process.exit(1);
   }
-  console.log(`OK   [2/5 Ed25519]         pubkey=${bundle.ed25519.pubkey_hex.slice(0, 16)}…`);
+  console.log(`OK   [2/6 Ed25519]         pubkey=${bundle.ed25519.pubkey_hex.slice(0, 16)}…`);
 
   // ── Check 3a: authority_pubkey_hash matches Poseidon(Ax,Ay) ──────────────
   const authCheck = await verifyAuthorityPubkeyHash(
@@ -504,20 +571,20 @@ async function main() {
     bundle.checkpoint.authority_pubkey_hash,
   );
   if (!authCheck.ok) {
-    console.error(`FAIL [3a/5 authority pubkey hash]: ${authCheck.detail}`);
+    console.error(`FAIL [3a/6 authority pubkey hash]: ${authCheck.detail}`);
     process.exit(1);
   }
   console.log(
-    `OK   [3a/5 authority hash] Poseidon(Ax,Ay) matches checkpoint.authority_pubkey_hash`,
+    `OK   [3a/6 authority hash] Poseidon(Ax,Ay) matches checkpoint.authority_pubkey_hash`,
   );
 
   // ── Check 3b: BJJ-EdDSA-Poseidon verify ──────────────────────────────────
   const bjj = await verifyBjjEdDSAPoseidon(bundle.bjj_eddsa_poseidon, bundle.checkpoint);
   if (!bjj.ok) {
-    console.error(`FAIL [3b/5 BJJ-EdDSA-Poseidon]: ${bjj.detail}`);
+    console.error(`FAIL [3b/6 BJJ-EdDSA-Poseidon]: ${bjj.detail}`);
     process.exit(1);
   }
-  console.log(`OK   [3b/5 BJJ-EdDSA]      scoped checkpoint statement accepted`);
+  console.log(`OK   [3b/6 BJJ-EdDSA]      scoped checkpoint statement accepted`);
 
   const transition = await verifyAppendTransition(
     bundle.append_transition,
@@ -525,20 +592,36 @@ async function main() {
     bundle.bjj_eddsa_poseidon.pubkey,
   );
   if (!transition.ok) {
-    console.error(`FAIL [4/5 append consistency]: ${transition.detail}`);
+    console.error(`FAIL [4/6 append consistency]: ${transition.detail}`);
     process.exit(1);
   }
-  console.log(`OK   [4/5 append consistency] previous and current roots reconstructed + signed`);
+  console.log(`OK   [4/6 append consistency] previous and current roots reconstructed + signed`);
 
-  // ── Check 5: print the Rust groth16 invocation ───────────────────────────
-  // Deliberately delegated to the independent Rust verifier crate to
-  // avoid pulling snarkjs at runtime. Writing the snapshot files lets
-  // the operator run the cargo command verbatim.
-  const tmpDir = fs.mkdtempSync(path.join(require("os").tmpdir(), "olympus-bundle-"));
-  const proofPath = path.join(tmpDir, "proof.json");
-  const signalsPath = path.join(tmpDir, "public.json");
-  fs.writeFileSync(proofPath, JSON.stringify(bundle.groth16.proof));
-  fs.writeFileSync(signalsPath, JSON.stringify(bundle.groth16.public_signals));
+  // ── Check 5: BLAKE3 SMT root attestation (ADR-0044) ──────────────────────
+  const smtRootCheck = await verifySmtRootAttestation(
+    bundle.smt_root_attestation,
+    bundle.checkpoint,
+    bundle.bjj_eddsa_poseidon.pubkey,
+  );
+  if (!smtRootCheck.ok) {
+    console.error(`FAIL [5/6 SMT root attestation]: ${smtRootCheck.detail}`);
+    process.exit(1);
+  }
+  console.log(
+    `OK   [5/6 SMT root attestation] BLAKE3 CD-HS-ST subtree root reconstructed + signed`,
+  );
+
+  // ── Check 6: bind Groth16 public signals to the checkpoint, then print the
+  //             Rust groth16 invocation ────────────────────────────────────
+  // The Groth16 pairing itself is deliberately delegated to the independent
+  // Rust verifier crate to avoid pulling snarkjs at runtime. But that CLI only
+  // checks the pairing over whatever `public.json` it is handed — it cannot see
+  // this checkpoint. So a bundle carrying a perfectly valid `document_existence`
+  // proof for an UNRELATED tree would pass the Rust step. We therefore bind the
+  // proof's public signals to the authenticated checkpoint HERE, as a hard JS
+  // gate that runs before the hand-off, mirroring the Rust federation receive
+  // path (src-tauri/src/federation/verify.rs: parse_fr(ledger_root)==signals[0]
+  // and Fr::from(tree_size)==signals[2]).
 
   // Bundle v2 is pinned to the document-existence circuit and vkey.
   const expectedCircuit = "document_existence";
@@ -550,13 +633,62 @@ async function main() {
     die(2, `unsupported bundle.groth16.vkey_ref: ${JSON.stringify(bundle.groth16.vkey_ref)}`);
   }
 
+  // `document_existence` declares public-signal order [root, leafIndex, treeSize]
+  // (proofs/circuits/document_existence.circom). Validate the shape/encoding as
+  // canonical decimal field elements before binding — a malformed signals array
+  // is a parse error (exit 2), a well-formed one that disagrees with the signed
+  // checkpoint is a verification failure (exit 1).
+  const signals = bundle.groth16.public_signals;
+  if (!Array.isArray(signals) || signals.length !== 3) {
+    die(2, "bundle.groth16.public_signals must be a 3-element [root, leafIndex, treeSize] array");
+  }
+  let signalRoot;
+  let signalTreeSize;
+  try {
+    signalRoot = requireCanonicalFr(signals[0], "bundle.groth16.public_signals[0] (root)");
+    requireCanonicalFr(signals[1], "bundle.groth16.public_signals[1] (leafIndex)");
+    signalTreeSize = requireCanonicalUnsignedDecimal(
+      signals[2],
+      "bundle.groth16.public_signals[2] (treeSize)",
+      I64_MAX,
+    );
+  } catch (e) {
+    die(2, `malformed Groth16 public signals: ${e.message}`);
+  }
+  // Compare as normalized field elements / integers, NOT raw strings. Both the
+  // signal and the checkpoint field are canonical decimal Fr strings (validated
+  // above and in validateBundleEncoding), so reduce mod the BN254 scalar field
+  // and compare BigInts — exactly the field-element equality the Rust side does.
+  const checkpointRoot = BigInt(bundle.checkpoint.ledger_root) % BN254_SCALAR_MODULUS;
+  const checkpointTreeSize = BigInt(bundle.checkpoint.tree_size);
+  if (
+    signalRoot % BN254_SCALAR_MODULUS !== checkpointRoot ||
+    signalTreeSize !== checkpointTreeSize
+  ) {
+    console.error(
+      "FAIL [6/6 Groth16 binding]: Groth16 public signals do not match the signed " +
+        "checkpoint (root/tree_size) — " +
+        `signals root=${signals[0]} treeSize=${signals[2]} vs ` +
+        `checkpoint ledger_root=${bundle.checkpoint.ledger_root} tree_size=${bundle.checkpoint.tree_size}`,
+    );
+    process.exit(1);
+  }
+  console.log("OK   [6/6 Groth16 binding] public signals bound to checkpoint (root + tree_size)");
+
+  // Writing the snapshot files lets the operator run the cargo command verbatim.
+  const tmpDir = fs.mkdtempSync(path.join(require("os").tmpdir(), "olympus-bundle-"));
+  const proofPath = path.join(tmpDir, "proof.json");
+  const signalsPath = path.join(tmpDir, "public.json");
+  fs.writeFileSync(proofPath, JSON.stringify(bundle.groth16.proof));
+  fs.writeFileSync(signalsPath, JSON.stringify(bundle.groth16.public_signals));
+
   // The guidance below is a POSIX-shell command. Quote every argument so
   // bundle data and temporary paths cannot alter its structure.
   function shellEscape(arg) {
     return "'" + arg.replace(/'/g, "'\\''") + "'";
   }
 
-  console.log(`OK   [5/5 Groth16]         pending — run the independent Rust verifier:`);
+  console.log(`OK   [6/6 Groth16 pairing] pending — run the independent Rust verifier:`);
   console.log("");
   console.log(`     ${shellEscape("cd")} ${shellEscape("verifiers/rust")}`);
   console.log(
@@ -567,7 +699,9 @@ async function main() {
   console.log(`         ${shellEscape("--proof")} ${shellEscape(proofPath)} \\`);
   console.log(`         ${shellEscape("--public-signals")} ${shellEscape(signalsPath)}`);
   console.log("");
-  console.log(`All JS-side checks passed. Run the Groth16 step above for the fourth proof.`);
+  console.log(
+    `JS-side checks passed, incl. public-signal binding. Run the Groth16 pairing step above.`,
+  );
   process.exit(0);
 }
 

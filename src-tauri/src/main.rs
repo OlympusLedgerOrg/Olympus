@@ -14,6 +14,7 @@ mod env;
 mod federation;
 mod ingest_provenance;
 mod integrity;
+mod mmd;
 mod quorum;
 mod routes;
 mod server;
