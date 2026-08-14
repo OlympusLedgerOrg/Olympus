@@ -41,6 +41,7 @@ crates/glib-0.18.5-patched/
 crates/ppv-lite86-patched/
 pg-embed-local/
 proofs/vendor/
+.semgrep/p-rust-snapshot.yml
 
 # Local/runtime output.
 logs/
