@@ -311,8 +311,59 @@ jobs:
             --exclude-rule semgrep.rust.lang.security.args-os.args-os \
             --exclude-rule semgrep.rust.lang.security.args.args
 
+      # .semgrep/fixtures/ deliberately contains synthetic violations (see
+      # that directory's own file headers) -- excluded here so this
+      # production scan doesn't permanently fail on its own test fixtures;
+      # the next step scans them on purpose and asserts the expected count.
       - name: Run Semgrep (Olympus custom invariant rules)
-        run: semgrep scan --config .semgrep/olympus-rules.yml --error --metrics=off
+        run: |
+          semgrep scan --config .semgrep/olympus-rules.yml --error --metrics=off \
+            --exclude '.semgrep/fixtures'
+
+      # Regression test for the rules themselves: semgrep's own --test
+      # fixture runner (semgrep --test) crashes with an internal IndexError
+      # in the pinned 1.168.0 CLI whenever the config file and target
+      # directory sit at different relative depths (reproduced locally
+      # before deciding not to depend on it), so this asserts expected
+      # finding counts directly via --json instead. A rule change that
+      # silently stops matching (the exact failure mode this file's own
+      # header comment describes from an earlier draft) drops the
+      # violations count and fails this step; a rule change that starts
+      # over-matching an intentionally-benign case fails the zero-findings
+      # check below.
+      - name: Validate custom rule fixtures (regression test)
+        run: |
+          set -euo pipefail
+
+          violations_json=$(semgrep scan --config .semgrep/olympus-rules.yml --metrics=off --json \
+            .semgrep/fixtures/smt_write_violations.rs \
+            .semgrep/fixtures/ledger_delete_violations.rs \
+            .semgrep/fixtures/src-tauri/src/smt/todo_violations.rs)
+
+          smt_write_count=$(echo "$violations_json" | jq '[.results[] | select(.check_id | endswith("smt-write-outside-backend"))] | length')
+          ledger_delete_count=$(echo "$violations_json" | jq '[.results[] | select(.check_id | endswith("ledger-delete-violates-insert-only"))] | length')
+          todo_count=$(echo "$violations_json" | jq '[.results[] | select(.check_id | endswith("crypto-todo-fixme"))] | length')
+
+          echo "smt-write-outside-backend: $smt_write_count (expect 5)"
+          echo "ledger-delete-violates-insert-only: $ledger_delete_count (expect 6)"
+          echo "crypto-todo-fixme: $todo_count (expect 6)"
+
+          if [ "$smt_write_count" -ne 5 ] || [ "$ledger_delete_count" -ne 6 ] || [ "$todo_count" -ne 6 ]; then
+            echo "::error::Custom Semgrep rule fixture counts drifted from the pinned expectation -- a rule pattern change silently stopped (or started over-) matching. See .semgrep/fixtures/ and update the expected counts here only after confirming the new counts are correct, not just different."
+            exit 1
+          fi
+
+          allowed_count=$(semgrep scan --config .semgrep/olympus-rules.yml --metrics=off --json \
+            .semgrep/fixtures/smt_write_allowed.rs \
+            .semgrep/fixtures/ledger_delete_allowed.rs \
+            .semgrep/fixtures/src-tauri/src/smt/todo_allowed.rs \
+            | jq '.results | length')
+
+          echo "allowed fixtures: $allowed_count (expect 0)"
+          if [ "$allowed_count" -ne 0 ]; then
+            echo "::error::A custom Semgrep rule fired on a fixture explicitly marked as benign -- see .semgrep/fixtures/*_allowed.rs"
+            exit 1
+          fi
 
   # ── Public API drift (olympus-crypto) ────────────────────────────────────────
   # olympus-crypto carries the ADR-0005 leaf-hash layout and the other

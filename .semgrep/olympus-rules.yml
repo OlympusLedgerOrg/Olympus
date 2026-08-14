@@ -78,6 +78,17 @@ rules:
       for 0044), add the file to this rule's exclude list explicitly
       rather than suppressing the finding.
     # Same three call-shape rationale as smt-write-outside-backend above.
+    # TRUNCATE's regex branch matches smt_nodes/smt_leaves ANYWHERE in the
+    # table list, not just immediately after the keyword: PostgreSQL's
+    # TRUNCATE accepts a comma-separated list of tables in one statement
+    # (unlike DELETE FROM, which only ever targets one), and a naive
+    # `^TRUNCATE\s+smt_...` anchor misses e.g. `TRUNCATE a, b, smt_nodes` --
+    # confirmed as a real, not hypothetical, gap: it silently passed
+    # src-tauri/tests/checkpoint_smt_root_attestation.rs's
+    # `TRUNCATE own_checkpoints, ingest_records, smt_leaves, smt_nodes
+    # CASCADE` before this fix. Re-ran the broadened regex unscoped against
+    # the full repo before trusting it -- surfaces exactly the already-known
+    # excluded files below plus that one genuinely new case, nothing else.
     patterns:
       - pattern-either:
           - pattern: sqlx::query($SQL)
@@ -85,10 +96,15 @@ rules:
           - pattern: $QB.push($SQL)
       - metavariable-regex:
           metavariable: $SQL
-          regex: (?i)^"\s*(DELETE\s+FROM|TRUNCATE)\s+smt_(nodes|leaves)\b
+          regex: (?i)^"\s*(DELETE\s+FROM\s+smt_(nodes|leaves)\b|TRUNCATE\s+(TABLE\s+)?[\w",\s]*\bsmt_(nodes|leaves)\b)
     paths:
       exclude:
         - "**/src-tauri/tests/smt_pg_backend.rs"
+        # Test-isolation TRUNCATE against a throwaway/embedded test database
+        # (see open_pool()'s own doc comment) -- same class as the other
+        # exclusions here, just a multi-table TRUNCATE rather than a
+        # single-table one.
+        - "**/src-tauri/tests/checkpoint_smt_root_attestation.rs"
         # Benchmark tools gated on OLYMPUS_BENCH_DATABASE_URL, explicitly
         # documented in their own headers as operating on a throwaway
         # database (histogram: measures storage-size tradeoffs; persistent
