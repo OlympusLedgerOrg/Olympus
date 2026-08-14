@@ -2,18 +2,23 @@
 
 Self-hosted replacement for the `repowise` MCP server — same shape (repo Q&A,
 diff review, summarization) but running as a plain local Node process backed
-by **your own** Claude or Codex API key instead of an opaque Docker image.
+by **your own** Claude or Codex API key, or by a **local Ollama model** that
+never leaves the machine, instead of an opaque Docker image.
 
 **Trust boundary — read before use.** "Self-hosted" describes where the
-_process_ runs, not where your data goes. Every `repo_qa` / `review_diff` /
-`summarize` call sends the file contents, diffs, and grep results it gathers
-— plus your question or prompt — to the configured Anthropic or OpenAI API
-over the network. wiserepo provides no confidentiality from that provider:
-it is exactly as private as calling their API directly, and no more. Don't
-point it at files you would not otherwise send to that provider (secrets,
-credentials, anything outside this repo — the path-confinement guards in
-`src/repo.mjs` exist specifically to stop the tool from reading and sending
-those without you asking it to by name).
+_process_ runs, not automatically where your data goes — that depends on
+which backend you pick. With `claude` or `openai`, every `repo_qa` /
+`review_diff` / `summarize` call sends the file contents, diffs, and grep
+results it gathers — plus your question or prompt — to the configured
+Anthropic or OpenAI API over the network. wiserepo provides no
+confidentiality from that provider: it is exactly as private as calling
+their API directly, and no more. Don't point it at files you would not
+otherwise send to that provider (secrets, credentials, anything outside
+this repo — the path-confinement guards in `src/repo.mjs` exist
+specifically to stop the tool from reading and sending those without you
+asking it to by name). With `ollama`, none of that applies: the request
+goes to a daemon on `localhost` (or wherever `WISEREPO_OLLAMA_URL` points)
+and nothing crosses the network boundary — see "Local LLM (Ollama)" below.
 
 **The semantic index widens this boundary — it is not scoped to a single
 call.** Running `node bin/build-index.mjs` sends the content of every
@@ -39,10 +44,10 @@ export ANTHROPIC_API_KEY=sk-ant-...
 export OPENAI_API_KEY=sk-...
 ```
 
-Pick the default backend with `WISEREPO_BACKEND=claude|openai` (defaults to
-`claude`); each tool call can also override it per-call. Requests use
-`temperature: 0` (override with `WISEREPO_TEMPERATURE`) and time out after 45s
-(`WISEREPO_TIMEOUT_MS`).
+Pick the default backend with `WISEREPO_BACKEND=claude|openai|ollama`
+(defaults to `claude`); each tool call can also override it per-call.
+Requests use `temperature: 0` (override with `WISEREPO_TEMPERATURE`) and
+time out after 45s (`WISEREPO_TIMEOUT_MS`).
 
 Low temperature reduces wording churn between runs — it does **not** make
 output byte-reproducible, and a floating model alias can change underneath
@@ -54,6 +59,40 @@ split matters.
 
 Already registered as a project MCP server (`wiserepo`) in `.claude.json`
 alongside `repowise` — no extra Claude Code config needed.
+
+## Local LLM (Ollama)
+
+No API key, no per-token cost, no repo content leaving the machine. Needs
+[Ollama](https://ollama.com) running locally and a model pulled:
+
+```bash
+ollama pull qwen3-coder:30b   # ~24GB VRAM at Q4 -- fits a 3090 with room to spare
+export WISEREPO_BACKEND=ollama
+```
+
+`qwen3-coder:30b` is the default (`WISEREPO_OLLAMA_MODEL` to override) —
+picked as the strongest coding-tier model that fits comfortably in 24GB.
+`qwen2.5-coder:14b` is a faster fallback on the same card if 30B feels
+sluggish or context gets tight; `devstral:24b` is worth trying for
+agentic multi-file work specifically. wiserepo talks to Ollama's native
+`/api/chat` endpoint on `http://localhost:11434` by default — override
+the daemon origin with `WISEREPO_OLLAMA_URL` (e.g. for a non-default port
+or a remote/tunneled instance; note that "remote" reopens the
+network-trust question the local case avoids).
+
+Same error-handling contract as the other two backends: the daemon not
+running (connection refused) or timing out classifies as
+`ModelUnavailableError` (non-blocking — `sync-agent-docs.mjs --check`
+never depends on any backend, so this only affects an actual regen or a
+`repo_qa`/`review_diff`/`summarize` call); an unpulled model (HTTP 404
+from Ollama) classifies as `ModelRequestError` (blocking — fix by pulling
+the model, not by retrying).
+
+**Not yet local:** the semantic index's embedding step (`src/embed.mjs`,
+see below) still calls the OpenAI embeddings API regardless of which
+`WISEREPO_BACKEND` you pick for chat — Ollama serves chat completions
+here, not embeddings. Building the index still sends full file contents
+to OpenAI even when every `repo_qa` call itself runs fully local.
 
 ## MCP tools
 

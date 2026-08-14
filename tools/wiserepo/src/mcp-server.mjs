@@ -26,8 +26,10 @@ const MAX_FILES_PER_REQUEST = 40;
 
 const BACKEND_PROPERTY = {
   type: "string",
-  enum: ["claude", "openai"],
-  description: "Which API key/model to use. Defaults to $WISEREPO_BACKEND or claude.",
+  enum: ["claude", "openai", "ollama"],
+  description:
+    "Which backend to use. Defaults to $WISEREPO_BACKEND or claude. " +
+    '"ollama" talks to a local Ollama daemon (no API key, no data leaves the machine).',
 };
 
 const TOOLS = [
