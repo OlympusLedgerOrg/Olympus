@@ -22,10 +22,14 @@
 // changing its count passes structural parity while genuinely drifting, so
 // that version could report "in sync" forever on real, undetected drift.)
 //
-// Once regeneration DOES run (model-backed), the result is still verified
-// with checkStructuralParity before being trusted enough to write — that
-// check is for a different failure mode (the model truncating or dropping
-// content mid-generation), not for staleness detection.
+// Once regeneration DOES run (model-backed), the result is sanitized
+// (src/sanitize.mjs strips control/invisible characters — CLAUDE.md and
+// AGENTS.md are files future AI sessions read as instructions, so raw
+// network-sourced content landing there unfiltered is a real risk, not a
+// generic one) and then verified with checkStructuralParity before being
+// trusted enough to write — that check is for a different failure mode
+// (the model truncating or dropping content mid-generation), not for
+// staleness detection.
 //
 // Exit codes (the pre-commit hook and CI both depend on this distinction):
 //   0 — success (written, or already in sync)
@@ -44,6 +48,7 @@ import path from "node:path";
 import { callModel, ModelUnavailableError } from "../src/backend.mjs";
 import { repoRoot } from "../src/repo.mjs";
 import { checkStructuralParity } from "../src/sections.mjs";
+import { sanitizeGeneratedMarkdown } from "../src/sanitize.mjs";
 import {
   computeSourceHash,
   embedSourceTrailer,
@@ -146,7 +151,11 @@ async function main() {
     fail(`AGENTS.md sync failed: ${err.stack || err.message}`, EXIT_BLOCKING);
   }
 
-  const generated = raw.trim() + "\n";
+  // Sanitize BEFORE structural parity, not after: a stripped invisible/
+  // control character can itself change a bullet/heading count, so running
+  // sanitization first means the parity check sees exactly what will be
+  // written and can catch a sanitization-induced structural change too.
+  const generated = sanitizeGeneratedMarkdown(raw.trim()) + "\n";
 
   const parity = checkStructuralParity(claudeMd, generated, { titleOverride: "# AGENTS.md" });
   if (!parity.ok) {

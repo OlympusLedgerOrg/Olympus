@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Olympus Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-import { readFile, stat, realpath } from "node:fs/promises";
+import { stat, realpath, open } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFile } from "node:child_process";
@@ -83,13 +83,31 @@ export function wouldTruncate(text, maxChars) {
 
 export async function readRepoFile(relPath, { maxBytes = 60_000 } = {}) {
   const real = await resolveInRepoFollowingSymlinks(relPath);
-  const st = await stat(real);
-  if (!st.isFile()) {
-    throw new Error(`"${relPath}" is not a file`);
+  // Open ONE file descriptor and do the isFile check and the read against
+  // THAT descriptor, not the path. A version that called stat(real) and
+  // readFile(real) separately resolved the path twice — an attacker who
+  // can swap what `real` points to between those two calls (a classic
+  // TOCTOU / file-system-race) could pass the check against one file and
+  // have the read return a different one. Once open() succeeds, the
+  // descriptor is pinned to that inode regardless of what later happens to
+  // the path, so fstat + read here are race-free with respect to each
+  // other. (The realpath-based symlink-escape check above this call still
+  // has its own, separate check-then-open window — Node has no portable
+  // atomic "resolve and open in one step" primitive — but collapsing the
+  // isFile-check-then-read into one descriptor closes the race CodeQL
+  // flagged, which was the two-resolution gap, not the initial one.)
+  const handle = await open(real, "r");
+  try {
+    const st = await handle.stat();
+    if (!st.isFile()) {
+      throw new Error(`"${relPath}" is not a file`);
+    }
+    const buf = await handle.readFile();
+    const text = buf.toString("utf8");
+    return truncateText(text, maxBytes, relPath);
+  } finally {
+    await handle.close();
   }
-  const buf = await readFile(real);
-  const text = buf.toString("utf8");
-  return truncateText(text, maxBytes, relPath);
 }
 
 // Flags that `git diff` accepts which write files, read attacker-chosen
