@@ -109,21 +109,6 @@ if [ -n "$STAGED_CLAUDE_MD" ] && [ "${WISEREPO_SKIP:-0}" != "1" ]; then
             echo "   staged; sync would read content outside this commit. Stage or stash the rest"
             echo "   first, or set WISEREPO_SKIP=1. CI's docs-agent-sync job still hard-gates real"
             echo "   drift regardless — a stale AGENTS.md will not silently merge.)"
-        elif [ -z "${ANTHROPIC_API_KEY:-}${OPENAI_API_KEY:-}" ]; then
-            # sync-agent-docs.mjs's --check path needs no key at all (it's a
-            # pure content-hash comparison — see src/source-trailer.mjs).
-            # Only an actual REGENERATION, once real drift is found, needs a
-            # model. Run it either way: on the common "nothing changed"
-            # path it exits 0 with no network call.
-            rc=0
-            node tools/wiserepo/bin/sync-agent-docs.mjs --check || rc=$?
-            if [ "$rc" -eq 0 ]; then
-                pass "AGENTS.md already in sync (verified by content hash, no model needed)"
-            else
-                echo "  (AGENTS.md is stale, but no ANTHROPIC_API_KEY/OPENAI_API_KEY is set to"
-                echo "   regenerate it — set one, or set WISEREPO_SKIP=1. CI's docs-agent-sync job"
-                echo "   will hard-gate this on push regardless.)"
-            fi
         else
             rc=0
             node tools/wiserepo/bin/sync-agent-docs.mjs || rc=$?
@@ -131,8 +116,10 @@ if [ -n "$STAGED_CLAUDE_MD" ] && [ "${WISEREPO_SKIP:-0}" != "1" ]; then
                 git add AGENTS.md
                 pass "AGENTS.md synced"
             elif [ "$rc" -eq 2 ]; then
-                # Model unavailable (network error / timeout / rate limit) —
-                # the check didn't run, it didn't fail. Non-blocking.
+                # Ollama daemon not running / timed out — the check didn't
+                # run, it didn't fail. Non-blocking: not everyone has the
+                # local GPU box up, and a stale AGENTS.md is still hard-
+                # gated by CI's docs-agent-sync job on push.
                 echo "  (skipped — wiserepo backend unavailable, see output above)"
             else
                 # Structural-parity check failed, or wiserepo itself is

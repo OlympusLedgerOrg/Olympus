@@ -7,100 +7,48 @@ import {
   ModelUnavailableError,
   ModelRequestError,
   classifyHttpFailure,
-  isRestrictedOpenAiModel,
-  resolveBackend,
-  redactSecrets,
   numericEnv,
+  DEFAULT_OLLAMA_MODEL,
 } from "../src/backend.mjs";
 
 // The exit-code contract in bin/sync-agent-docs.mjs rests entirely on this
 // classification: "unavailable" must never block a commit, "request error"
 // always must. Getting it backwards either hides a broken config behind a
-// green build, or blocks commits on a transient network blip.
-
-test("auth failures classify as unavailable (non-blocking)", () => {
-  for (const status of [401, 403]) {
-    assert.ok(classifyHttpFailure(status, "nope", "Anthropic") instanceof ModelUnavailableError);
-  }
-});
-
-test("rate limiting classifies as unavailable (non-blocking)", () => {
-  assert.ok(classifyHttpFailure(429, "slow down", "OpenAI") instanceof ModelUnavailableError);
-});
+// green build, or blocks commits on a transient local blip.
 
 test("server errors classify as unavailable (non-blocking)", () => {
   for (const status of [500, 502, 503]) {
-    assert.ok(classifyHttpFailure(status, "boom", "Anthropic") instanceof ModelUnavailableError);
+    assert.ok(classifyHttpFailure(status, "boom") instanceof ModelUnavailableError, `${status}`);
   }
 });
 
-// 402 (quota exhausted -- a billing state, not a malformed request) and 408
-// (timeout -- transient by definition) were originally missing from the
-// non-blocking branch and fell through to ModelRequestError instead. That
-// meant an exhausted OpenAI quota blocked every developer with a key
-// exported from committing at all, contradicting the documented contract
-// that environmental failures never block a commit.
-test("quota-exhausted (402) and request-timeout (408) classify as unavailable (non-blocking)", () => {
-  for (const status of [402, 408]) {
-    assert.ok(
-      classifyHttpFailure(status, "quota exceeded", "OpenAI") instanceof ModelUnavailableError,
-      `status ${status}`,
-    );
-  }
+test("request-timeout (408) classifies as unavailable (non-blocking)", () => {
+  assert.ok(classifyHttpFailure(408, "timed out") instanceof ModelUnavailableError);
+});
+
+// A 404 from Ollama means the model tag isn't pulled. Retrying never fixes
+// that, so it must block AND say what to actually run -- a bare "API error
+// 404" would send someone hunting a network problem that doesn't exist.
+test("404 classifies as blocking and names the pull command", () => {
+  const err = classifyHttpFailure(404, 'model "x" not found');
+  assert.ok(err instanceof ModelRequestError);
+  assert.match(err.message, /ollama pull/);
+  assert.ok(
+    err.message.includes(DEFAULT_OLLAMA_MODEL),
+    `expected the configured model name in: ${err.message}`,
+  );
 });
 
 test("client request errors classify as blocking bugs", () => {
-  for (const status of [400, 404, 422]) {
-    assert.ok(classifyHttpFailure(status, "bad request", "OpenAI") instanceof ModelRequestError);
+  for (const status of [400, 422]) {
+    assert.ok(classifyHttpFailure(status, "bad request") instanceof ModelRequestError, `${status}`);
   }
 });
 
-test("classified errors carry the provider, status and body for debugging", () => {
-  const err = classifyHttpFailure(400, "unknown_parameter: max_tokens", "OpenAI");
-  assert.match(err.message, /OpenAI API error 400/);
-  assert.match(err.message, /unknown_parameter/);
-});
-
-// The original version of this test passed a body with no key-shaped token
-// in it ("invalid x-api-key" — the literal header NAME, not a value), so
-// the regex it asserted against could never match regardless of whether
-// redaction existed. It was a vacuous guard: a refactor that started
-// leaking real keys into messages would pass it unchanged. This version
-// puts an actual key-shaped token in the input and proves it does not
-// survive into the constructed message.
-test("classifyHttpFailure redacts a caller-supplied secret echoed in the response body", () => {
-  const leaked = "sk-ant-api03-AAAABBBBCCCCDDDD";
-  const err = classifyHttpFailure(401, `authentication_error: ${leaked} is invalid`, "Anthropic", [
-    leaked,
-  ]);
-  assert.ok(!err.message.includes(leaked), `credential survived into: ${err.message}`);
-  assert.match(err.message, /\[REDACTED\]/);
-});
-
-test("redactSecrets replaces every occurrence, ignores empty/falsy secrets", () => {
-  assert.equal(redactSecrets("a-KEY-b-KEY-c", ["KEY"]), "a-[REDACTED]-b-[REDACTED]-c");
-  assert.equal(redactSecrets("unchanged", ["", undefined, null]), "unchanged");
-});
-
-// gpt-5 / o-series reject `max_tokens` and any non-default temperature; older
-// chat models reject `max_completion_tokens`. Sending the wrong pair yields a
-// 400 that would otherwise surface only at runtime.
-test("isRestrictedOpenAiModel identifies reasoning/gpt-5 model families", () => {
-  for (const m of ["gpt-5-codex", "gpt-5", "o1-preview", "o3-mini"]) {
-    assert.equal(isRestrictedOpenAiModel(m), true, m);
-  }
-  for (const m of ["gpt-4o", "gpt-4-turbo", "gpt-3.5-turbo"]) {
-    assert.equal(isRestrictedOpenAiModel(m), false, m);
-  }
-});
-
-test("resolveBackend accepts the two supported backends, case-insensitively", () => {
-  assert.equal(resolveBackend("claude"), "claude");
-  assert.equal(resolveBackend("OpenAI"), "openai");
-});
-
-test("resolveBackend rejects an unknown backend as a request error", () => {
-  assert.throws(() => resolveBackend("gemini"), ModelRequestError);
+test("classified errors carry the status and body for debugging", () => {
+  const err = classifyHttpFailure(400, "invalid options.num_predict");
+  assert.match(err.message, /Ollama API error 400/);
+  assert.match(err.message, /num_predict/);
 });
 
 // numericEnv guards WISEREPO_TIMEOUT_MS / WISEREPO_TEMPERATURE. Before this,
@@ -108,7 +56,7 @@ test("resolveBackend rejects an unknown backend as a request error", () => {
 // coerces to 1ms, so the very next model call would abort almost instantly,
 // get classified as ModelUnavailableError, and the pre-commit hook would
 // report "backend unavailable, skipping AGENTS.md sync" forever — a typo'd
-// env var indistinguishable from an actual network problem, with no
+// env var indistinguishable from an actual daemon-down condition, with no
 // diagnostic pointing at the real cause. numericEnv must reject that at
 // load time instead, loudly, as a blocking ModelRequestError.
 test("numericEnv returns the fallback when unset or empty", () => {

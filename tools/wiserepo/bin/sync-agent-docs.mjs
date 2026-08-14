@@ -37,12 +37,12 @@
 //       has no trailer at all), or a regeneration's output failed
 //       structural parity, or wiserepo itself is broken (bad request,
 //       programming error). All of these need a human.
-//   2 — NON-BLOCKING. The backend was unavailable: no API key, network
-//       error, timeout, rate limit, auth rejection, empty completion. The
-//       check did not run — that is not the same as failing. --check itself
-//       never hits this path (see above) — only actual regeneration can.
+//   2 — NON-BLOCKING. The backend was unavailable: Ollama daemon not
+//       running, network error, timeout, empty completion. The check did
+//       not run — that is not the same as failing. --check itself never
+//       hits this path (see above) — only actual regeneration can.
 //
-// Usage: node bin/sync-agent-docs.mjs [--check] [--backend claude|openai]
+// Usage: node bin/sync-agent-docs.mjs [--check]
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { callModel, ModelUnavailableError } from "../src/backend.mjs";
@@ -60,8 +60,6 @@ const EXIT_UNAVAILABLE = 2;
 
 const args = process.argv.slice(2);
 const checkOnly = args.includes("--check");
-const backendIdx = args.indexOf("--backend");
-const backend = backendIdx !== -1 ? args[backendIdx + 1] : undefined;
 
 const ROOT = repoRoot();
 const CLAUDE_MD = path.join(ROOT, "CLAUDE.md");
@@ -118,7 +116,8 @@ async function main() {
   }
 
   // --check is purely detection — deterministic, no model call, so it can
-  // never be blocked by an unavailable backend and never needs an API key.
+  // never be blocked by an unavailable backend and needs no Ollama daemon
+  // running at all.
   if (checkOnly) {
     fail(
       recordedHash
@@ -140,7 +139,7 @@ async function main() {
 
   let raw;
   try {
-    raw = await callModel({ system: SYSTEM_PROMPT, prompt, backend, maxTokens: 16384 });
+    raw = await callModel({ system: SYSTEM_PROMPT, prompt, maxTokens: 16384 });
   } catch (err) {
     if (err instanceof ModelUnavailableError) {
       fail(`backend unavailable, skipping AGENTS.md sync: ${err.message}`, EXIT_UNAVAILABLE);
@@ -179,9 +178,9 @@ async function main() {
   // query: sanitizeGeneratedMarkdown strips control/invisible characters
   // BEFORE this line (see the call above), checkStructuralParity gates the
   // content's shape before this line runs at all, AGENTS_MD is a hardcoded
-  // constant path (never attacker-influenced), and this line only executes
-  // when the CI ANTHROPIC_API_KEY is present -- which ci.yml scopes to
-  // `push` only, never `pull_request` (see that workflow's own comment).
+  // constant path (never attacker-influenced), and the "network" the data
+  // arrives over is a loopback request to an Ollama daemon on this machine
+  // -- CI never reaches this line at all, since it only ever runs --check.
   await writeFile(AGENTS_MD, newAgentsMd, "utf8");
   console.log("[wiserepo] AGENTS.md regenerated from CLAUDE.md and stamped with its source hash.");
 }

@@ -223,56 +223,21 @@ jobs:
         working-directory: tools/wiserepo
 
       - name: Check AGENTS.md is in sync with CLAUDE.md
-        env:
-          # SECURITY: only exposed on `push` (i.e. post-merge on a protected
-          # branch), never on `pull_request`. `pull_request` checks out the
-          # PR head and runs `node bin/sync-agent-docs.mjs`, which imports
-          # code FROM that checkout — a same-repository PR could modify
-          # backend.mjs (or anything else executed in this step) to read
-          # process.env.ANTHROPIC_API_KEY and exfiltrate it, regardless of
-          # whether the model is ever actually called. Gating on event_name
-          # here, rather than moving this to `pull_request_target` (which
-          # would keep the secret but run trusted workflow code against an
-          # untrusted checkout — a well-known worse mistake), means a PR run
-          # always sees an empty key and exercises only the two model-free
-          # paths: the unit tests above, and sync-agent-docs.mjs's own
-          # structural short-circuit (see that script — it skips the model
-          # entirely when the committed AGENTS.md already satisfies parity
-          # against a content-hash-verified CLAUDE.md). Real drift beyond
-          # that circuit is caught by the post-merge push run instead.
-          ANTHROPIC_API_KEY: ${{ github.event_name == 'push' && secrets.WISEREPO_ANTHROPIC_API_KEY || '' }}
         run: |
-          # This is a soft gate, not a hard one: sync-agent-docs.mjs exits 2
-          # (non-blocking) when the model backend is unavailable — no repo
-          # secret configured, network hiccup, timeout — and only exits 1
-          # (blocking, fails this job) when the model DID respond but
-          # dropped or reordered content relative to CLAUDE.md, or when
-          # --check finds genuine drift. See the exit code contract
-          # documented at the top of that script.
+          # A HARD gate, and cheap: `--check` is a pure content-hash
+          # comparison of CLAUDE.md against the source-hash trailer stamped
+          # in AGENTS.md. It calls no model, so it needs no Ollama daemon,
+          # no network, and no secret — and can therefore only exit 0 (in
+          # sync) or 1 (drifted). The exit-2 "backend unavailable" branch of
+          # the contract is unreachable here by construction; only an actual
+          # regeneration (running this script WITHOUT --check, which CI
+          # never does) can hit it.
           #
-          # The `if node ...; then / else rc=$? / fi` capture below is
-          # required, not decorative: a bare `node bin/sync-agent-docs.mjs
-          # --check` as the last command in this step would let its exit
-          # code become the step's exit code directly, and GitHub Actions
-          # fails the step on ANY nonzero code — including exit 2, which the
-          # whole point of this contract is to treat as non-blocking.
-          if [ -z "$ANTHROPIC_API_KEY" ]; then
-            if [ "${GITHUB_EVENT_NAME:-}" = "pull_request" ]; then
-              echo "::notice::AGENTS.md drift is checked structurally (no model call) on pull_request; the model-backed check runs post-merge on push to main."
-            else
-              echo "::warning::WISEREPO_ANTHROPIC_API_KEY repo secret is not set — AGENTS.md drift is NOT being checked in CI. Set the secret to enable this gate (see tools/wiserepo/README.md)."
-            fi
-          fi
-          if node bin/sync-agent-docs.mjs --check; then
-            exit 0
-          else
-            rc=$?
-            if [ "$rc" -eq 2 ]; then
-              echo "::warning::wiserepo backend unavailable; AGENTS.md drift was not checked."
-              exit 0
-            fi
-            exit "$rc"
-          fi
+          # This step previously had to juggle a repo secret and skip itself
+          # on pull_request to avoid exposing an API key to PR-authored
+          # code. wiserepo is Ollama-only now: there is no key to leak, so
+          # the gate runs identically on every trigger.
+          node bin/sync-agent-docs.mjs --check
         working-directory: tools/wiserepo
 
   # ── Formatting + per-file license headers ───────────────────────────────────

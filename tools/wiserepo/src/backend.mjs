@@ -1,21 +1,24 @@
 // SPDX-FileCopyrightText: 2026 Olympus Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-// Minimal model backend for wiserepo: talks to Claude or Codex (OpenAI)
-// directly over fetch, no vendor SDK required. Keys come from the
-// environment only — never hardcode, never log, never write to disk.
+// Minimal model backend for wiserepo: talks to a local Ollama daemon over
+// fetch, no vendor SDK required. There is deliberately no cloud backend --
+// see README's trust-boundary section. Repo contents (file bodies, diffs,
+// grep hits) are handed to this module verbatim, and keeping the only
+// possible destination a process on localhost is what makes that safe by
+// construction rather than by policy.
 
-const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
-const OPENAI_URL = "https://api.openai.com/v1/chat/completions";
-
-const DEFAULT_CLAUDE_MODEL = process.env.WISEREPO_CLAUDE_MODEL || "claude-sonnet-5";
-const DEFAULT_OPENAI_MODEL = process.env.WISEREPO_OPENAI_MODEL || "gpt-5-codex";
+const DEFAULT_OLLAMA_URL = process.env.WISEREPO_OLLAMA_URL || "http://localhost:11434";
+// qwen3-coder:30b: strongest coding-tier model that fits a 24GB card (e.g.
+// RTX 3090) at Q4. Override with WISEREPO_OLLAMA_MODEL -- e.g.
+// qwen2.5-coder:7b on an 8GB card, or qwen2.5-coder:14b for more speed.
+const DEFAULT_OLLAMA_MODEL = process.env.WISEREPO_OLLAMA_MODEL || "qwen3-coder:30b";
 
 /**
  * The backend could not be reached or could not produce usable output:
- * missing key, network failure, timeout, rate limit, auth rejection, or a
- * 200 whose body has no usable text. Callers treat this as "the check did
- * not run", NOT "the check failed" — it must never block a commit.
+ * daemon not running, network failure, timeout, or a 200 whose body has no
+ * usable text. Callers treat this as "the check did not run", NOT "the check
+ * failed" — it must never block a commit.
  */
 export class ModelUnavailableError extends Error {
   constructor(message, { cause } = {}) {
@@ -26,11 +29,11 @@ export class ModelUnavailableError extends Error {
 }
 
 /**
- * The request itself was wrong — bad model name, malformed body, a 400 that
- * will recur on every retry, or a misconfigured environment variable. This
- * is a bug in wiserepo or its config, and is surfaced as a real failure
- * rather than silently skipped: a gate that fails OPEN on a typo is worse
- * than no gate, because it reports "skipping" instead of "misconfigured".
+ * The request itself was wrong — model not pulled, malformed body, or a
+ * misconfigured environment variable. This is a bug in wiserepo or its
+ * config, and is surfaced as a real failure rather than silently skipped: a
+ * gate that fails OPEN on a typo is worse than no gate, because it reports
+ * "skipping" instead of "misconfigured".
  */
 export class ModelRequestError extends Error {
   constructor(message, { cause } = {}) {
@@ -59,55 +62,35 @@ function numericEnv(name, fallback, { min, max }) {
 
 // Low temperature reduces wording churn between runs on unchanged input. It
 // does NOT make output byte-reproducible — sampling variance survives, and a
-// floating model alias can change underneath you. Nothing in this tool may
-// assume byte-identical regeneration; see sync-agent-docs.mjs, which compares
+// model tag can be re-pulled underneath you. Nothing in this tool may assume
+// byte-identical regeneration; see sync-agent-docs.mjs, which compares
 // structure rather than bytes for exactly this reason.
 const DEFAULT_TEMPERATURE = numericEnv("WISEREPO_TEMPERATURE", 0, { min: 0, max: 2 });
-const DEFAULT_TIMEOUT_MS = numericEnv("WISEREPO_TIMEOUT_MS", 45_000, { min: 1_000, max: 600_000 });
+// Local generation on a 30B model is a lot slower per token than a hosted
+// frontier API, and review_diff/sync-agent-docs can emit thousands of
+// tokens, so this default is much larger than a cloud-backed tool would
+// need. Raise it further (or drop to a smaller model) if a big regeneration
+// still times out.
+const DEFAULT_TIMEOUT_MS = numericEnv("WISEREPO_TIMEOUT_MS", 300_000, {
+  min: 1_000,
+  max: 1_800_000,
+});
 
-// Model families that reject `max_tokens` (requiring `max_completion_tokens`)
-// and reject any `temperature` other than the default.
-function isRestrictedOpenAiModel(model) {
-  return /^(o\d|gpt-5)/.test(model);
-}
-
-function resolveBackend(explicit) {
-  const backend = (explicit || process.env.WISEREPO_BACKEND || "claude").toLowerCase();
-  if (backend !== "claude" && backend !== "openai") {
-    throw new ModelRequestError(
-      `Unknown wiserepo backend "${backend}" — expected "claude" or "openai"`,
+// Map an HTTP failure onto the right error class. Server errors and
+// request-timeout (408) are transient => unavailable (non-blocking). A 404
+// (model not pulled) or 400 (bad request body) means retrying never fixes
+// it => request error (blocking), because silence would hide the bug.
+//
+// Ollama needs no credential, so unlike a cloud backend there is no 401/403
+// path and nothing secret to redact from an error body.
+function classifyHttpFailure(status, body, provider = "Ollama") {
+  const msg = `${provider} API error ${status}: ${body}`;
+  if (status === 404) {
+    return new ModelRequestError(
+      `${msg} (model "${DEFAULT_OLLAMA_MODEL}" not pulled? try: ollama pull ${DEFAULT_OLLAMA_MODEL})`,
     );
   }
-  return backend;
-}
-
-// A provider error body can echo back a submitted credential (some auth
-// failure responses include the offending header value). Strip every
-// caller-supplied secret out of the body before it becomes part of an error
-// message that gets logged, printed by the pre-commit hook, or surfaced in
-// CI output.
-function redactSecrets(text, secrets) {
-  let redacted = text;
-  for (const secret of secrets) {
-    if (secret) redacted = redacted.split(secret).join("[REDACTED]");
-  }
-  return redacted;
-}
-
-// Map an HTTP failure onto the right error class. Auth/rate-limit/server
-// errors, plus billing (402) and request-timeout (408), are transient-or-
-// environmental => unavailable (non-blocking): a 402 from an exhausted
-// OpenAI quota, or a 408, would otherwise block every developer with that
-// key exported until someone edits this file. A 400/404/422 means we built
-// a bad request => request error (blocking), because retrying never fixes
-// it and silence would hide the bug.
-function classifyHttpFailure(status, rawBody, provider, secrets = []) {
-  const body = redactSecrets(rawBody, secrets);
-  const msg = `${provider} API error ${status}: ${body}`;
-  if (status === 401 || status === 403) {
-    return new ModelUnavailableError(`${msg} (check your API key)`);
-  }
-  if (status === 402 || status === 408 || status === 429 || status >= 500) {
+  if (status === 408 || status >= 500) {
     return new ModelUnavailableError(msg);
   }
   return new ModelRequestError(msg);
@@ -117,7 +100,7 @@ function classifyHttpFailure(status, rawBody, provider, secrets = []) {
 // response. `fetch()` resolves as soon as headers arrive — the body is
 // still streaming — so a version of this that only timed `fetch()` and let
 // callers read `res.text()`/`res.json()` afterward left the body read
-// completely unbounded: a provider that returns 200 with headers and then
+// completely unbounded: a daemon that returns 200 with headers and then
 // stalls mid-body would hang the process with no diagnostic, which for
 // `sync-agent-docs.mjs` invoked from the pre-commit hook means hanging the
 // developer's commit.
@@ -134,7 +117,13 @@ async function fetchWithTimeout(url, options, timeoutMs) {
         cause: err,
       });
     }
-    throw new ModelUnavailableError(`request to ${url} failed: ${err.message}`, { cause: err });
+    // Connection-refused lands here, which is the overwhelmingly common
+    // case: the Ollama daemon isn't running. That's environmental, not a
+    // bug in the request, so it stays non-blocking.
+    throw new ModelUnavailableError(
+      `request to ${url} failed: ${err.message} (is the Ollama daemon running?)`,
+      { cause: err },
+    );
   } finally {
     clearTimeout(timer);
   }
@@ -148,113 +137,45 @@ function parseJsonBody(body, provider) {
   }
 }
 
-async function callClaude({ system, prompt, maxTokens, temperature, timeoutMs }) {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) {
-    throw new ModelUnavailableError(
-      "ANTHROPIC_API_KEY is not set — export it before using the claude backend",
-    );
-  }
-  const { res, body } = await fetchWithTimeout(
-    ANTHROPIC_URL,
-    {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model: DEFAULT_CLAUDE_MODEL,
-        max_tokens: maxTokens ?? 4096,
-        temperature,
-        system,
-        messages: [{ role: "user", content: prompt }],
-      }),
-    },
-    timeoutMs,
-  );
-  if (!res.ok) {
-    throw classifyHttpFailure(res.status, body, "Anthropic", [apiKey]);
-  }
-  const data = parseJsonBody(body, "Anthropic");
-  const text = data.content?.map((block) => block.text ?? "").join("") ?? "";
-  if (!text.trim()) {
-    throw new ModelUnavailableError("Anthropic returned an empty or unparseable completion");
-  }
-  return text;
-}
-
-async function callOpenAI({ system, prompt, maxTokens, temperature, timeoutMs }) {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    throw new ModelUnavailableError(
-      "OPENAI_API_KEY is not set — export it before using the openai backend",
-    );
-  }
-  const model = DEFAULT_OPENAI_MODEL;
-  const body = {
-    model,
-    messages: [
-      { role: "system", content: system },
-      { role: "user", content: prompt },
-    ],
-  };
-  // Reasoning / gpt-5-class models reject `max_tokens` and any non-default
-  // `temperature`; older chat models reject `max_completion_tokens`.
-  if (isRestrictedOpenAiModel(model)) {
-    body.max_completion_tokens = maxTokens ?? 4096;
-  } else {
-    body.max_tokens = maxTokens ?? 4096;
-    body.temperature = temperature;
-  }
-
-  const { res, body: responseBody } = await fetchWithTimeout(
-    OPENAI_URL,
-    {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify(body),
-    },
-    timeoutMs,
-  );
-  if (!res.ok) {
-    throw classifyHttpFailure(res.status, responseBody, "OpenAI", [apiKey]);
-  }
-  const data = parseJsonBody(responseBody, "OpenAI");
-  const text = data.choices?.[0]?.message?.content ?? "";
-  if (!text.trim()) {
-    throw new ModelUnavailableError("OpenAI returned an empty or unparseable completion");
-  }
-  return text;
-}
-
 /**
- * @param {{ system?: string, prompt: string, backend?: string, maxTokens?: number, temperature?: number, timeoutMs?: number }} args
+ * @param {{ system?: string, prompt: string, maxTokens?: number, temperature?: number, timeoutMs?: number }} args
  * @returns {Promise<string>}
  */
-export async function callModel({
-  system = "",
-  prompt,
-  backend,
-  maxTokens,
-  temperature,
-  timeoutMs,
-}) {
-  const resolved = resolveBackend(backend);
-  const resolvedTemperature = temperature ?? DEFAULT_TEMPERATURE;
-  const resolvedTimeout = timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const args = {
-    system,
-    prompt,
-    maxTokens,
-    temperature: resolvedTemperature,
-    timeoutMs: resolvedTimeout,
-  };
-  return resolved === "claude" ? callClaude(args) : callOpenAI(args);
+export async function callModel({ system = "", prompt, maxTokens, temperature, timeoutMs }) {
+  const url = `${DEFAULT_OLLAMA_URL.replace(/\/+$/, "")}/api/chat`;
+  const options = { temperature: temperature ?? DEFAULT_TEMPERATURE };
+  // Ollama's cap is num_predict, not max_tokens. Only set it when a caller
+  // actually asked for one -- omitting it lets the model run to its natural
+  // stop, whereas passing undefined through would serialize as null and be
+  // rejected.
+  if (maxTokens !== undefined) options.num_predict = maxTokens;
+
+  const { res, body } = await fetchWithTimeout(
+    url,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: DEFAULT_OLLAMA_MODEL,
+        stream: false,
+        options,
+        messages: [
+          { role: "system", content: system },
+          { role: "user", content: prompt },
+        ],
+      }),
+    },
+    timeoutMs ?? DEFAULT_TIMEOUT_MS,
+  );
+  if (!res.ok) {
+    throw classifyHttpFailure(res.status, body);
+  }
+  const data = parseJsonBody(body, "Ollama");
+  const text = data.message?.content ?? "";
+  if (!text.trim()) {
+    throw new ModelUnavailableError("Ollama returned an empty or unparseable completion");
+  }
+  return text;
 }
 
-export { resolveBackend, isRestrictedOpenAiModel, classifyHttpFailure, redactSecrets, numericEnv };
+export { classifyHttpFailure, numericEnv, DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL };

@@ -1,19 +1,27 @@
 # wiserepo
 
 Self-hosted replacement for the `repowise` MCP server — same shape (repo Q&A,
-diff review, summarization) but running as a plain local Node process backed
-by **your own** Claude or Codex API key instead of an opaque Docker image.
+diff review, summarization) but running as a plain local Node process against
+a **local Ollama model**, instead of an opaque Docker image.
 
-**Trust boundary — read before use.** "Self-hosted" describes where the
-_process_ runs, not where your data goes. Every `repo_qa` / `review_diff` /
-`summarize` call sends the file contents, diffs, and grep results it gathers
-— plus your question or prompt — to the configured Anthropic or OpenAI API
-over the network. wiserepo provides no confidentiality from that provider:
-it is exactly as private as calling their API directly, and no more. Don't
-point it at files you would not otherwise send to that provider (secrets,
-credentials, anything outside this repo — the path-confinement guards in
-`src/repo.mjs` exist specifically to stop the tool from reading and sending
-those without you asking it to by name).
+**Trust boundary.** Repo contents leave the machine: never. wiserepo hands
+this tool's model whatever `repo_qa` / `review_diff` / `summarize` gathers —
+file bodies, diffs, grep hits — and the only destination it can reach is an
+Ollama daemon on `localhost`. There is deliberately **no cloud backend and
+no API key**: that isn't a configuration default you could flip, it's the
+only code path that exists (`src/backend.mjs`). For a repo whose whole point
+is verifiable custody of documents, "the model can't phone home because
+there's nothing to phone" is a stronger property than any policy setting.
+
+Two caveats worth stating plainly, since "local" invites over-trust:
+
+- The path-confinement guards in `src/repo.mjs` still matter. They stop the
+  tool from reading files outside the repo (e.g. a symlink to
+  `~/.ssh/id_rsa`) — with a local model that's no longer an exfiltration
+  risk, but it's still the tool reading things you didn't ask it to.
+- `WISEREPO_OLLAMA_URL` can be pointed at a non-localhost daemon. If you do
+  that, you've reopened the network-trust question this design closes — the
+  guarantee above is about the default, not about every possible config.
 
 ## Setup
 
@@ -22,25 +30,34 @@ cd tools/wiserepo
 npm install
 ```
 
-Set one or both keys in your shell environment (never commit them):
+Install [Ollama](https://ollama.com), then pull a model:
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...
-export OPENAI_API_KEY=sk-...
+ollama pull qwen3-coder:30b
 ```
 
-Pick the default backend with `WISEREPO_BACKEND=claude|openai` (defaults to
-`claude`); each tool call can also override it per-call. Requests use
-`temperature: 0` (override with `WISEREPO_TEMPERATURE`) and time out after 45s
-(`WISEREPO_TIMEOUT_MS`).
+That's the default (`WISEREPO_OLLAMA_MODEL` to override) — the strongest
+coding-tier model that fits a 24GB card (e.g. an RTX 3090) at Q4. On a
+smaller card use `qwen2.5-coder:14b`, or `qwen2.5-coder:7b` for 8GB.
+`devstral:24b` is worth trying for agentic multi-file work specifically.
+
+No API key, no per-token cost, nothing to rotate or leak. Other knobs:
+
+- `WISEREPO_OLLAMA_URL` — daemon origin (default `http://localhost:11434`)
+- `WISEREPO_TEMPERATURE` — default `0`
+- `WISEREPO_TIMEOUT_MS` — default `300000` (5 min). Much larger than a
+  cloud-backed tool would need: local generation on a 30B model is far
+  slower per token, and `review_diff` / AGENTS.md regeneration can emit
+  thousands of tokens. Raise it (or drop to a smaller model) if a big
+  regeneration still times out.
 
 Low temperature reduces wording churn between runs — it does **not** make
-output byte-reproducible, and a floating model alias can change underneath
-you. Nothing here assumes a _regeneration_ is byte-identical to the last
-one; the drift _detection_ below is byte-based (a hash of `CLAUDE.md`
-itself, not of the model's output), and a _successful_ regeneration's output
-is separately verified for structure, not bytes. See below for why that
-split matters.
+output byte-reproducible, and re-pulling a model tag can change the weights
+underneath you. Nothing here assumes a _regeneration_ is byte-identical to
+the last one; the drift _detection_ below is byte-based (a hash of
+`CLAUDE.md` itself, not of the model's output), and a _successful_
+regeneration's output is separately verified for structure, not bytes. See
+below for why that split matters.
 
 Already registered as a project MCP server (`wiserepo`) in `.claude.json`
 alongside `repowise` — no extra Claude Code config needed.
@@ -128,20 +145,21 @@ automatically trustworthy — read the diff.
   regeneration's output failed structural parity, or wiserepo itself is
   broken (bad request, programming error, unreadable `CLAUDE.md`). All of
   these need a human.
-- `2` — **non-blocking.** The backend was unavailable: no API key, network
-  error, timeout, rate limit, auth rejection, or an empty completion. The
-  check did not run — which is not the same as failing. **`--check` never
-  hits this path** — hash comparison needs no model, so it can only exit `0`
-  or `1`. Only an actual regeneration (no `--check`) can hit `2`.
+- `2` — **non-blocking.** The backend was unavailable: Ollama daemon not
+  running, network error, timeout, or an empty completion. The check did not
+  run — which is not the same as failing. **`--check` never hits this path**
+  — hash comparison needs no model, so it can only exit `0` or `1`. Only an
+  actual regeneration (no `--check`) can hit `2`.
 
 The 1-vs-2 split for regeneration failures is deliberate and tested
-(`test/backend.test.mjs`): a 401 or 429 must never block a commit, while a
-400 (a request _we_ built wrong) must, because retrying will never fix it
-and silence would hide the bug.
+(`test/backend.test.mjs`): a daemon that isn't running must never block a
+commit, while a 400 (a request _we_ built wrong) or a 404 (model never
+pulled) must, because retrying will never fix either one and silence would
+hide the bug.
 
 ```bash
-node tools/wiserepo/bin/sync-agent-docs.mjs          # regenerate (needs a key only if hash drifted)
-node tools/wiserepo/bin/sync-agent-docs.mjs --check  # CI-style: exit 1 if stale, never needs a key
+node tools/wiserepo/bin/sync-agent-docs.mjs          # regenerate (needs Ollama only if hash drifted)
+node tools/wiserepo/bin/sync-agent-docs.mjs --check  # CI-style: exit 1 if stale, never needs Ollama
 ```
 
 ### Where it's wired in
@@ -149,20 +167,17 @@ node tools/wiserepo/bin/sync-agent-docs.mjs --check  # CI-style: exit 1 if stale
 - **`.githooks/pre-commit`** — runs automatically whenever `CLAUDE.md` is
   staged, re-stages the regenerated `AGENTS.md` into the same commit on
   success, blocks the commit on exit `1`, and warns-but-continues on exit
-  `2` (no key configured yet, or npm deps not installed). Silence it
-  entirely with `WISEREPO_SKIP=1`.
+  `2` (Ollama not running, or npm deps not installed). Silence it entirely
+  with `WISEREPO_SKIP=1`.
 - **CI (`docs-agent-sync` job in `.github/workflows/ci.yml`)** — runs
   `npm test` unconditionally, then `--check`. Because `--check` is pure hash
-  comparison, it runs the **same way on every trigger and needs no secret at
-  all** — it's a hard gate on `pull_request`, not a soft one. The
-  `ANTHROPIC_API_KEY` env var in that step is deliberately scoped to
-  `github.event_name == 'push'` only: a `pull_request` job checks out the PR
-  head and runs `node` against that checkout, so any code a same-repository
-  PR adds (in `sync-agent-docs.mjs` or anywhere else executed in that step)
-  could otherwise read and exfiltrate the secret regardless of whether the
-  model is ever actually called. On `push` (post-merge, protected branch)
-  the key is present so a genuinely stale `AGENTS.md` can be regenerated by
-  re-running the script by hand or in a follow-up job.
+  comparison it needs no model, no daemon, and no secret, so it's a **hard
+  gate on every trigger**. GitHub runners have no Ollama and never need one:
+  regeneration is a local-developer action, and CI's job is only to refuse a
+  stale `AGENTS.md`, never to produce a fresh one. This step used to juggle
+  a repo secret and skip itself on `pull_request` to keep an API key away
+  from PR-authored code; going Ollama-only deleted that whole class of
+  problem along with the key.
 
 ## Tests
 
@@ -171,16 +186,18 @@ cd tools/wiserepo
 npm test
 ```
 
-65 tests covering the places a bug is silent rather than loud:
+70 tests covering the places a bug is silent rather than loud:
 
 - `resolveInRepo` path-traversal guard, including the sibling-prefix case
   (`Olympus-evil` must not count as inside `Olympus`) — and
   `resolveInRepoFollowingSymlinks`, which catches what the lexical check
   can't: a repo-tracked symlink pointing at `~/.ssh/id_rsa` passes
   `resolveInRepo` (it's lexically inside the repo) but must still be
-  refused, because `readRepoFile` puts whatever it reads into a prompt sent
-  to a third-party model API. An unguarded version of this was a real
-  exfiltration path, not a hypothetical.
+  refused, because `readRepoFile` puts whatever it reads into a prompt. Back
+  when wiserepo had a cloud backend an unguarded version of this was a real
+  exfiltration path, not a hypothetical; with a local-only model the guard
+  now stops the tool reading files you never pointed it at, rather than
+  stopping them leaving the machine.
 - `sanitizeDiffArgs` option-injection guard, including an end-to-end check
   that `gitDiff(["--output=…"])` writes no file, and a `gitGrep` globs
   regression (a double `--` silently made every glob after the first match
@@ -193,9 +210,9 @@ npm test
 - `source-trailer`'s hash tracking, including the regression proving a
   prose-only edit (same Markdown structure, different meaning) changes the
   hash — the exact case structural parity alone let through.
-- HTTP failure classification (`401/403/429/5xx` plus `402/408` → non-
-  blocking, `4xx` → blocking), the OpenAI restricted-model parameter split,
-  `numericEnv`'s rejection of malformed `WISEREPO_TIMEOUT_MS`/
-  `WISEREPO_TEMPERATURE` (silently becoming `NaN` used to fail the gate open
-  forever with no diagnostic), and API-key redaction from provider error
-  bodies.
+- HTTP failure classification (`408`/`5xx` → non-blocking; `400`/`422` →
+  blocking; `404` → blocking _and_ naming the `ollama pull` command to run,
+  since a bare "API error 404" sends people hunting a network problem that
+  doesn't exist), and `numericEnv`'s rejection of malformed
+  `WISEREPO_TIMEOUT_MS`/`WISEREPO_TEMPERATURE` (silently becoming `NaN` used
+  to fail the gate open forever with no diagnostic).
