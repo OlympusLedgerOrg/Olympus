@@ -6,8 +6,10 @@
 # digest and per-vkey SHA-256 fingerprints). Those hex lines trip the
 # `generic-api-key` rule again under a fresh commit hash on every edit to the
 # file: 44 of the 88 baseline entries are exactly this class, spread across
-# eleven commits. Digests are not credentials — allowlist the file by path so
-# the baseline stops growing on every touch.
+# eleven commits. Digests are not credentials — allowlist the file for that
+# rule so the baseline stops growing on every touch. The allowlist is scoped
+# via targetRules to generic-api-key only, so every other rule (private keys,
+# provider tokens, …) still fires on this file.
 
 title = "Olympus gitleaks config"
 
@@ -16,4 +18,5 @@ useDefault = true
 
 [[allowlists]]
 description = "proofs/keys/PROVENANCE.md — public artifact hash fingerprints, not secrets"
+targetRules = [ "generic-api-key" ]
 paths = [ '''^proofs/keys/PROVENANCE\.md$''' ]
