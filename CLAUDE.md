@@ -360,15 +360,22 @@ Key `.env` variables:
   response (fix confirmations and declines alike) — replies feed its
   learnings database, so decisions persist across future reviews.
 - **CodeRabbit allows 10 PR reviews per developer per hour** on this plan
-  (Pro Plus), as a rolling window rather than an hourly reset. **Every push to a
-  PR consumes one**, because a push triggers an automatic review — manual
-  `@coderabbitai review` comments are not the main cost. A run of small
-  fix-up commits therefore exhausts the budget silently, and further triggers
-  return only a generic "Review limit reached" notice.
+  (Pro Plus), as a rolling window rather than an hourly reset. What spends the
+  budget is **pushing**, not commenting: an eligible push triggers an automatic
+  review whenever `auto_review.auto_incremental_review` is on and the
+  `auto_pause_after_reviewed_commits` threshold has not yet paused the branch.
+  This repo sets that threshold to `50` (`.coderabbit.yaml`), so the pause
+  effectively never arrives first and every push does cost a review — a run of
+  small fix-up commits exhausts the budget silently.
   - Batch fixes into fewer pushes when a review round is in flight.
   - Recognise the failure shape: the bot answers "Review triggered", then
     *edits* that comment into the rate-limit warning. The acknowledgement is
     not confirmation a review started; only the absence of that edit is.
-  - The escape hatch is usage-based reviews in Billing ($0.25/file), an
-    org-admin setting. Repeating the trigger before the window reopens does
-    nothing except consume another attempt.
+  - Being rate-limited is a no-op, not a penalty: per CodeRabbit's own docs a
+    blocked push consumes no allowance and does not delay when capacity
+    returns. Re-triggering before then simply does nothing, so ask
+    `@coderabbitai rate limit` for remaining capacity rather than guessing.
+  - The escape hatch is the usage-based add-on (Billing → Subscription,
+    org-admin only, $0.25 per reviewed file). Enabled with credits available,
+    over-limit reviews proceed; disabled, or enabled but out of credits, they
+    stop until an admin enables it or tops up.
