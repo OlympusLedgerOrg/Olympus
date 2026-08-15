@@ -16,6 +16,7 @@ import {
   matchesAnyPattern,
   normalizePattern,
   parseScopeBlock,
+  stripHtmlComments,
 } from "./check-pr-scope.mjs";
 
 // ── glob semantics ──────────────────────────────────────────────────────────
@@ -149,15 +150,17 @@ test("HTML comments never contribute patterns", () => {
 });
 
 test("comment stripping reaches a fixpoint instead of one pass", () => {
-  // One pass over "<!-<!-- -->- -->" returns "<!-- -->": deleting the inner
-  // match splices its neighbours into a marker that was not a comment start in
-  // the input. Flagged by CodeQL as incomplete multi-character sanitization.
-  const onePass = (text) => text.replace(/<!--[\s\S]*?-->/g, "");
+  // Overlapping markers: a single removal pass over "<!-<!-- -->" splices the
+  // surviving "<!-" onto the following "-" and reconstitutes a "<!--" that was
+  // never a comment start in the input, which is what CodeQL reports as
+  // incomplete multi-character sanitization. The fixture is asserted by shape
+  // rather than by re-running a one-pass strip here: a test that reimplements
+  // the buggy sanitizer to prove it is buggy earns its own CodeQL alert, and
+  // asserting against the real exported function is the stronger check anyway.
   const crafted = "## Scope\n\n<!-<!-- -->- crates/olympus-crypto/**\n-->\n";
-  assert.ok(
-    onePass(crafted).includes("<!--"),
-    "fixture no longer exercises the residual-marker case",
-  );
+  assert.ok(crafted.includes("<!-<!--"), "fixture no longer overlaps comment markers");
+  assert.ok(!stripHtmlComments(crafted).includes("<!--"), "residual comment marker survived");
+  assert.ok(!stripHtmlComments(crafted).includes("-->"), "residual comment terminator survived");
 
   // Whatever the crafted body renders as, the parser must not silently adopt a
   // pattern from it: over-removal narrows the scope and fails the gate, which

@@ -153,7 +153,7 @@ export const matchesAnyPattern = (file, patterns) =>
  *
  * Terminates because every iteration either shortens the string or is a no-op.
  */
-const stripHtmlComments = (input) => {
+export const stripHtmlComments = (input) => {
   let text = input;
   let previous;
   do {
