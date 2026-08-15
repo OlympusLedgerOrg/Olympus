@@ -1,4 +1,3 @@
-import { useSkin } from "../skins/SkinContext";
 import type { HashVerificationSource } from "../hooks/useHashVerification";
 import { SAMPLE_HASH } from "../lib/constants";
 import FileHasher from "../components/FileHasher";
@@ -40,17 +39,16 @@ export default function HashTab({
   onFileProgress,
   fileProgress,
 }: HashTabProps) {
-  const { skin } = useSkin();
   return (
     <div>
       {wasmError && (
-        <p className="err-text" style={{ marginBottom: "0.75rem" }}>
+        <p className="ods-error" style={{ marginBottom: "0.75rem" }}>
           ⚠ {wasmError}
         </p>
       )}
-      <div style={{ marginBottom: "1rem" }}>
-        <label htmlFor="hash-api-key" className="terminal-label">
-          API key <span className={skin.classes.mutedText}>(required — verify scope)</span>
+      <div className="ods-field" style={{ marginBottom: "1rem" }}>
+        <label htmlFor="hash-api-key" className="ods-label">
+          API key <span className="ods-muted">(required — verify scope)</span>
         </label>
         <input
           id="hash-api-key"
@@ -60,9 +58,12 @@ export default function HashTab({
           placeholder="paste your API key..."
           autoComplete="off"
           spellCheck={false}
-          className={skin.classes.input}
-          style={{ marginTop: "0.35rem" }}
+          className="ods-input"
+          aria-describedby="hash-api-key-hint"
         />
+        <div className="ods-hint" id="hash-api-key-hint">
+          Held in memory only — cleared on reload.
+        </div>
       </div>
       {onFile && onFileHash && onFileProgress && (
         <div style={{ marginBottom: "1rem" }}>
@@ -76,20 +77,19 @@ export default function HashTab({
             onFile={onFile}
           />
           {fileProgress !== undefined && fileProgress > 0 && fileProgress < 100 && (
-            <p
-              className={skin.classes.mutedText}
-              style={{ fontSize: "0.65rem", marginTop: "0.4rem" }}
-            >
+            <p className="ods-muted" style={{ fontSize: "0.65rem", marginTop: "0.4rem" }}>
               HASHING_FILE... {fileProgress}%
             </p>
           )}
         </div>
       )}
       <div className="field-head">
-        <label htmlFor="hash-input" className="terminal-label">
+        <label htmlFor="hash-input" className="ods-label">
           BLAKE3 content hash
         </label>
-        <span className={`status-pill status-${hashStatus.tone}`}>{hashStatus.label}</span>
+        <span className="ods-pill" data-tone={hashStatus.tone}>
+          {hashStatus.label}
+        </span>
       </div>
       <div className="input-row">
         <input
@@ -106,11 +106,13 @@ export default function HashTab({
           maxLength={64}
           spellCheck={false}
           autoComplete="off"
-          className={skin.classes.input}
+          className="ods-input"
+          aria-invalid={hashError ? true : undefined}
+          aria-describedby={hashError ? "hash-input-error" : undefined}
         />
         <button
           type="button"
-          className={skin.classes.buttonPrimary}
+          className="ods-btn"
           onClick={() => onSubmit(hashInput)}
           disabled={isPending || hashStatus.tone !== "ok"}
         >
@@ -118,27 +120,27 @@ export default function HashTab({
         </button>
       </div>
       <div className="quick-actions">
-        <button
-          type="button"
-          className={skin.classes.buttonSecondary}
-          onClick={() => void onPaste()}
-        >
+        <button type="button" className="ods-btn-ghost" onClick={() => void onPaste()}>
           PASTE
         </button>
         <button
           type="button"
-          className={skin.classes.buttonSecondary}
+          className="ods-btn-ghost"
           onClick={() => {
             setHashInput(SAMPLE_HASH);
           }}
         >
           SAMPLE
         </button>
-        <button type="button" className={skin.classes.buttonSecondary} onClick={onClear}>
+        <button type="button" className="ods-btn-ghost" onClick={onClear}>
           CLEAR
         </button>
       </div>
-      {hashError && <p className="err-text">{hashError}</p>}
+      {hashError && (
+        <p className="ods-error" id="hash-input-error" style={{ marginTop: "0.4rem" }}>
+          {hashError}
+        </p>
+      )}
     </div>
   );
 }

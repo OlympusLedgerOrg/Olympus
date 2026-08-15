@@ -44,35 +44,9 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   // use the backend's response, not this flag.
   const canManageKeys = hasStoredAdminKey();
 
-  // Derive header/nav colours from current skin so chrome stays readable.
-  const isLight = skin.id === "basic";
-  const isAmber = skin.id === "terminal";
-  const headerBg = isLight ? "rgba(255,255,255,0.97)" : "rgba(0,0,0,0.92)";
-  const headerBorder = isLight
-    ? "1px solid #e2e8f0"
-    : isAmber
-      ? "1px solid rgba(228,181,90,0.18)"
-      : "1px solid rgba(0,255,65,0.18)";
-
-  const navActive = isLight ? "#1d4ed8" : isAmber ? "#e4b55a" : "#00FF41";
-  const navInactive = isLight
-    ? "#64748b"
-    : isAmber
-      ? "rgba(228,181,90,0.45)"
-      : "rgba(0,255,65,0.45)";
-  const navGlow = (active: boolean) => {
-    if (!active) return "none";
-    if (isLight) return "none";
-    if (isAmber) return "0 0 6px #e4b55a";
-    return "0 0 6px #00FF41";
-  };
-  const logoAccent = isLight ? "#1d4ed8" : "#ff0055";
-  const logoText = isLight ? "#0f172a" : "inherit";
-  const encryptedColor = isLight ? "#dc2626" : isAmber ? "#e4b55a" : "#ff0055";
-
   return (
     <div
-      className={skin.classes.page}
+      className="ods-page"
       style={{
         fontFamily: "var(--font-terminal)",
         position: "relative",
@@ -91,8 +65,8 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       <header
         style={{
           padding: "1.1rem 2rem",
-          borderBottom: headerBorder,
-          background: headerBg,
+          borderBottom: "1px solid var(--border-2)",
+          background: "var(--bg-1)",
           position: "relative",
           zIndex: 10,
         }}
@@ -114,10 +88,16 @@ export default function Layout({ children }: { children: React.ReactNode }) {
               alignItems: "center",
               gap: "0.85rem",
               textDecoration: "none",
-              color: logoText,
+              color: "var(--fg-1)",
             }}
           >
-            <span style={{ fontSize: "1.3rem", color: logoAccent, fontFamily: "var(--font-logo)" }}>
+            <span
+              style={{
+                fontSize: "1.3rem",
+                color: "var(--danger)",
+                fontFamily: "var(--font-logo)",
+              }}
+            >
               [ø]
             </span>
             <span
@@ -148,8 +128,8 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                       fontSize: "0.62rem",
                       letterSpacing: "0.1em",
                       textDecoration: "none",
-                      color: active ? navActive : navInactive,
-                      textShadow: navGlow(active),
+                      color: active ? "var(--accent)" : "var(--fg-muted)",
+                      textShadow: active ? "var(--text-glow)" : "none",
                       transition: "all 0.15s",
                     }}
                   >
@@ -165,7 +145,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 
             <div
               style={{
-                color: encryptedColor,
+                color: "var(--danger)",
                 fontSize: "0.55rem",
                 animation: skin.id === "glitch" ? "flicker 2.4s infinite" : "none",
                 letterSpacing: "0.08em",
@@ -181,9 +161,9 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         aria-label="Pre-v1 data durability notice"
         role="status"
         style={{
-          borderBottom: isLight ? "1px solid #fed7aa" : "1px solid rgba(245,158,11,0.28)",
-          background: isLight ? "#fff7ed" : "rgba(245,158,11,0.075)",
-          color: isLight ? "#9a3412" : "rgba(255,190,90,0.94)",
+          borderBottom: "1px solid color-mix(in srgb, var(--warn) 28%, transparent)",
+          background: "color-mix(in srgb, var(--warn) 8%, transparent)",
+          color: "var(--warn)",
           position: "relative",
           zIndex: 9,
         }}
@@ -207,9 +187,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
               style={{
                 marginTop: "0.4rem",
                 paddingTop: "0.4rem",
-                borderTop: isLight
-                  ? "1px solid rgba(154,52,18,0.25)"
-                  : "1px solid rgba(255,190,90,0.25)",
+                borderTop: "1px solid color-mix(in srgb, var(--warn) 25%, transparent)",
                 fontWeight: 700,
               }}
             >
@@ -243,7 +221,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       <footer
         style={{
           padding: "1.5rem",
-          borderTop: isLight ? "1px solid #e2e8f0" : "1px solid rgba(0,255,65,0.08)",
+          borderTop: "1px solid var(--border-2)",
           textAlign: "center",
           fontSize: "0.55rem",
           opacity: 0.4,

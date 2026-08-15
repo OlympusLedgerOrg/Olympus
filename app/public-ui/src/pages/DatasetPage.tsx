@@ -199,7 +199,7 @@ export default function DatasetPage() {
           marginBottom: "1.5rem",
         }}
       >
-        <div className="cyber-panel-sm" style={{ padding: "0.85rem 1rem" }}>
+        <div className="ods-card" style={{ padding: "0.85rem 1rem" }}>
           <p
             style={{
               fontSize: "0.55rem",
@@ -212,7 +212,7 @@ export default function DatasetPage() {
           </p>
           <HashDisplay hash={ds.dataset_id} label="DATASET_ID" />
         </div>
-        <div className="cyber-panel-sm" style={{ padding: "0.85rem 1rem" }}>
+        <div className="ods-card" style={{ padding: "0.85rem 1rem" }}>
           <p
             style={{
               fontSize: "0.55rem",
@@ -235,7 +235,7 @@ export default function DatasetPage() {
             {ds.commit_id}
           </p>
         </div>
-        <div className="cyber-panel-sm" style={{ padding: "0.85rem 1rem" }}>
+        <div className="ods-card" style={{ padding: "0.85rem 1rem" }}>
           <p
             style={{
               fontSize: "0.55rem",
@@ -260,7 +260,7 @@ export default function DatasetPage() {
             {ds.source_uri}
           </a>
         </div>
-        <div className="cyber-panel-sm" style={{ padding: "0.85rem 1rem" }}>
+        <div className="ods-card" style={{ padding: "0.85rem 1rem" }}>
           <p
             style={{
               fontSize: "0.55rem",

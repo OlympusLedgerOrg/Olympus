@@ -16,7 +16,6 @@
  * == original_root + Ed25519 signature + nullifier.
  */
 import { useCallback, useRef, useState } from "react";
-import { useSkin } from "../skins/SkinContext";
 import type { RedactionAuditStage } from "../hooks/useRedactionAudit";
 import type { V3Bundle } from "../lib/redactionBinding";
 
@@ -62,7 +61,6 @@ export default function RedactionTab({
   onAudit,
   onReset,
 }: RedactionTabProps) {
-  const { skin } = useSkin();
   const fileRef = useRef<HTMLInputElement>(null);
   const bundleRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
@@ -286,14 +284,14 @@ export default function RedactionTab({
       </div>
 
       {error && (
-        <p className="err-text" style={{ marginTop: "0.5rem" }}>
+        <p className="ods-error" style={{ marginTop: "0.5rem" }}>
           {error}
         </p>
       )}
 
       {stage === "done" && verified !== null && (
         <div
-          className={skin.classes.panel}
+          className="ods-panel"
           style={{
             marginTop: "0.75rem",
             padding: "0.8rem 1rem",
@@ -314,7 +312,7 @@ export default function RedactionTab({
             {verified ? "✓ BUNDLE_VERIFIED" : "✗ BUNDLE_REJECTED"}
           </div>
           {!verified && verifyReason && (
-            <p className="err-text" style={{ margin: "0 0 0.5rem" }}>
+            <p className="ods-error" style={{ margin: "0 0 0.5rem" }}>
               {verifyReason}
             </p>
           )}
@@ -376,7 +374,7 @@ export default function RedactionTab({
       <div style={{ display: "flex", gap: "0.6rem", marginTop: "0.9rem" }}>
         <button
           type="button"
-          className={skin.classes.buttonPrimary}
+          className="ods-btn"
           onClick={onAudit}
           disabled={busy || !canAudit}
           style={{ flex: 1 }}
@@ -389,7 +387,7 @@ export default function RedactionTab({
         </button>
         <button
           type="button"
-          className={skin.classes.buttonSecondary}
+          className="ods-btn-ghost"
           onClick={onReset}
           disabled={busy || stage === "idle"}
           style={{ flex: "0 0 8rem" }}

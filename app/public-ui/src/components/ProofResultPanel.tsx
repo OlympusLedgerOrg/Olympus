@@ -334,7 +334,7 @@ export default function ProofResultPanel({ verdict }: { verdict: VerdictState })
             </button>
           </div>
           {zkStage === "error" && zkError && (
-            <p className="err-text" style={{ marginTop: "0.5rem" }}>
+            <p className="ods-error" style={{ marginTop: "0.5rem" }}>
               ZK proof unavailable: {zkError}
             </p>
           )}

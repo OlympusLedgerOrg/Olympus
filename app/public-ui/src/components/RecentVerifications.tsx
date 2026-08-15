@@ -59,7 +59,7 @@ export default function RecentVerifications({ onSelect }: RecentVerificationsPro
         {entries.length > 0 && (
           <button
             type="button"
-            className="icon-text-btn"
+            className="ods-btn-ghost"
             onClick={() => {
               clearRecentVerifications();
               setEntries([]);

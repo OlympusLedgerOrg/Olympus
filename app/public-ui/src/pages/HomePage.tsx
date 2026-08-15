@@ -100,10 +100,10 @@ export default function HomePage() {
 
   return (
     <div>
-      <div className={skin.classes.hero}>
+      <div className="console-hero">
         <div>
           <h1
-            className={skin.classes.accentText}
+            className="ods-accent"
             style={{
               fontSize: "clamp(1.8rem, 5vw, 3rem)",
               margin: "0 0 0.75rem",
@@ -114,7 +114,7 @@ export default function HomePage() {
             VERIFY_TRUTH
           </h1>
           <p
-            className={skin.classes.mutedText}
+            className="ods-muted"
             style={{
               maxWidth: "600px",
               fontSize: "0.82rem",
@@ -127,10 +127,10 @@ export default function HomePage() {
           </p>
         </div>
         <div className="status-stack">
-          <span className={`status-pill status-${statsQuery.isError ? "err" : "ok"}`}>
+          <span className="ods-pill" data-tone={statsQuery.isError ? "err" : "ok"}>
             API_{statsQuery.isError ? "OFFLINE" : "LIVE"}
           </span>
-          <span className={`status-pill status-${isPending ? "warn" : "neutral"}`}>
+          <span className="ods-pill" data-tone={isPending ? "warn" : "neutral"}>
             {operationLabel}
           </span>
         </div>
@@ -143,16 +143,14 @@ export default function HomePage() {
       <div className="verify-grid">
         <div style={{ minWidth: 0 }}>
           <TiltContainer>
-            <div className={skin.classes.panel} style={{ padding: 0 }}>
-              <div role="tablist" className="tab-list">
+            <div className="ods-panel" style={{ padding: 0 }}>
+              <div role="tablist" className="ods-tablist">
                 {tabs.map((tab) => (
                   <button
                     key={tab.id}
                     role="tab"
                     aria-selected={activeTab === tab.id}
-                    className={
-                      activeTab === tab.id ? skin.classes.tabActive : skin.classes.tabInactive
-                    }
+                    className="ods-tab"
                     onClick={() => switchTab(tab.id)}
                     type="button"
                   >
@@ -279,7 +277,7 @@ export default function HomePage() {
             </div>
             <button
               type="button"
-              className={skin.classes.buttonPrimary}
+              className="ods-btn"
               onClick={clearWorkspace}
               style={{ width: "100%", marginTop: "1rem" }}
             >
