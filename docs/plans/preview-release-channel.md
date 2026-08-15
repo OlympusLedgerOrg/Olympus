@@ -858,6 +858,44 @@ produced no artifacts and no release.
 verdict is `gh run view <id> --json conclusion`. A watcher's exit code is not the
 run's conclusion.
 
+### Postmortem: `preview-v0.10.0-rc.2` (2026-08-15)
+
+rc.2 got much further and split the risk list cleanly in two:
+
+**Retired.** `guard` and the full `preflight` passed — dev ceremony generated,
+the positive `olympus-dev-*` assertion held, the ceremony-refusal test ran and
+counted. **Windows and Linux built**, and both passed the installer-name
+assertion: WiX accepted the renamed `Olympus Ledger Preview` product, which was
+the plan's single biggest must-verify (§D3). Those questions are now answered by
+a real run, not an assumption.
+
+**Failed.** Both macOS legs, identically:
+
+```
+failed to bundle project: failed codesign application:
+failed to run command security import: failed to import keychain certificate
+```
+
+Root cause: the build step set `APPLE_CERTIFICATE` (and siblings) to `""`.
+tauri-action's JS wrapper skips signing on an empty string — but the Rust
+bundler independently reads the variable via `var_os("APPLE_CERTIFICATE")`, and
+`var_os` returns `Some("")` for a set-but-empty variable. The bundler entered
+the certificate-import branch with zero-byte cert material. **Set-but-empty is
+not unset**, and the two halves of the toolchain disagree about which one means
+"don't sign".
+
+Fixed in [#1652](https://github.com/OlympusLedgerOrg/Olympus/pull/1652) by
+removing the five env vars entirely; their absence is now documented in-place as
+load-bearing. Re-cut as `preview-v0.10.0-rc.3`.
+
+**Latent finding for `tauri-release.yml`, flagged not fixed:** its macOS env
+uses `${{ … && secrets.X || '' }}`, which resolves to the same set-but-empty
+state on `workflow_dispatch` runs — so its comment's claim that dispatch builds
+emit an unsigned macOS bundle is contradicted by rc.2's evidence. The tag path
+(real secrets) is unaffected, the release workflow keeps its zero-line diff per
+the prime constraint, and the preview channel now serves the unsigned-bundle
+use case the dispatch path was carrying.
+
 ### Verified locally
 
 `cargo fmt --all --check` (root and `verifiers/rust`) · `cargo clippy -p
