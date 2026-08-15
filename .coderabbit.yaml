@@ -268,6 +268,12 @@ reviews:
     drafts: true # review draft PRs too (codex/* PRs land as drafts)
     base_branches:
       - "main"
+    # Schema default is 5: after five reviewed commits on a branch CodeRabbit
+    # silently stops reviewing new pushes until the PR is re-triggered by hand.
+    # Branches here routinely exceed that, and the late commits (review-round
+    # fixups) are exactly the ones worth reviewing. Raised so the
+    # `auto_incremental_review: true` above means what it says.
+    auto_pause_after_reviewed_commits: 50
 
   # ── Pro-tier features ──────────────────────────────────────────────────────
   # All six below are no-ops on the free tier and start paying off on Pro.
@@ -287,61 +293,451 @@ reviews:
     true # propose reviewers from CODEOWNERS / git
     # history
 
-  # ── "Finishing touches" — Pro-tier auto-generated PR additions ────────────
-  # The "Generate unit tests" and "Generate docstrings" buttons that show up
-  # at the bottom of CodeRabbit's review summary. Disabled because both
-  # categories regularly produce PRs that miss the actual invariants this
-  # repo enforces (see clippy.toml, the leaf_hash R6-L1 assertion, the
-  # CircomReduction prove-call gate). Re-enable per-PR by commenting
-  # @coderabbitai if you want one.
+  # Constrain label suggestions to the taxonomy `.github/labels.yml` actually
+  # syncs. Without this list CodeRabbit invents labels from prior-PR history.
+  # `auto_apply_labels: false` above keeps these suggestions only.
+  labeling_instructions:
+    - label: "dependencies"
+      instructions: |
+        Apply when the PR's primary purpose is upgrading, pinning, vendoring,
+        or removing a third-party dependency: a version change in Cargo.toml
+        or package.json, a pnpm-workspace.yaml override or ignoreGhsas entry,
+        or a new vendored tree under crates/. Do not apply to first-party
+        version bumps (the Olympus version in CLAUDE.md, tauri.conf.json).
+    - label: "security"
+      instructions: |
+        Apply when the PR changes a security boundary. Concretely: anything
+        under src-tauri/src/api/middleware/, src-tauri/src/quorum/,
+        src-tauri/src/federation/, src-tauri/src/zk/, crates/olympus-crypto/,
+        or src-tauri/src/api/{credentials,keys,trusted_issuers}. Also apply
+        for any change to an OLY:*:V* domain prefix, an SBT scope mapping, an
+        auth or admin gate, a fail-closed default, or a dependency bump that
+        resolves a RUSTSEC / GHSA advisory.
+    - label: "scope-override"
+      instructions: |
+        Never suggest this label. It is applied by a human to deliberately
+        bypass the pr-scope-drift CI gate, and an automated suggestion would
+        undermine the gate's purpose.
+
+  # ── "Finishing touches" — auto-generated PR additions ─────────────────────
+  # The buttons at the bottom of CodeRabbit's review summary that write code
+  # into the branch. `docstrings` and `unit_tests` were already disabled
+  # because both categories regularly produce changes that miss the actual
+  # invariants this repo enforces (see clippy.toml, the leaf_hash R6-L1
+  # assertion, the CircomReduction prove-call gate).
+  #
+  # `simplify`, `fix_ci` and `resolve_merge_conflict` are Pro Plus-gated, so
+  # they were inert no-ops before the upgrade and are now live. Two of the
+  # three default to `enabled: true`. Every one of them is a code-writing bot
+  # operating on a branch whose correctness rests on invariants that are not
+  # visible in the diff, so the same reasoning that disabled the first two
+  # applies. All are set explicitly here rather than left to a schema default
+  # that can change under us. Invoke any of them deliberately per-PR by
+  # commenting @coderabbitai.
   finishing_touches:
     docstrings:
       enabled: false
     unit_tests:
       enabled: false
+    # Rewrites working code for reuse/efficiency. Schema default is already
+    # false; pinned so an upstream default flip cannot enable it silently.
+    simplify:
+      enabled: false
+    # Schema default true. Commits to the branch (`@coderabbitai fix-ci
+    # commit`) or opens a stacked PR. A red CI job here is usually a real
+    # invariant violation — a bot patching it to green is the failure mode
+    # this repo can least afford.
+    fix_ci:
+      enabled: false
+    # Schema default true. Resolving a conflict in a migration, a golden
+    # vector file, or a ceremony manifest by inferring "intent" produces a
+    # plausible file that fails a blake3 check at build time.
+    resolve_merge_conflict:
+      enabled: false
+    # Single-suggestion "commit this fix" on review comments — narrowly
+    # scoped to a diff hunk CodeRabbit already explained, and the one
+    # finishing touch that has been reliable here. Left on.
+    autofix:
+      enabled: true
+
+  # ── Pre-merge checks ──────────────────────────────────────────────────────
+  # The built-in title/description/issue checks are Pro; `custom_checks` is
+  # Pro Plus. These encode CLAUDE.md's "Before every git push" section, which
+  # is already written as deterministic pass/fail criteria but until now was
+  # enforced only by the pre-push hook, CI, and memory. Each one below exists
+  # because it failed at least once in this repo.
+  #
+  # All custom checks start at `mode: warning` — they annotate the PR without
+  # blocking, consistent with `request_changes_workflow: false`. Promote an
+  # individual check to `mode: error` once its false-positive rate is known.
+  pre_merge_checks:
+    title:
+      mode: warning
+      requirements: |
+        Conventional Commits: `type(scope): summary`, where type is one of
+        feat, fix, docs, refactor, perf, test, build, ci, chore, revert.
+        Summary in the imperative mood, no trailing period.
+    description:
+      mode: warning
+    issue_assessment:
+      mode: warning
+    # Coverage-percentage gate on generated docstrings; unrelated to the
+    # `finishing_touches.docstrings` generator disabled above. Off because
+    # this repo documents invariants in module headers and ADRs rather than
+    # per-symbol, so a percentage target measures the wrong thing.
+    docstrings:
+      # Quoted deliberately: bare `off` is a BOOLEAN in YAML 1.1, and this
+      # field is a string enum. An unquoted value risks type-failing the
+      # schema, which silently rejects the entire config.
+      mode: "off"
+
+    custom_checks:
+      - name: "Cross-implementation hash parity"
+        mode: warning
+        instructions: |
+          Applies ONLY when the PR changes the ADR-0005 leaf-hash or SMT
+          node-hash layout: the constants OLY_STRUCT_MARKER, OLY_NAMESPACE,
+          LEAF_OBJECT_TYPE, LEAF_VERSION, LEAF_BODY_FIELD_COUNT, NODE_PREFIX,
+          EMPTY_LEAF_PREFIX or KEY_PREFIX, or the field order / length-prefix
+          framing inside leaf_hash or node_hash.
+
+          There are FOUR independent implementations of this layout. FAIL
+          unless the same PR updates every one of them:
+            1. crates/olympus-crypto/ (the canonical implementation)
+            2. verifiers/rust/
+            3. verifiers/javascript/
+            4. clients/python/src/olympus_manifest/hashing.py — it hardcodes
+               its own copy of every constant above and is easy to miss
+               because no Cargo or pnpm command reaches it.
+
+          Also FAIL if the PR does not regenerate BOTH vector sets:
+            - verifiers/test_vectors/vectors.json
+              (cargo run -p olympus-crypto --example gen_ssmf_vectors
+               --features smt)
+            - clients/python/tests/vectors.json
+              (cargo run -p olympus-manifest --example gen_python_vectors)
+          CI diffs both against a fresh generation, so a stale vector file is
+          a guaranteed red build rather than a style nit.
+
+          PASS as not-applicable if the PR touches none of those constants or
+          layouts.
+
+      - name: "Ceremony manifest atomicity"
+        mode: warning
+        instructions: |
+          Applies when the PR changes anything under proofs/keys/.
+
+          FAIL if a file under proofs/keys/verification_keys/ changed without
+          the matching proofs/keys/manifests/<circuit>_manifest.json changing
+          in the same PR. src-tauri/build.rs asserts
+          blake3(vkey.json) == manifest.artifacts.vkey.blake3 at COMPILE time,
+          so an unpaired vkey change does not merely fail review — it breaks
+          `cargo build` for everyone.
+
+          FAIL if a manifest under proofs/keys/manifests/ looks hand-edited
+          rather than regenerated. Manifests must come from
+          `generate_manifest` / setup_circuits.sh. The tell is a changed hash
+          or vkey field with no corresponding change to contributions[],
+          ceremony_id, or the coordinator signature.
+
+          FAIL if the diff weakens any of the runtime integrity checks: the
+          build.rs blake3 assert, the LF normalization (build.rs strips \r
+          before hashing and generate_manifest.rs must stay symmetric), the
+          contribution chain-hash seed (OLY:CEREMONY:CHAIN:V1 || 32 zero
+          bytes || blake3(ark_zkey)), or the production exit(2) on a
+          placeholder artifact / untrusted coordinator / hash mismatch.
+
+          PASS as not-applicable if proofs/keys/ is untouched.
+
+      - name: "External PG semantic inventory digest"
+        mode: warning
+        instructions: |
+          Applies when the PR adds or modifies a file under migrations/.
+
+          FAIL if the migration creates, drops, or alters a TABLE, COLUMN,
+          ROUTINE (FUNCTION / PROCEDURE), TRIGGER, or INDEX and the PR does
+          not also update EXTERNAL_PG_SEMANTIC_INVENTORY_BLAKE3 in
+          src-tauri/src/db/external/inventory.rs. The external-Postgres role
+          tests compare the live catalog against that pinned digest and start
+          returning 503 the moment it drifts.
+
+          Separately, flag as a security-policy change (not a refactor) any
+          migration that DROPs a column holding attested data (content_hash,
+          snapshot_*, commit_id, BJJ pubkey fields), reorders or rewrites
+          historical rows, or omits IF NOT EXISTS / IF EXISTS on a statement
+          that should be idempotent.
+
+          PASS as not-applicable for migrations that only INSERT or UPDATE
+          seed data, and for PRs touching no migrations.
+
+      - name: "CLAUDE.md and AGENTS.md stay in sync"
+        mode: warning
+        instructions: |
+          FAIL if the PR modifies CLAUDE.md without a corresponding change to
+          AGENTS.md, or vice versa. AGENTS.md is generated from CLAUDE.md and
+          the docs-agent-sync CI gate blocks on any drift between them.
+          PASS if neither file is touched or both changed together.
+
+      - name: "CodeRabbit path_filters stay exclude-only"
+        mode: warning
+        instructions: |
+          Applies when the PR modifies .coderabbit.yaml.
+
+          FAIL if any entry added to reviews.path_filters does NOT begin with
+          "!". CodeRabbit path_filters follow git sparse-checkout semantics:
+          a single bare (non-"!") include pattern flips the entire list into
+          allowlist mode, and every path not matching an include — all of
+          src-tauri/, crates/, migrations/ — is silently skipped with no
+          error. A bare "docs/**" include previously disabled code review on
+          this repo entirely until it was reverted.
+
+          FAIL if reviews.tone_instructions exceeds 250 characters. The
+          schema caps it there and an overlong value silently rejects the
+          WHOLE config file, taking every path_instruction with it.
+
+          FAIL if a key is added directly under the document root that is not
+          one of: language, tone_instructions, early_access, enable_free_tier,
+          inheritance, reviews, chat, knowledge_base, code_generation,
+          issue_enrichment. The root schema sets additionalProperties: false,
+          so an unrecognized top-level key rejects the entire file.
+
+          PASS if .coderabbit.yaml is unchanged.
+
+      - name: "SPDX header on new source files"
+        mode: warning
+        instructions: |
+          FAIL if the PR adds a NEW .sql, .rs, .ts, .tsx, .js, or .sh file
+          without an SPDX license header. The license:headers sub-gate of
+          `pnpm tooling:check` fails on any file missing one. New .sql files
+          under migrations/ are the case that has actually slipped through.
+          PASS if the PR adds no new source files, or every new file carries
+          a header.
+
+      - name: "Docs claims match the implementation"
+        mode: warning
+        instructions: |
+          Applies to prose asserting behaviour: docs/rfcs/**, docs/adr/**,
+          docs/threat-model.md, docs/federation.md, README.md, CLAUDE.md, the
+          PR description itself, and Rust doc comments (/// and //!).
+
+          FAIL if the PR adds or edits a sentence claiming a check,
+          guarantee, or reuse that the tree does not implement. Real examples
+          from this repo:
+            - RFC-0001 stated the verifier recomputes /Length and rejects a
+              mismatch. It was written twice — RFC and doc comment — and
+              implemented in neither verifier; the value is elided from the
+              commitment by design, so that sentence was the only thing
+              standing behind it. Rated Critical in review.
+            - ADR-0029 stated "same offline verifiers — all reused". Both
+              verifiers refused the format outright.
+            - A merged PR description cited the pdfjs-dist licence as MIT
+              (it is Apache-2.0) and an isEvalSupported option that had
+              already been removed.
+
+          Also FAIL if the diff references a file path, function name, env
+          var, or migration number that does not exist in the tree at this
+          commit.
+
+          Cite the claiming sentence and the file:line where the
+          corresponding check would have to live. PASS if every behavioural
+          claim in the diff maps to code in the same tree.
+
+      - name: "Negative tests assert the rejection reason"
+        mode: warning
+        instructions: |
+          Applies to test files added or modified by the PR.
+
+          FAIL if a negative test asserts only THAT an operation failed,
+          without asserting WHY: a bare assert!(x.is_err()), an unwrap_err()
+          with no variant match, assert.throws(fn, Error), or #[should_panic]
+          with no expected = "...". Such a test passes on an unrelated early
+          parse error and proves nothing about the guard it is named for.
+
+          FAIL if a test named for a binding or commitment property computes
+          its expected value using the same function under test. That proves
+          agreement, not binding — it would still pass if the function
+          returned a constant. Require the negative direction as well:
+          mutate a byte the commitment claims to cover and assert the digest
+          changes.
+
+          PASS if the PR adds no tests, or every negative test names its
+          expected rejection reason.
+
+      - name: "Ledger stays insert-only"
+        mode: warning
+        instructions: |
+          ADR-0031 §2: the ledger is insert-only. FAIL if the PR adds any of:
+            - a leaf-delete or tombstone path in the SMT. LeafUpdate is the
+              only sanctioned mutation entry — no remove(), no
+              DELETE FROM smt_*.
+            - an ingest caller that bypasses the write-once guard in
+              smt::tree::update_batch_inner.
+            - string-matching on the write-once error instead of matching the
+              typed smt::WriteOnceViolation.
+            - a persistent-SMT write path that performs its read-modify-write
+              outside the NodeBackend::begin_write section (H-4), or that
+              refreshes the hot cache outside it.
+          Report these as a security-policy change, not a refactor.
+          PASS if none of the above appear in the diff.
+
+      - name: "Domain prefix change is migration-class"
+        mode: warning
+        instructions: |
+          FAIL if the PR changes the bytes of any OLY:*:V* domain prefix, or
+          adds a new prefix that collides with an existing one, without ALL
+          of: (a) a version bump inside the prefix itself rather than an
+          in-place edit, (b) regenerated test vectors, and (c) an explicit
+          statement in the PR description that signatures, proofs, and roots
+          minted under the old prefix will no longer verify.
+
+          Domain prefixes are the cross-implementation contract —
+          olympus-crypto, both offline verifiers, and the Python client each
+          hardcode their own copy. Pay particular attention to the
+          domain-separated quorum preimages (OLY:SBT:QUORUM:V2,
+          OLY:CHECKPOINT:QUORUM:V2, OLY:SBT:V1, OLY:SBT:REVOKE:V1): the
+          quorum message binds the threshold and the canonicalised sorted
+          signer set, and an offline verifier written from a shortened form
+          of that formula rejects every valid signature.
+
+          PASS if no domain prefix bytes changed.
+
+  # ── Post-merge actions ────────────────────────────────────────────────────
+  # Pro Plus; max 5. Deliberately kept to one, and scoped to posting a
+  # comment rather than writing to the repo.
+  post_merge_actions:
+    - name: "Circuit change: regeneration checklist"
+      enabled: true
+      prompt: |
+        Only act if the merged PR changed a file under proofs/circuits/.
+        Otherwise do nothing.
+
+        Post a single comment on the merged pull request stating that the
+        circuit change invalidates existing artifacts, and listing what must
+        be regenerated before the next release build:
+          - proofs/keys/<circuit>.{wasm,r1cs,ark.zkey}
+          - proofs/keys/verification_keys/<circuit>_vkey.json
+          - proofs/keys/manifests/<circuit>_manifest.json
+        via `bash proofs/setup_circuits.sh` (or the multi-contributor
+        proofs/phase2_ceremony.sh for a release ceremony).
+
+        Note in the same comment that any signal addition, removal, or
+        reordering changes the vkey and invalidates every previously issued
+        proof, and that the circomspect baseline
+        (proofs/circomspect_baseline.txt) is line-keyed and will shift even
+        for a comment-only edit. Do not open a PR or modify any file.
 
   # Built-in linter integrations. CodeRabbit runs these on the diff and
-  # surfaces findings inline. We disable languagetool (too noisy on
-  # technical prose) and biome (eslint covers the same surface).
+  # surfaces findings inline.
+  #
+  # NOTE: every tool in the schema defaults to enabled, so the `true` entries
+  # below are documentation of intent, not activation — the value is in the
+  # `false` entries and in the sub-settings. Tools are listed here when this
+  # repo has files they act on, so the list doubles as a language inventory.
   tools:
+    # THE one setting in this block that changes behaviour. Default is 90_000
+    # ms: CodeRabbit waits 90 seconds for CI to report before reviewing
+    # without it. Nothing in this repo's CI finishes in 90 seconds — a Rust
+    # workspace build plus the Tauri bundle is minutes — so every review has
+    # been running blind to CI results. 900_000 (15 min) is the schema max.
+    github-checks:
+      enabled: true
+      timeout_ms: 900000
+
     clippy:
       enabled: true
     eslint:
       enabled: true
     biome:
-      enabled: false
+      enabled: false # eslint covers the same surface
     markdownlint:
       enabled: true
     actionlint:
       enabled: true
     shellcheck:
-      enabled: true
+      enabled: true # proofs/*.sh, scripts/*.sh
     yamllint:
       enabled: true
     gitleaks:
       enabled: true # cheap secret-scan
+    trufflehog:
+      enabled: true # second secret-scan engine; different detector set
     osvScanner:
       enabled: true # supplements cargo-audit / npm audit
+    semgrep:
+      enabled: true # runs server-side; no local Windows install needed
+    opengrep:
+      enabled: true
+    zizmor:
+      enabled: true # GitHub Actions security — pull_request_target misuse,
+      # script injection, overbroad token scopes
+    squawk:
+      enabled: true # migration safety — locks, unsafe ALTERs
+    sqlfluff:
+      enabled: true # migrations/*.sql (62 files)
+    ruff:
+      enabled: true # clients/python (verify-only SDK)
+    hadolint:
+      enabled: true # docker/Dockerfile.{ci,audit,zk-setup}
     languagetool:
-      enabled: false
+      enabled: false # too noisy on technical prose
 
 chat:
   auto_reply: true
 
-# ── Knowledge base — Pro-tier persistent context ──────────────────────────────
+# ── Knowledge base — persistent cross-review context ──────────────────────────
 # CodeRabbit remembers past learnings, linked issues, and PRs across reviews.
-# `auto` means "use repo-scoped state on private repos; cross-org on public
-# repos where the visibility implies the team is comfortable sharing".
-# Defaults are fine; we set them explicitly so the choice is reviewable in
-# version control.
+#
+# The three `scope` keys were previously `auto`. OlympusLedgerOrg/Olympus is a
+# PUBLIC repo, and on a public repo `auto` resolves to GLOBAL — cross-org
+# learnings, and issue/PR context pulled from outside this repository. The
+# code is public either way, but global scope also means review noise from
+# unrelated repos, and this repo has ~1650 of its own PRs that are far better
+# context than anything cross-org. Pinned to `local` on both counts.
 knowledge_base:
-  opt_out: false # opt INTO the knowledge base (Pro default)
+  opt_out: false # opt INTO the knowledge base
   learnings:
-    scope: auto # carry per-PR learnings forward
+    scope: local # carry per-PR learnings forward, this repo only
+    approval_delay: 0
   issues:
-    scope: auto # pull in linked-issue context during review
+    scope: local # linked-issue context from this repo
   pull_requests:
-    scope: auto # cross-reference recent PRs for related diffs
+    scope: local # cross-reference this repo's own recent PRs
+
+  web_search:
+    enabled: true # RUSTSEC/GHSA advisories, upstream crate changelogs
+
+  # Treat the agent-instruction files as review criteria. Setting this key
+  # REPLACES the schema's default pattern list, so CLAUDE.md and AGENTS.md
+  # must be re-listed explicitly — they are in the defaults and would
+  # otherwise be dropped. (.claude/worktrees/ is gitignored, so `**/` cannot
+  # pick up a stale copy from another checkout.)
+  #
+  # The object form scopes a guideline set to the code it governs: the ADRs
+  # and RFCs are protocol specifications, so they are review criteria for the
+  # implementation, not just prose to be spellchecked.
+  code_guidelines:
+    enabled: true
+    filePatterns:
+      - "**/CLAUDE.md"
+      - "**/AGENTS.md"
+      - "CONTRIBUTING.md"
+      - files: "docs/adr/**/*.md"
+        applyTo: "src-tauri/**,crates/**,proofs/**,verifiers/**,migrations/**"
+      - files: "docs/rfcs/**/*.md"
+        applyTo: "src-tauri/**,crates/**,verifiers/**,clients/**"
+
+  # `auto` DISABLES the MCP integration on public repos, so the connections
+  # this plan pays for were silently unused. Servers themselves are configured
+  # in the CodeRabbit dashboard, not here; this key only gates whether the
+  # configured ones are consulted during review.
+  mcp:
+    usage: enabled
+
+  # Off deliberately. The other OlympusLedgerOrg repos (1f916-archive,
+  # olympus-status, TiM, the tauri fork) are not code dependencies of Olympus,
+  # so automatic linking would add cross-repo noise with no breaking-change
+  # signal to gain. Pro Plus raises the linked-repo cap to 10 if that changes.
+  automatic_repository_linking: false
 
 # ── Code generation (Pro-tier) ────────────────────────────────────────────────
 # Used by the "Generate unit tests" finishing-touch path (currently disabled
