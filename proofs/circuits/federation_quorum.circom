@@ -82,12 +82,15 @@ pragma circom 2.0.0;
  *
  * Constraint budget
  * -----------------
- * One EdDSAPoseidonVerifier per slot (~4-6k constraints each) dominates. At
- * N=8 the total sits comfortably under the ptau20 ceiling (2^20); the on-curve,
- * distinctness and threshold-range constraints add well under 1% on top of it.
- * Raising FEDERATION_QUORUM_N() scales the verifiers linearly and the
- * distinctness ladder quadratically — re-check against PTAU20_MAX_CONSTRAINTS
- * before bumping it.
+ * Measured at N=8 with circom 2.2.3: 59,282 non-linear + 5,693 linear =
+ * 64,975 constraints, dominated by the eight EdDSAPoseidonVerifier instances
+ * (~4-6k each); the on-curve, distinctness and threshold-range constraints
+ * add under 1% on top. The enforced capacity is REQUIRED_POWER=19 in
+ * proofs/setup_circuits.sh — a 2^19 = 524,288 ceiling (the script skips this
+ * circuit when handed a smaller ptau). Raising FEDERATION_QUORUM_N() scales
+ * the verifiers linearly and the distinctness ladder quadratically
+ * (N*(N-1)/2 pairs) — re-measure with `snarkjs r1cs info` and raise
+ * REQUIRED_POWER in the same commit if the ceiling is crossed.
  */
 
 include "./parameters.circom";

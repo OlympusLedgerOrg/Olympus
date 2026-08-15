@@ -137,6 +137,16 @@ pub fn expected_public_signals(
     if pinned.len() > N {
         return Err(QuorumWitnessError::TooManySigners(pinned.len()));
     }
+    // Mirror the circuit's threshold range constraint exactly: it rejects 0
+    // (thresholdIsZero) and anything >= 256 (Num2Bits(8)). Reconstructing a
+    // signal vector the circuit can never satisfy would only defer the
+    // failure to proof verification with a less useful error.
+    if threshold == 0 {
+        return Err(QuorumWitnessError::ThresholdZero);
+    }
+    if threshold >= 256 {
+        return Err(QuorumWitnessError::ThresholdOutOfRange(threshold));
+    }
     // Parse the real pinned set once and enforce distinctness — the same
     // invariant the circuit's soundness relies on (see `from_quorum`). A
     // duplicate pinned pubkey would let one signature satisfy multiple slots,
@@ -660,6 +670,26 @@ mod tests {
             w.verify_inputs().unwrap_err(),
             QuorumWitnessError::OffCurveSigner(7)
         ));
+    }
+
+    #[test]
+    fn expected_public_signals_rejects_out_of_range_thresholds() {
+        // The circuit rejects threshold = 0 (thresholdIsZero) and >= 256
+        // (Num2Bits(8)); the verifier-side reconstruction must refuse to build
+        // a signal vector for either rather than defer to proof verification.
+        let (s1, _k1) = signer_and_key(&[1u8; 32]);
+        let pinned = vec![s1];
+        let cid = [15u8; 32];
+        assert!(matches!(
+            expected_public_signals(&cid, &pinned, 0).unwrap_err(),
+            QuorumWitnessError::ThresholdZero
+        ));
+        assert!(matches!(
+            expected_public_signals(&cid, &pinned, 256).unwrap_err(),
+            QuorumWitnessError::ThresholdOutOfRange(256)
+        ));
+        // 255 is the last value inside the comparator's range and must build.
+        assert!(expected_public_signals(&cid, &pinned, 255).is_ok());
     }
 
     #[test]
