@@ -341,12 +341,12 @@ permissions:
 
 | Job / step | Guard | Rationale |
 |---|---|---|
-| **`guard`** (first job) | none | Fails if `startsWith(github.ref, 'refs/tags/v')` — a `v*` tag must never reach this workflow. Fails if `OLYMPUS_RELEASE_CHANNEL` resolves to anything but `preview`. |
+| **`guard`** (first job) | none | Fails if `startsWith(github.ref, 'refs/tags/v')` — a `v*` tag must never reach this workflow — or if a tag ref is not `preview-v*`. Also resolves and validates the preview tag. Channel *containment* is enforced by `scripts/check-preview-channel.mjs` in `pnpm tooling:check`, not here. |
 | `preview-preflight` → committed-ceremony tripwire | none | §10: fails once the real ceremony lands. Runs **before** `zk-ceremony-artifacts`. |
 | `preview-preflight` → `zk-ceremony-artifacts` | none | Always; this workflow has no other artifact source. |
 | `preview-preflight` → ceremony-id **positive** assertion | none | §5: every manifest's `ceremony_id` **must** start with `olympus-dev-`. Mirror-image of [`tauri-release.yml:130`](../../.github/workflows/tauri-release.yml:130). |
 | `preview-preflight` → `verify_ceremony_bundle` | none | Run **without** `--minimum-authenticated-contributors`. The flag is production-only by construction. |
-| `build` matrix | none | Same four targets. `OLYMPUS_RELEASE_CHANNEL=preview` and `OLYMPUS_PREVIEW_TAG=${{ github.ref_name }}` in `env:`. |
+| `build` matrix | none | Same four targets. `OLYMPUS_RELEASE_CHANNEL=preview` and `OLYMPUS_PREVIEW_TAG` in this job's `env:` — **job-scoped, not workflow-scoped**. At workflow level it would also stamp the preflight's test binary, and the preflight runs the tests that assert the *stable* default; they would fail on the channel they exist to protect. |
 | Windows cert import | **omitted entirely** | Not present in the file → cannot throw. Constraint 6 by absence, not by condition. |
 | Windows signature verification | **omitted entirely** | Nothing to verify. |
 | `tauri-action` `APPLE_*` | literal `''` | Same mechanism as [`:456-468`](../../.github/workflows/tauri-release.yml:456); tauri-action skips `security import` on empty and emits an unsigned bundle. |
@@ -788,6 +788,14 @@ the prerelease page, then merge the copy.**
   contains no startup tests at all, and libtest exits 0 when a filter matches
   nothing — so the first draft of the T4 workflow step ran zero tests and passed.
   The step now uses `--bin olympus-desktop` and greps for `1 passed`.
+- **The channel stamp must be job-scoped, not workflow-scoped.** The first draft
+  set `OLYMPUS_RELEASE_CHANNEL: preview` at workflow level, which would also
+  stamp the preflight's *test* binary. The preflight runs
+  `release_channel_defaults_to_stable` and `unset_env_fails_closed_to_production`
+  — the tests that assert the stable default — so they would have failed on the
+  channel they exist to protect. It now lives in the `build` job's `env:` only,
+  which is also where it belongs semantically: the stamp matters for the binary
+  that gets bundled, not for anything the preflight compiles.
 - **`check-privileged-action-pins.mjs` requires literal toolchain versions.**
   The shared composite action originally took `rust-toolchain` / `node-version`
   as inputs; the pin checker cannot see through `${{ inputs.* }}` and failed.

@@ -37,12 +37,12 @@ concurrency:
 permissions:
   contents: read
 
-env:
-  # Consumed by src-tauri/build.rs (docs/plans/preview-release-channel.md §D2).
-  # This workflow is the ONLY place in the repository that may set it —
-  # `scripts/check-preview-channel.mjs`, run by `pnpm tooling:check`, fails CI
-  # if anything else mentions it.
-  OLYMPUS_RELEASE_CHANNEL: preview
+# NOTE: `OLYMPUS_RELEASE_CHANNEL` is deliberately NOT set at workflow level. It
+# belongs to the `build` job alone — see the comment there. Setting it here
+# would stamp the preflight's test binary as `preview`, and the preflight runs
+# the very tests that assert the stable default (`release_channel_defaults_to_stable`,
+# `unset_env_fails_closed_to_production`), so they would fail on the channel
+# they exist to protect.
 
 jobs:
   # ── Guard ────────────────────────────────────────────────────────────────
@@ -308,6 +308,13 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     env:
+      # Consumed by src-tauri/build.rs (docs/plans/preview-release-channel.md
+      # §D2). Scoped to this job on purpose: only the binary that gets bundled
+      # needs the preview stamp. `scripts/check-preview-channel.mjs`, run by
+      # `pnpm tooling:check`, fails CI if any file other than this workflow
+      # sets it — a leak into a `v*` build or a test job would silently disable
+      # the production secret gates.
+      OLYMPUS_RELEASE_CHANNEL: preview
       OLYMPUS_PREVIEW_TAG: ${{ needs.guard.outputs.preview_tag }}
 
     steps:
