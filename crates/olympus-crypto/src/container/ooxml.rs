@@ -97,9 +97,40 @@ pub fn stored_data_spans(artifact: &[u8]) -> Result<HashMap<String, (u64, u64)>,
                 artifact[off + 3],
             ]) as usize
         };
+        // Validate the canonical profile BEFORE trusting any size field.
+        // Two ways a non-canonical entry breaks this walk:
+        //   * a data descriptor (flag bit 3) writes zero into the local
+        //     compressed/uncompressed size fields, so the cursor would advance to
+        //     the middle of the payload, the `PK\x03\x04` test would fail, and the
+        //     scan would stop early — silently missing every later entry, including
+        //     any duplicate name;
+        //   * a Deflated entry stores compressed bytes, but `stored_data_spans`
+        //     reports `f.size()` (the *uncompressed* length) for the span, so the
+        //     span would over-run the actual data.
+        // Neither is representable in a canonical package, so refuse rather than
+        // derive a span that is quietly wrong.
+        let flags = le16(cursor + 6);
+        let method = le16(cursor + 8);
         let compressed = le32(cursor + 18);
+        let uncompressed = le32(cursor + 22);
         let name_len = le16(cursor + 26);
         let extra_len = le16(cursor + 28);
+        if flags & !0x0800 != 0 {
+            return Err(ContainerError::new(format!(
+                "non-canonical zip entry: general-purpose flags {flags:#06x} \
+                 (only the UTF-8 name bit is permitted)"
+            )));
+        }
+        if method != 0 {
+            return Err(ContainerError::new(format!(
+                "non-canonical zip entry: compression method {method} (Stored required)"
+            )));
+        }
+        if compressed != uncompressed {
+            return Err(ContainerError::new(format!(
+                "non-canonical zip entry: compressed {compressed} != uncompressed {uncompressed}"
+            )));
+        }
         let name_end = cursor
             .checked_add(30)
             .and_then(|x| x.checked_add(name_len))
@@ -342,6 +373,70 @@ mod tests {
         let err = stored_data_spans(&duplicated).expect_err("duplicate must be refused");
         assert!(
             err.to_string().contains("duplicate part name a.bin"),
+            "unexpected error: {err}"
+        );
+    }
+
+    /// Build a single local file header with caller-chosen profile fields, so a
+    /// test can present a non-canonical entry the writer would never produce.
+    fn local_header(
+        name: &str,
+        payload: &[u8],
+        flags: u16,
+        method: u16,
+        sizes: (u32, u32),
+    ) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(b"PK\x03\x04");
+        out.extend_from_slice(&20u16.to_le_bytes()); // version needed
+        out.extend_from_slice(&flags.to_le_bytes());
+        out.extend_from_slice(&method.to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes()); // mtime
+        out.extend_from_slice(&0u16.to_le_bytes()); // mdate
+        out.extend_from_slice(&0u32.to_le_bytes()); // crc
+        out.extend_from_slice(&sizes.0.to_le_bytes()); // compressed
+        out.extend_from_slice(&sizes.1.to_le_bytes()); // uncompressed
+        out.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes()); // extra len
+        out.extend_from_slice(name.as_bytes());
+        out.extend_from_slice(payload);
+        out
+    }
+
+    /// A data descriptor (flag bit 3) zeroes the local size fields. Trusting them
+    /// would advance the cursor into the middle of the payload, end the scan
+    /// early, and silently skip every later entry — including a duplicate name.
+    /// Reject the entry instead of deriving spans from sizes that are not there.
+    #[test]
+    fn data_descriptor_entries_are_rejected() {
+        let artifact = local_header("a.bin", b"first payload", 0x08, 0, (0, 0));
+        let err = stored_data_spans(&artifact).expect_err("descriptor entry must be refused");
+        assert!(
+            err.to_string().contains("general-purpose flags"),
+            "unexpected error: {err}"
+        );
+    }
+
+    /// A Deflated entry stores compressed bytes, but the span reader reports the
+    /// *uncompressed* length — so the span would over-run the real data. The
+    /// canonical package is Stored-only; refuse anything else.
+    #[test]
+    fn deflated_entries_are_rejected() {
+        let artifact = local_header("a.bin", b"\x01\x02\x03", 0, 8, (3, 100));
+        let err = stored_data_spans(&artifact).expect_err("deflated entry must be refused");
+        assert!(
+            err.to_string().contains("compression method 8"),
+            "unexpected error: {err}"
+        );
+    }
+
+    /// Even at method 0, a size mismatch means the entry is not what it claims.
+    #[test]
+    fn size_mismatch_entries_are_rejected() {
+        let artifact = local_header("a.bin", b"abc", 0, 0, (3, 99));
+        let err = stored_data_spans(&artifact).expect_err("size mismatch must be refused");
+        assert!(
+            err.to_string().contains("compressed 3 != uncompressed 99"),
             "unexpected error: {err}"
         );
     }

@@ -62,6 +62,35 @@ pub enum PdfContainerError {
         /// The offending object's id.
         id: u32,
     },
+    /// `root_ref` was not a well-formed indirect reference (`N G R`).
+    #[error("/Root {value:?} is not a well-formed indirect reference (expected `N G R`)")]
+    MalformedRootRef {
+        /// The rejected reference, lossily decoded for the message.
+        value: String,
+    },
+    /// `root_ref` named an object this writer is not emitting. The trailer has no
+    /// `/Prev` chain, so nothing else can resolve it — the artifact would open
+    /// with a dangling root.
+    #[error("/Root points at object {id} generation {generation}, which is not being emitted")]
+    DanglingRootRef {
+        /// The referenced object id.
+        id: u32,
+        /// The referenced generation.
+        generation: u16,
+    },
+}
+
+/// Parse a canonical `N G R` indirect reference, tolerating surrounding and
+/// inter-token ASCII whitespace.
+fn parse_indirect_ref(bytes: &[u8]) -> Option<(u32, u16)> {
+    let text = std::str::from_utf8(bytes).ok()?;
+    let mut parts = text.split_ascii_whitespace();
+    let id: u32 = parts.next()?.parse().ok()?;
+    let generation: u16 = parts.next()?.parse().ok()?;
+    if parts.next()? != "R" || parts.next().is_some() {
+        return None;
+    }
+    Some((id, generation))
 }
 
 /// Write a traditional-xref PDF around `objects`.
@@ -94,6 +123,21 @@ pub fn write_traditional_xref(
         }
         if obj.generation == u16::MAX {
             return Err(PdfContainerError::ReservedGeneration { id: obj.id });
+        }
+    }
+    // A `/Root` that does not resolve leaves an unopenable artifact, and this
+    // writer emits no `/Prev` chain, so nothing downstream can supply the missing
+    // object. Validate the reference against what is actually being emitted.
+    if let Some(raw) = root_ref {
+        let (id, generation) =
+            parse_indirect_ref(raw).ok_or_else(|| PdfContainerError::MalformedRootRef {
+                value: String::from_utf8_lossy(raw).into_owned(),
+            })?;
+        if !objects
+            .iter()
+            .any(|o| o.id == id && o.generation == generation)
+        {
+            return Err(PdfContainerError::DanglingRootRef { id, generation });
         }
     }
 
@@ -318,6 +362,67 @@ mod tests {
     fn invalid_input_produces_no_bytes() {
         let objects = vec![obj(2, 0, b"(a)"), obj(1, 0, b"(b)")];
         assert!(write_traditional_xref(&objects, None).is_err());
+    }
+
+    /// A `/Root` naming an object we are not emitting leaves an artifact whose
+    /// root cannot be resolved — this writer emits no `/Prev` chain, so nothing
+    /// else can supply it.
+    #[test]
+    fn dangling_root_ref_is_rejected() {
+        let objects = vec![obj(1, 0, b"<< /Type /Catalog >>")];
+        assert_eq!(
+            write_traditional_xref(&objects, Some(b"9 0 R")),
+            Err(PdfContainerError::DanglingRootRef {
+                id: 9,
+                generation: 0
+            })
+        );
+    }
+
+    /// The generation is part of the identity: the right id at the wrong
+    /// generation still does not resolve.
+    #[test]
+    fn root_ref_with_the_wrong_generation_is_rejected() {
+        let objects = vec![obj(1, 0, b"<< /Type /Catalog >>")];
+        assert_eq!(
+            write_traditional_xref(&objects, Some(b"1 3 R")),
+            Err(PdfContainerError::DanglingRootRef {
+                id: 1,
+                generation: 3
+            })
+        );
+    }
+
+    /// Raw bytes are copied into the trailer, so a value that is not an indirect
+    /// reference would inject arbitrary tokens into the trailer dictionary.
+    #[test]
+    fn malformed_root_ref_is_rejected() {
+        let objects = vec![obj(1, 0, b"<< /Type /Catalog >>")];
+        for bad in [
+            &b"1 0 R /Encrypt 2 0 R"[..],
+            &b"not a ref"[..],
+            &b"1 0"[..],
+            &b""[..],
+        ] {
+            assert!(
+                matches!(
+                    write_traditional_xref(&objects, Some(bad)),
+                    Err(PdfContainerError::MalformedRootRef { .. })
+                ),
+                "expected rejection for {:?}",
+                String::from_utf8_lossy(bad)
+            );
+        }
+    }
+
+    /// A valid root is emitted **verbatim**, not re-serialised — normalising it
+    /// would change artifact bytes for documents already in the field.
+    #[test]
+    fn valid_root_ref_is_emitted_verbatim() {
+        let objects = vec![obj(1, 0, b"<< /Type /Catalog >>")];
+        let (artifact, _) = write_traditional_xref(&objects, Some(b"1  0  R")).expect("valid");
+        let text = String::from_utf8_lossy(&artifact).into_owned();
+        assert!(text.contains("/Root 1  0  R"), "trailer: {text}");
     }
 
     /// `None` omits `/Root` rather than emitting an empty or dangling reference.
