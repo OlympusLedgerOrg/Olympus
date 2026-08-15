@@ -13,4 +13,5 @@ pub mod routes;
 pub mod server;
 pub mod smt;
 pub mod state;
+pub mod trust;
 pub mod zk;

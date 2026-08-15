@@ -82,6 +82,15 @@ pub struct AppState {
     /// Audit M-3: without this, a lost or rotated BJJ authority key would
     /// invalidate every existing SBT in one shot.
     pub bjj_trusted_issuers: Vec<crate::api::trusted_issuers::TrustedIssuer>,
+    /// ADR-0041 role-separated trust resolver over the current Active
+    /// trust-list snapshot. `Some` only when startup reconciliation found an
+    /// accepted snapshot chain and promoted it to a fresh Active snapshot.
+    /// **No verification site consults this yet** — consumers still resolve
+    /// issuers through [`Self::bjj_trusted_issuers`]; switchover onto the
+    /// resolver is a later PR (and no accepted chain can exist before the
+    /// genesis CLI lands). Populated here so the reconciled state is carried
+    /// once, not re-derived per future consumer.
+    pub trust_resolver: Option<std::sync::Arc<crate::trust::SnapshotTrustResolver>>,
     /// Ed25519 signing key for redaction-bundle signatures (`POST
     /// /redaction/issue`). Resolved once at startup by
     /// [`resolve_ingest_signing_key`]: explicit `OLYMPUS_INGEST_SIGNING_KEY`
@@ -200,6 +209,7 @@ impl AppState {
             bjj_authority_key: None,
             bjj_authority_pubkey: None,
             bjj_trusted_issuers: Vec::new(),
+            trust_resolver: None,
             ingest_signing_key: None,
             redaction_blind_secret: None,
             redaction_staging: Arc::new(
