@@ -217,6 +217,13 @@ between a holder and a valid credential.
 
 ## Constraint budget
 
-~`N` `EdDSAPoseidonVerifier` instances (N=8). Estimated well under the ptau20
-ceiling; `setup_circuits.sh` pins `REQUIRED_POWER=19` conservatively. Re-check
-with `snarkjs r1cs info federation_quorum.r1cs` before adjusting `N`.
+Measured at `N=8` with circom 2.2.3: **59,282 non-linear + 5,693 linear =
+64,975 constraints**, dominated by the eight `EdDSAPoseidonVerifier` instances.
+Comfortably under the `REQUIRED_POWER=19` ceiling (524,288) that
+`setup_circuits.sh` pins for this circuit.
+
+The on-curve, distinctness and threshold-range constraints added **258** of
+that total (+201 non-linear, +57 linear) — under 0.4%. Note the distinctness
+ladder is `N(N-1)/2` pairs, so it grows quadratically while the verifiers grow
+linearly; re-measure with `snarkjs r1cs info federation_quorum.r1cs` before
+adjusting `N`.

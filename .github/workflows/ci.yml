@@ -1217,6 +1217,40 @@ jobs:
         # powers the SARIF → signature baseline diff.
         run: bash proofs/circomspect.sh --ci --level WARNING
 
+      # ── federation_quorum witness-level constraint tests ────────────────────
+      # circomspect above is static analysis only; it cannot tell whether an
+      # adversarial witness is actually rejected. These tests compile the
+      # circuit and drive `snarkjs wtns calculate` over committed fixtures,
+      # asserting each adversarial input aborts on its NAMED constraint
+      # (audit OLY-M5 / OLY-L12 / threshold range). No ptau or zkey needed, so
+      # this runs years before the trusted-setup ceremony.
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22.14.0"
+          cache: npm
+          cache-dependency-path: proofs/package-lock.json
+
+      - name: Install proof-tooling dependencies
+        run: npm ci --ignore-scripts --prefix proofs
+
+      - name: Install circom
+        # Same cargo-install posture as circomspect above, pinned to the tag
+        # the constraint counts in docs/federation-quorum-credentials.md were
+        # measured with. Cached by the Rust cache step.
+        run: cargo install --git https://github.com/iden3/circom --tag v2.2.3 --locked circom
+
+      - name: Compile federation_quorum
+        working-directory: proofs
+        run: circom circuits/federation_quorum.circom --r1cs --wasm --sym -l circuits -l node_modules -o build
+
+      - name: Run federation_quorum witness constraint tests
+        env:
+          # Turns a missing prerequisite into a failure instead of a silent
+          # skip — this is the one job that guarantees they can run.
+          OLYMPUS_REQUIRE_CIRCUIT_TESTS: "1"
+        run: node --test proofs/test/federation_quorum.test.js
+
       - name: Upload circomspect results
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

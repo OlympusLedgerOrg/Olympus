@@ -26,6 +26,14 @@
 //! circuit's unconditional scalar-multiplications stay satisfiable — only the
 //! final EdDSA equality is gated by `enabled`, so the borrowed signature is
 //! never actually checked there.
+//!
+//! Repeating the last real pubkey is safe against a *malicious* prover only
+//! because the circuit forbids enabling any slot whose pubkey duplicates an
+//! earlier slot's (audit OLY-M5). Before that constraint existed, a prover
+//! holding one signature could enable every padding slot repeating that signer
+//! and inflate the counted quorum from a single signature. The distinctness
+//! and on-curve guards in this module mirror the circuit for fast failure;
+//! they are not what makes the proof sound.
 
 use ark_bn254::Fr;
 use ark_ff::{BigInteger, PrimeField};
@@ -55,6 +63,16 @@ pub enum QuorumWitnessError {
     DuplicateSigner(usize),
     #[error("pinned signer {0} has a non-canonical / off-field coordinate")]
     BadSigner(usize),
+    #[error(
+        "pinned signer {0} is not a Baby Jubjub point in the prime-order subgroup (off-curve, \
+         the identity, or a cofactor-coset point)"
+    )]
+    OffCurveSigner(usize),
+    #[error(
+        "threshold {0} is outside the circuit's 8-bit comparator range; GreaterEqThan(8) is \
+         only sound for operands < 256"
+    )]
+    ThresholdOutOfRange(u64),
     #[error("a collected signature for signer {0} has a non-canonical / off-field field")]
     BadSignature(usize),
     #[error(
@@ -91,6 +109,17 @@ fn parse_signer(s: &QuorumSigner) -> Option<BabyJubJubPubKey> {
     })
 }
 
+/// Reject a pinned pubkey that is not a Baby Jubjub point in the prime-order
+/// subgroup.
+///
+/// Native mirror of the circuit's per-slot, ungated `BabyCheck` (audit
+/// OLY-L12) plus the not-small-order check circomlib's `EdDSAPoseidonVerifier`
+/// applies to enabled slots. The circuit is the enforcement; this is the fast
+/// path that fails in microseconds instead of inside WASM witness generation.
+fn validate_pinned(i: usize, pk: &BabyJubJubPubKey) -> Result<(), QuorumWitnessError> {
+    baby_jubjub::validate_pubkey_subgroup(pk).map_err(|_| QuorumWitnessError::OffCurveSigner(i))
+}
+
 /// Reconstruct the public-signal vector a verifier must compare against, from a
 /// credential's pinned signer set, threshold, and `commit_id` — WITHOUT any
 /// private signature material. The padding rule matches [`QuorumProofWitness`].
@@ -120,6 +149,7 @@ pub fn expected_public_signals(
         .collect::<Result<_, _>>()?;
     let mut seen = std::collections::BTreeSet::new();
     for (i, pk) in parsed.iter().enumerate() {
+        validate_pinned(i, pk)?;
         if !seen.insert((fr_to_bigint(&pk.x), fr_to_bigint(&pk.y))) {
             return Err(QuorumWitnessError::DuplicateSigner(i));
         }
@@ -193,6 +223,7 @@ impl QuorumProofWitness {
         // rather than trust the caller of this pub fn.
         let mut seen = std::collections::BTreeSet::new();
         for (i, pk) in parsed_pinned.iter().enumerate() {
+            validate_pinned(i, pk)?;
             if !seen.insert((fr_to_bigint(&pk.x), fr_to_bigint(&pk.y))) {
                 return Err(QuorumWitnessError::DuplicateSigner(i));
             }
@@ -250,16 +281,58 @@ impl QuorumProofWitness {
         })
     }
 
-    /// Native pre-check mirroring the circuit: every `enabled` slot must carry a
-    /// signature that verifies under its pinned pubkey over `msg`, and the count
-    /// of enabled slots must be `>= threshold`. Catches a malformed witness in
-    /// microseconds before the (heavy) WASM witness generation runs.
+    /// Native pre-check mirroring the circuit, constraint for constraint.
+    ///
+    /// Catches a malformed witness in microseconds before the (heavy) WASM
+    /// witness generation runs. Each check below corresponds to one in
+    /// `proofs/circuits/federation_quorum.circom`; keep the two in step.
+    ///
+    /// | check | circuit counterpart |
+    /// |---|---|
+    /// | `threshold` in `[1, 256)` | `Num2Bits(8)` + `thresholdIsZero.out === 0` |
+    /// | every slot's pubkey on-curve, prime-order | ungated `BabyCheck` per slot (+ the enabled-gated small-order check inside `EdDSAPoseidonVerifier`) |
+    /// | `enabled[i]` is 0 or 1 | `enabled[i] * (enabled[i] - 1) === 0` |
+    /// | an enabled slot's signature verifies | `EdDSAPoseidonVerifier` gated by `enabled[i]` |
+    /// | an enabled slot's key differs from every earlier slot's | `enabled[i] * samePoint[p] === 0` |
+    /// | `count >= threshold` | `GreaterEqThan(8)` |
+    ///
+    /// This is defence in depth, **not** the enforcement: a malicious prover
+    /// bypasses it by never calling the host witness builder. The circuit is
+    /// what makes the statement sound.
     pub fn verify_inputs(&self) -> Result<(), QuorumWitnessError> {
+        if self.threshold == 0 {
+            return Err(QuorumWitnessError::ThresholdZero);
+        }
+        if self.threshold >= 256 {
+            return Err(QuorumWitnessError::ThresholdOutOfRange(self.threshold));
+        }
+
+        // Ungated, exactly like the circuit's BabyCheck: a malformed key parked
+        // on a disabled padding slot is rejected too.
+        for i in 0..N {
+            let pk = BabyJubJubPubKey {
+                x: self.signer_ax[i],
+                y: self.signer_ay[i],
+            };
+            validate_pinned(i, &pk)?;
+        }
+
         let mut count = 0u64;
         for i in 0..N {
             match self.enabled[i] {
                 0 => {}
                 1 => {
+                    // Slot distinctness: an enabled slot may not repeat any
+                    // earlier slot's pubkey, or one signature would be counted
+                    // more than once (audit OLY-M5). Duplicates on *disabled*
+                    // slots stay legal — that is what the padding produces.
+                    for j in 0..i {
+                        if self.signer_ax[i] == self.signer_ax[j]
+                            && self.signer_ay[i] == self.signer_ay[j]
+                        {
+                            return Err(QuorumWitnessError::DuplicateSigner(i));
+                        }
+                    }
                     let pk = BabyJubJubPubKey {
                         x: self.signer_ax[i],
                         y: self.signer_ay[i],
@@ -485,6 +558,279 @@ mod tests {
         let mut w = QuorumProofWitness::from_quorum(&cid, &pinned, 1, &sigs).expect("build");
         // Force slot 1 enabled without a real signature there (it holds filler).
         w.enabled[1] = 1;
-        assert!(w.verify_inputs().is_err());
+        // Slot 1 pins signer 2's *distinct* pubkey, so this is a signature
+        // failure, not a distinctness failure — name which, so the test cannot
+        // pass for an unrelated reason.
+        assert!(matches!(
+            w.verify_inputs().unwrap_err(),
+            QuorumWitnessError::BadSignature(1)
+        ));
+    }
+
+    /// The OLY-M5 shape, at the witness level: one real signer padded to `N`,
+    /// then every padding slot flipped on to reuse that one signature.
+    #[test]
+    fn padding_slots_flipped_enabled_are_rejected_as_duplicates() {
+        let (s1, k1) = signer_and_key(&[5u8; 32]);
+        let pinned = vec![s1.clone()];
+        let cid = [3u8; 32];
+        let sigs = vec![cosign(&k1, &s1, &cid, 1, &pinned)];
+        let mut w = QuorumProofWitness::from_quorum(&cid, &pinned, 1, &sigs).expect("build");
+        // Every slot repeats signer 0's pubkey and borrows its signature, so
+        // each one verifies under EdDSA. Only distinctness can reject this.
+        w.enabled = [1u8; N];
+        w.threshold = N as u64;
+        assert!(matches!(
+            w.verify_inputs().unwrap_err(),
+            QuorumWitnessError::DuplicateSigner(1)
+        ));
+    }
+
+    /// Disabling the real slot and enabling a padding copy must fail too —
+    /// the distinctness rule is one-directional (only the *first* occurrence of
+    /// a key may be enabled), which is what makes this case a rejection.
+    #[test]
+    fn enabling_a_padding_copy_instead_of_the_original_is_rejected() {
+        let (s1, k1) = signer_and_key(&[5u8; 32]);
+        let pinned = vec![s1.clone()];
+        let cid = [3u8; 32];
+        let sigs = vec![cosign(&k1, &s1, &cid, 1, &pinned)];
+        let mut w = QuorumProofWitness::from_quorum(&cid, &pinned, 1, &sigs).expect("build");
+        w.enabled = [0u8; N];
+        w.enabled[3] = 1;
+        assert!(matches!(
+            w.verify_inputs().unwrap_err(),
+            QuorumWitnessError::DuplicateSigner(3)
+        ));
+    }
+
+    #[test]
+    fn off_curve_pinned_signer_is_rejected() {
+        let (s1, _k1) = signer_and_key(&[1u8; 32]);
+        // Perturb x so the point leaves the curve while staying in-field.
+        let bad = QuorumSigner {
+            x: fr_to_decimal(&(parse_fr(&s1.x).unwrap() + Fr::from(1u64))),
+            y: s1.y.clone(),
+        };
+        let pk = parse_signer(&bad).expect("still parses as two field elements");
+        assert!(
+            !baby_jubjub::bjj_is_on_curve(&baby_jubjub::bjj_affine(pk.x, pk.y)),
+            "test vector must actually be off-curve"
+        );
+        let cid = [12u8; 32];
+        let pinned = vec![bad];
+        assert!(matches!(
+            QuorumProofWitness::from_quorum(&cid, &pinned, 1, &[]).unwrap_err(),
+            QuorumWitnessError::OffCurveSigner(0)
+        ));
+        assert!(matches!(
+            expected_public_signals(&cid, &pinned, 1).unwrap_err(),
+            QuorumWitnessError::OffCurveSigner(0)
+        ));
+    }
+
+    #[test]
+    fn identity_pinned_signer_is_rejected() {
+        // (0, 1) is on the curve but is the identity — order 1, so it is not a
+        // real pubkey and trivially satisfies a naive subgroup multiplication.
+        let identity = QuorumSigner {
+            x: "0".into(),
+            y: "1".into(),
+        };
+        let cid = [13u8; 32];
+        let pinned = vec![identity];
+        assert!(matches!(
+            QuorumProofWitness::from_quorum(&cid, &pinned, 1, &[]).unwrap_err(),
+            QuorumWitnessError::OffCurveSigner(0)
+        ));
+    }
+
+    #[test]
+    fn off_curve_key_on_a_disabled_padding_slot_is_rejected() {
+        // Pre-fix this passed silently: the disabled slot's key was never
+        // checked. The circuit's BabyCheck is ungated, so this mirror is too.
+        let (s1, k1) = signer_and_key(&[5u8; 32]);
+        let pinned = vec![s1.clone()];
+        let cid = [3u8; 32];
+        let sigs = vec![cosign(&k1, &s1, &cid, 1, &pinned)];
+        let mut w = QuorumProofWitness::from_quorum(&cid, &pinned, 1, &sigs).expect("build");
+        assert_eq!(w.enabled[7], 0, "slot 7 must be padding for this test");
+        w.signer_ax[7] += Fr::from(1u64);
+        assert!(matches!(
+            w.verify_inputs().unwrap_err(),
+            QuorumWitnessError::OffCurveSigner(7)
+        ));
+    }
+
+    #[test]
+    fn threshold_outside_the_comparator_range_is_rejected() {
+        let (s1, k1) = signer_and_key(&[1u8; 32]);
+        let pinned = vec![s1.clone()];
+        let cid = [14u8; 32];
+        let sigs = vec![cosign(&k1, &s1, &cid, 1, &pinned)];
+        let mut w = QuorumProofWitness::from_quorum(&cid, &pinned, 1, &sigs).expect("build");
+        // GreaterEqThan(8) is only sound for operands < 256; 256 is the first
+        // value that can wrap it.
+        w.threshold = 256;
+        assert!(matches!(
+            w.verify_inputs().unwrap_err(),
+            QuorumWitnessError::ThresholdOutOfRange(256)
+        ));
+
+        w.threshold = 0;
+        assert!(matches!(
+            w.verify_inputs().unwrap_err(),
+            QuorumWitnessError::ThresholdZero
+        ));
+    }
+
+    /// Emit circom input fixtures for `proofs/test/federation_quorum.test.js`.
+    ///
+    /// The circuit-level negative tests need *real* BJJ-EdDSA signatures, or a
+    /// case meant to trip the distinctness constraint would instead trip the
+    /// signature check and prove nothing. There is no `circomlibjs` in
+    /// `proofs/node_modules` (only circuit sources), so rather than add a
+    /// signing dependency to JS the fixtures are generated here, where the
+    /// signing path is already unit-tested.
+    ///
+    /// They are written to **`proofs/test_inputs/quorum_fixtures/` (tracked)**,
+    /// not to the gitignored `proofs/build/`, for the same reason
+    /// `clients/python/tests/vectors.json` is committed: it lets the JS harness
+    /// run in a CI job that has circom and Node but not the whole Tauri/GTK
+    /// Rust build. Everything here is deterministic — fixed private keys, fixed
+    /// commit id — so regenerating produces a byte-identical result and any
+    /// diff is real drift.
+    ///
+    /// Regenerate + commit whenever the witness layout changes:
+    /// ```text
+    /// cargo test --no-default-features --features prover,quorum-circuit \
+    ///     --lib zk::witness::quorum
+    /// ```
+    ///
+    /// Kept as a test (not a bin) so CI's `--features quorum-circuit` run
+    /// refreshes them for free. It asserts the shape of what it emits, so it
+    /// fails rather than writing a fixture that would silently test nothing.
+    #[test]
+    fn emit_circom_fixtures_for_the_witness_harness() {
+        use std::path::PathBuf;
+
+        // A witness's circom inputs as JSON. `msg` and `threshold` are scalar
+        // signals; everything else is an array of length N.
+        fn to_json(w: &QuorumProofWitness) -> serde_json::Value {
+            let mut map = serde_json::Map::new();
+            for (name, vals) in w.circom_inputs() {
+                let strs: Vec<String> = vals.iter().map(|v| v.to_string()).collect();
+                let v = if name == "msg" || name == "threshold" {
+                    serde_json::Value::String(strs[0].clone())
+                } else {
+                    serde_json::Value::from(strs)
+                };
+                map.insert(name, v);
+            }
+            serde_json::Value::Object(map)
+        }
+
+        let dir =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../proofs/test_inputs/quorum_fixtures");
+        std::fs::create_dir_all(&dir).expect("create fixture dir");
+
+        let write = |name: &str, v: &serde_json::Value| {
+            std::fs::write(
+                dir.join(format!("{name}.json")),
+                serde_json::to_string_pretty(v).expect("serialize fixture"),
+            )
+            .unwrap_or_else(|e| panic!("write fixture {name}: {e}"));
+        };
+
+        // ---- p1: three distinct signers, all three co-sign, threshold 3 ----
+        let (a, ka) = signer_and_key(&[21u8; 32]);
+        let (b, kb) = signer_and_key(&[22u8; 32]);
+        let (c, kc) = signer_and_key(&[23u8; 32]);
+        let trio = vec![a.clone(), b.clone(), c.clone()];
+        let cid = [77u8; 32];
+        let trio_sigs = vec![
+            cosign(&ka, &a, &cid, 3, &trio),
+            cosign(&kb, &b, &cid, 3, &trio),
+            cosign(&kc, &c, &cid, 3, &trio),
+        ];
+        let p1 = QuorumProofWitness::from_quorum(&cid, &trio, 3, &trio_sigs).expect("p1");
+        p1.verify_inputs().expect("p1 must be a satisfying witness");
+        write("p1_three_of_three", &to_json(&p1));
+
+        // ---- p2: one signer padded to N — the honest duplicate shape ----
+        let (solo, ksolo) = signer_and_key(&[24u8; 32]);
+        let solo_set = vec![solo.clone()];
+        let solo_sigs = vec![cosign(&ksolo, &solo, &cid, 1, &solo_set)];
+        let p2 = QuorumProofWitness::from_quorum(&cid, &solo_set, 1, &solo_sigs).expect("p2");
+        p2.verify_inputs().expect("p2 must be a satisfying witness");
+        // The whole point of this fixture: slots 1..N repeat slot 0's key.
+        for i in 1..N {
+            assert_eq!(p2.signer_ax[i], p2.signer_ax[0]);
+            assert_eq!(p2.enabled[i], 0);
+        }
+        write("p2_padded_single_signer", &to_json(&p2));
+
+        // ---- n1 (OLY-M5): every padding slot flipped on, one signature ----
+        // Each slot carries slot 0's key AND slot 0's signature, so EdDSA
+        // verifies on all eight. Distinctness is the only thing that can reject.
+        let mut n1 = p2.clone();
+        n1.enabled = [1u8; N];
+        n1.threshold = N as u64;
+        for i in 0..N {
+            assert!(
+                baby_jubjub::verify_signature(
+                    &BabyJubJubPubKey {
+                        x: n1.signer_ax[i],
+                        y: n1.signer_ay[i]
+                    },
+                    &BabyJubJubSignature {
+                        r8x: n1.r8x[i],
+                        r8y: n1.r8y[i],
+                        s: n1.s[i]
+                    },
+                    n1.msg
+                ),
+                "slot {i} must carry a VERIFYING signature, else the fixture would \
+                 fail on the EdDSA check instead of the distinctness check"
+            );
+        }
+        write("n1_m5_all_padding_enabled", &to_json(&n1));
+
+        // ---- n2 (OLY-M5): disable the original, enable a padding copy ----
+        let mut n2 = p2.clone();
+        n2.enabled = [0u8; N];
+        n2.enabled[3] = 1;
+        n2.threshold = 1;
+        write("n2_m5_padding_copy_enabled", &to_json(&n2));
+
+        // ---- n3/n4/n5: threshold out of the comparator's range, and zero ----
+        let mut n3 = to_json(&p1);
+        n3["threshold"] = serde_json::Value::String("256".into());
+        write("n3_threshold_256", &n3);
+
+        let mut n4 = to_json(&p1);
+        // Fr(-1) = r - 1: in-field, but astronomically outside 8 bits.
+        n4["threshold"] =
+            serde_json::Value::String(fr_to_decimal(&(Fr::from(0u64) - Fr::from(1u64))));
+        write("n4_threshold_field_max", &n4);
+
+        let mut n5 = to_json(&p1);
+        n5["threshold"] = serde_json::Value::String("0".into());
+        write("n5_threshold_zero", &n5);
+
+        // ---- n6/n7 (OLY-L12): off-curve key, enabled and disabled slot ----
+        let mut n6 = p1.clone();
+        n6.signer_ax[0] += Fr::from(1u64);
+        assert_eq!(n6.enabled[0], 1);
+        assert!(!baby_jubjub::bjj_is_on_curve(&baby_jubjub::bjj_affine(
+            n6.signer_ax[0],
+            n6.signer_ay[0]
+        )));
+        write("n6_off_curve_enabled_slot", &to_json(&n6));
+
+        let mut n7 = p2.clone();
+        n7.signer_ax[7] += Fr::from(1u64);
+        assert_eq!(n7.enabled[7], 0, "slot 7 must be disabled padding");
+        write("n7_off_curve_disabled_slot", &to_json(&n7));
     }
 }

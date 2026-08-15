@@ -3,6 +3,22 @@
 **Date:** 2026-06-22 · **Target:** Olympus verifiable ledger (v0.10.0, Tauri 2 desktop) · **Branch:** `claude/amazing-shannon-14dd32`
 **Method:** Two-wave multi-agent red-team (Trail-of-Bits-style): breadth sweep + deep soundness/forgery wave, each with adversarial verification and exploit construction.
 
+> **Update — the three `federation_quorum` circuit items are fixed.** OLY-M5
+> (in-circuit signer distinctness), OLY-L12 (on-curve check on every pinned
+> pubkey, ungated) and the §4 threshold-range fragility (`threshold`
+> range-bound to `[1, 2^8)`) now hold as constraints rather than as assumptions
+> about the host. Each is covered by a witness-level test that asserts the
+> *named* failing constraint, and the M5, L12-on-a-disabled-slot, zero-threshold
+> and field-max-threshold fixtures were confirmed to be **accepted** by the
+> pre-fix circuit — so they are demonstrated breaks, not hypotheticals.
+>
+> §8 item 8's condition ("keep `quorum-circuit` gated until OLY-M5/OLY-L12 are
+> fixed") is therefore satisfied — but this does **not** ungate the feature. It
+> stays off by default for an unrelated reason: no trusted setup has been run
+> for this circuit, so its vkey is still a placeholder and no real proof can be
+> produced or verified. The explicit BJJ signature set in `crate::quorum`
+> remains authoritative.
+
 ---
 
 ## 1. Scope & methodology
@@ -49,7 +65,7 @@ Two independent multi-agent waves, ~310 subagent invocations, ~16M tokens of ana
 | OLY-M2 | Med | JS court verifier omits the BJJ-EdDSA `S<l` / R8 subgroup malleability checks the Rust path enforces | Offline verifier |
 | OLY-M3 | Med | Anchor HTTP client follows redirects, bypassing the `validate_anchor_url` HTTPS/loopback SSRF & MITM guard | Anchoring (SSRF) |
 | OLY-M4 | Med | Keychain-persisted admin API key is readable by any in-realm JS via the unrestricted `keychain_get` IPC | Frontend / IPC |
-| OLY-M5 | Med | `federation_quorum` circuit double-counts a padding-repeated signer — one signature can satisfy an inflated M-of-N threshold | ZK circuit (gated) |
+| OLY-M5 ✅ | Med | `federation_quorum` circuit double-counts a padding-repeated signer — one signature can satisfy an inflated M-of-N threshold | ZK circuit (gated) — **fixed:** in-circuit slot distinctness |
 | OLY-M6 | Med | Modern-PDF ObjStm decompression has no cumulative budget — accumulated 64-MiB inflations OOM the operator process | Untrusted parser (DoS) |
 | OLY-L01 | Low | RFC 3161 receipt stored `tst_info_verified:true` though the CMS signature over the token is never verified | Anchoring |
 | OLY-L02 | Low | DB-tier quorum credential silently downgradeable to single-issuer by nulling `quorum_threshold`, still verifies | Credentials |
@@ -62,7 +78,7 @@ Two independent multi-agent waves, ~310 subagent invocations, ~16M tokens of ana
 | OLY-L09 | Low | `OLYMPUS_DEV_SIGNING_KEY` honored in production with top precedence | Config (fail-open) |
 | OLY-L10 | Low | Unset `OLYMPUS_ENV` runs every startup security gate in permissive dev mode (fail-open default) | Config (fail-open) |
 | OLY-L11 | Low | `non_existence` verify root never bound to a trusted/anchored root (surface view of OLY-H2) | ZK verify |
-| OLY-L12 | Low | `federation_quorum` pinned pubkeys never on-curve / prime-subgroup checked (reconstruction or in-circuit) | ZK circuit (gated) |
+| OLY-L12 ✅ | Low | `federation_quorum` pinned pubkeys never on-curve / prime-subgroup checked (reconstruction or in-circuit) | ZK circuit (gated) — **fixed:** ungated `BabyCheck` per slot + a native subgroup check at reconstruction |
 | OLY-L13 | Low | BJJ authority key silently persisted to / reloaded from the OS keychain in production (contradicts env-only model) | Secrets |
 | OLY-L14 | Low | API client interpolates caller path params into URLs without `encodeURIComponent` (path-injection, defense-in-depth) | Frontend |
 | OLY-L15 | Low | Checkpoint-quorum message construction diverges Rust-vs-JS on a non-canonical pinned signer (silent-drop vs hard-abort) | Verifier conformance |
@@ -136,7 +152,7 @@ Equivocation is keyed on a tuple that includes the attacker-controlled `checkpoi
 These are *not* breaks today — each is one architectural decision away from one. Convert each to an explicit invariant + test.
 
 - **In-circuit canonicalization is vacuous.** The unified circuit's `canonicalHash` is a free Poseidon chain over opaque witnesses (`sectionHashes[i]===Poseidon(documentSections[i])`); the JCS byte-binding lives entirely *outside* the circuit. Held only because **no consumer treats `canonicalHash` as proof of canonicalization.** If one ever does → forgery.
-- **`federation_quorum` threshold has no in-circuit range constraint** (`GreaterEqThan(8)` soundness assumed on a trusted input). Held only because `threshold` always comes from server-pinned config. (See OLY-M5/OLY-L12.)
+- ~~**`federation_quorum` threshold has no in-circuit range constraint** (`GreaterEqThan(8)` soundness assumed on a trusted input). Held only because `threshold` always comes from server-pinned config.~~ **Fixed:** `threshold` is now range-bound to `[1, 2^8)` by `Num2Bits(8)` + a non-zero constraint, so the comparator's precondition is enforced rather than assumed. Confirmed exploitable pre-fix: a `threshold` of `r-1` wrapped `GreaterEqThan(8)` and the pre-fix circuit accepted the witness. (See OLY-M5/OLY-L12.)
 - **JS vs Rust canonicalizer diverge on numbers** beyond IEEE-754 round-trip. Held only because **JS is verify-only, never mints a commitment** (`canonicalJsonEncode` is marked non-authoritative and has no caller on a JS verification path).
 - **No public-input arity validation in `/zk/verify`** — ark-groth16 0.6 `prepare_inputs` silently zip-truncates surplus signals and accepts short vectors. Held by vkey IC-length integrity (which OLY-H1 attacks from another angle). (See OLY-L03.)
 - **Single-issuer checkpoint signs an un-domain-tagged `hash2(ledger_root, timestamp)`** under the shared BJJ key — the thinnest margin in the domain-separation matrix. No break today; **add an `OLY:CHECKPOINT` tag proactively.**
@@ -200,6 +216,6 @@ This audit was structured around static crypto/protocol correctness and **system
 7. **OLY-M3** (no-redirect anchor client), **OLY-M4** (move API key out of renderer-readable keychain / add in-process challenge), **OLY-M6 + OLY-L07 + OLY-I03** (shared per-document parser budget).
 
 **P2 — config & circuit gating:**
-8. Fail-safe defaults (OLY-L05/L06/L09/L10/L13); keep `quorum-circuit` gated until OLY-M5/OLY-L12 are fixed (in-circuit signer distinctness + on-curve/subgroup checks); fix the info-class circuit/docs drift (OLY-I06/I07).
+8. Fail-safe defaults (OLY-L05/L06/L09/L10/L13); ~~keep `quorum-circuit` gated until OLY-M5/OLY-L12 are fixed (in-circuit signer distinctness + on-curve/subgroup checks)~~ — **done**; both are now in-circuit constraints, though the feature stays gated pending its trusted setup (see the update note at the top); fix the info-class circuit/docs drift (OLY-I06/I07).
 
 **Next engagement:** a runtime/operational wave targeting the §7 blind spots — Tauri IPC, `/health` info-leak on the Tor router, async-cancellation/pool-exhaustion, background-task lifecycle, key-rotation/restore, and JS dependency CVEs.
