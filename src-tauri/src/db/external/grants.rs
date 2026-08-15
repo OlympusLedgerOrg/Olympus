@@ -153,6 +153,22 @@ pub(super) const EXTERNAL_PG_TABLE_GRANTS: &[ExternalPgTableGrant] = &[
         name: "anchor_submission_claims",
         privileges: &["SELECT", "INSERT"],
     },
+    // ADR-0041 append-only trust-transition records (migration 0062). All
+    // three are insert-only by protocol design — lifecycle changes are
+    // appended events, never row mutations — so the runtime holds no UPDATE
+    // or DELETE on any of them.
+    ExternalPgTableGrant {
+        name: "trust_transition_candidates",
+        privileges: &["SELECT", "INSERT"],
+    },
+    ExternalPgTableGrant {
+        name: "trust_candidate_events",
+        privileges: &["SELECT", "INSERT"],
+    },
+    ExternalPgTableGrant {
+        name: "trust_accepted_transitions",
+        privileges: &["SELECT", "INSERT"],
+    },
 ];
 
 /// The live runtime can update only fields written by an audited SQL path.

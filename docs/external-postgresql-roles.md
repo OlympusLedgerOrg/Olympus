@@ -279,6 +279,9 @@ migration-only.
 | `redaction_segment_manifests`  | `SELECT`, `INSERT`             |
 | `signed_request_nonces`        | `INSERT`, `DELETE`             |
 | `anchor_submission_claims`     | `SELECT`, `INSERT`             |
+| `trust_transition_candidates`  | `SELECT`, `INSERT`             |
+| `trust_candidate_events`       | `SELECT`, `INSERT`             |
+| `trust_accepted_transitions`   | `SELECT`, `INSERT`             |
 | `_sqlx_migrations`             | —                              |
 
 There is no table-wide runtime `UPDATE`, `TRUNCATE`, `REFERENCES`, or `TRIGGER`
@@ -304,7 +307,12 @@ grant.
 The nonce `SELECT` columns are exactly those used by `DELETE` predicates.
 `doc_commits` handles duplicate inserts with `DO NOTHING` plus a read, and the
 write-once redaction manifest read takes no row-update lock. Immutable evidence
-columns therefore remain unmodifiable by the runtime identity.
+columns therefore remain unmodifiable by the runtime identity. The three
+ADR-0041 trust-transition tables (`trust_transition_candidates`,
+`trust_candidate_events`, `trust_accepted_transitions`, migration 0062) are
+append-only by protocol design — candidate rows are immutable and every
+lifecycle change is an appended event — so they carry `SELECT`+`INSERT` only
+and no column-level `UPDATE` at all.
 
 ## Sequences, routines, types, defaults, and grant options
 
