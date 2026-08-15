@@ -309,9 +309,11 @@ ranges as authorities:
 5. Recompute every revealed leaf from artifact bytes plus the published
    `blinding_decimal`.
 6. Check every redacted span has the deterministic destroyed form for its format
-   (`text-line`: exactly `[REDACTED]\n`; `pdf-object`: NUL / PDF-whitespace body
-   between `obj` and `endobj`; `pdf-xref-stream`: logical body `null`;
-   `ooxml-part`: empty payload; `pdf-textrun`: omitted bytes / zero-length span).
+   (`text-line`: exactly `[REDACTED]\n`; `pdf-object`: the body between `obj` and
+   `endobj` is exactly `null` after trimming the PDF whitespace set
+   `{0x20, 0x09, 0x0d, 0x0a, 0x0c, 0x00}`; `pdf-xref-stream`: logical body
+   `null`; `ooxml-part`: empty payload; `pdf-textrun`: omitted bytes /
+   zero-length span).
    This canonical destroyed form is an artifact-integrity check only; redacted
    leaves still come solely from the signed `leaf_hex`.
 7. Fold exactly the verified `N` leaves with the pinned variable-depth
