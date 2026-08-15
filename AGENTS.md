@@ -337,6 +337,12 @@ Key `.env` variables:
 
 ## PR review etiquette
 
+Unlike the rest of this file, the specifics below describe a **third-party
+service's** behaviour, observed from outside. Nothing in this tree implements or
+verifies them — the only part of it this repo controls is `.coderabbit.yaml`.
+Read them as accurate-as-observed rather than as invariants, and confirm against
+CodeRabbit's dashboard or docs when one of them is load-bearing for a decision.
+
 - Always reply to CodeRabbit findings by mentioning `@coderabbitai` in the
   response (fix confirmations and declines alike) — replies feed its
   learnings database, so decisions persist across future reviews.
@@ -361,4 +367,4 @@ Key `.env` variables:
     over-limit reviews proceed; disabled, or enabled but out of credits, they
     stop until an admin enables it or tops up.
 
-<!-- wiserepo:source-sha256:0793be6751d24daf6aef51d8052a8c2bac313516dcbf2c58ff92d32d9da733e9 -->
+<!-- wiserepo:source-sha256:fd7acfc9dd2cb4225db82e968587228b74e7335e1c7950dc58cc699a90aea5b8 -->

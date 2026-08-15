@@ -356,6 +356,12 @@ Key `.env` variables:
 
 ## PR review etiquette
 
+Unlike the rest of this file, the specifics below describe a **third-party
+service's** behaviour, observed from outside. Nothing in this tree implements or
+verifies them — the only part of it this repo controls is `.coderabbit.yaml`.
+Read them as accurate-as-observed rather than as invariants, and confirm against
+CodeRabbit's dashboard or docs when one of them is load-bearing for a decision.
+
 - Always reply to CodeRabbit findings by mentioning `@coderabbitai` in the
   response (fix confirmations and declines alike) — replies feed its
   learnings database, so decisions persist across future reviews.
