@@ -366,7 +366,11 @@ CodeRabbit's dashboard or docs when one of them is load-bearing for a decision.
   response (fix confirmations and declines alike) — replies feed its
   learnings database, so decisions persist across future reviews.
 - **CodeRabbit allows 10 PR reviews per developer per hour** on this plan
-  (Pro Plus), as a rolling window rather than an hourly reset. What spends the
+  (Pro Plus), as a rolling window rather than an hourly reset — but read that as
+  a ceiling, not a budget. Its rate-limit notice describes *adaptive* limits for
+  sustained high-volume activity: past roughly the 95th percentile of user
+  activity, further reviews return more gradually as earlier ones age out. On
+  #1657 the limit landed after four pushes in the hour, not ten. What spends the
   budget is **pushing**, not commenting: an eligible push triggers an automatic
   review whenever `auto_review.auto_incremental_review` is on and the
   `auto_pause_after_reviewed_commits` threshold has not yet paused the branch.
