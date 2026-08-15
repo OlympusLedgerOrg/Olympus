@@ -8,6 +8,13 @@
   *(Spec-hardened by a second adversarial review the same day — see "Second
   hardening pass" below. Decisions ratified 2026-06-15: SR-DEC-1 ratified;
   SR-DEC-2 (nullifier) and SR-DEC-3 (canonical-text signing) reverted.)*
+- **Superseded in part by ADR-0034** (fixed-width redaction tokens, accepted
+  2026-06-24): the per-format **destroyed representation** is owned by ADR-0034
+  §2, not by this ADR. In particular `pdf-object` no longer NUL-fills the object
+  body in place — that approach is listed as *Rejected* there — it rebuilds the
+  file with the `N G obj\nnull\nendobj` structural null
+  (`src-tauri/src/zk/pdf_objects.rs:923`). The destroyed-representation list
+  below has been corrected to match; everything else in this ADR stands.
 - **Builds on:** ADR-0025/0026/0028 (the per-segment **hiding-leaf** commitment +
   the `Segmenter` abstraction), ADR-0029 (visual text-run redaction — *unblocked*
   by this ADR because the 1024-leaf cap disappears), and ADR-0005 (the
@@ -233,10 +240,11 @@ A recipient, holding the redacted artifact + the bundle:
    - **redacted** → use the published `leaf_hex` (**authoritative**) for the leaf.
      Redacted artifact bytes are never used to open that leaf, but the artifact
      itself MUST still carry the single deterministic destroyed representation for
-     the format (`text-line` re-emits `[REDACTED]\n`, `pdf-object` NUL-fills the
-     object body in place, `ooxml-part` emits an empty part body,
-     `pdf-xref-stream` rebuilds with the literal token `null`, and `pdf-textrun`
-     omits the redacted word bytes). The verifier checks that canonical form only
+     the format (`text-line` re-emits `[REDACTED]\n`, `pdf-object` rebuilds the
+     file with the `N G obj\nnull\nendobj` structural null, `ooxml-part` emits an
+     empty part body, `pdf-xref-stream` rebuilds with the literal token `null`,
+     and `pdf-textrun` omits the redacted word bytes). The verifier checks that
+     canonical form only
      to rule out alternate hidden payload bytes; it does not derive redacted leaf
      material from the destroyed bytes.
 

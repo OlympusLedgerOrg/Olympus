@@ -21,7 +21,7 @@ use crate::api::middleware::auth::{AuthenticatedKey, RateLimit};
 use crate::state::{self, AppState};
 use crate::zk::segment::apply_redaction_with_spans;
 
-use super::bundle_v3::{self, V3Error, V3Segment};
+use super::bundle_v3::{self, V3Bundle, V3Error, V3Segment};
 use super::manifest::{load_object_manifest, validate_redaction_selection, ManifestSelector};
 use super::types::{
     err, require_redact_scope, ApiError, RedactionRedactRequest, RedactionRedactResponse,
@@ -85,21 +85,6 @@ pub(crate) async fn perform_redaction(
     redacted_set: &HashSet<u32>,
     recipient_id: &str,
 ) -> Result<Json<RedactionRedactResponse>, ApiError> {
-    let content_digest = blake3::hash(original);
-    let content_hash = content_digest.to_hex().to_string();
-    let content_hash_raw = content_digest.as_bytes();
-
-    let redacted_obj_ids: Vec<u32> = redacted_set.iter().copied().collect();
-
-    // Apply the committed format's redaction transform and capture each segment's
-    // byte span in the produced artifact (ADR-0030 §2a).
-    let (artifact, spans) = apply_redaction_with_spans(original, manifest, &redacted_obj_ids)
-        .map_err(|e| err(StatusCode::UNPROCESSABLE_ENTITY, &format!("redact: {e}")))?;
-    let span_by_id: std::collections::HashMap<u32, (u64, u64)> = spans
-        .iter()
-        .map(|s| (s.segment_id, (s.artifact_offset, s.artifact_length)))
-        .collect();
-
     // The server blind secret is required to publish revealed-segment blindings
     // (it was also required at ingest to build the manifest).
     let blind_secret = state::secret_bytes(&state.redaction_blind_secret).ok_or_else(|| {
@@ -118,6 +103,82 @@ pub(crate) async fn perform_redaction(
         )
     })?;
 
+    let (artifact, bundle) = produce_bundle(
+        original,
+        manifest,
+        redacted_set,
+        recipient_id,
+        blind_secret,
+        &signing_key,
+    )
+    .map_err(produce_err)?;
+
+    tracing::info!(
+        content_hash = %blake3::hash(original).to_hex(),
+        recipient_id = %recipient_id.trim(),
+        format = %manifest.format.as_tag(),
+        segment_count = bundle.segment_count,
+        redacted = redacted_set.len(),
+        "redaction_redact_v3",
+    );
+
+    Ok(Json(RedactionRedactResponse {
+        redacted_base64: STANDARD.encode(&artifact),
+        bundle,
+    }))
+}
+
+/// Failure from the pure producer core, [`produce_bundle`].
+#[derive(Debug, thiserror::Error)]
+pub enum ProduceError {
+    /// The committed format's redaction transform refused the input.
+    #[error("redact: {0}")]
+    Segment(#[from] crate::zk::segment::SegmentError),
+    /// A manifest segment has no span in the produced artifact. The segmenter
+    /// is supposed to emit one span per committed segment, so this is an
+    /// internal inconsistency, not a caller error.
+    #[error("segment {0} missing from the produced artifact spans")]
+    MissingSpan(u32),
+    /// Structural / signing failure while assembling the V3 bundle.
+    #[error("bundle: {0}")]
+    Bundle(#[from] V3Error),
+}
+
+/// Apply the committed format's redaction transform and assemble + sign the V3
+/// bundle bound to it — the **entire producer path**, with both secrets passed
+/// in explicitly and no `AppState`, database, or HTTP dependency.
+///
+/// Split out of [`perform_redaction`] so the producer→verifier round-trip gate
+/// (`tests/redaction_producer_verifier_round_trip.rs`, ADR-0030 §3) drives the
+/// *shipping* producer rather than a second implementation of it. That gate is
+/// the control whose absence was carried as `I-01` in the V6 audit: the offline
+/// verifiers were only ever fed hand-built vectors, so a producer/verifier drift
+/// could — and once did (`A1-01`) — reach `main` with every test green.
+///
+/// Keep this function free of `AppState`: the moment it needs one, the gate has
+/// to reconstruct server state and will drift back towards re-implementing the
+/// path it is supposed to be checking.
+pub fn produce_bundle(
+    original: &[u8],
+    manifest: &crate::zk::segment::SegmentManifest,
+    redacted_set: &HashSet<u32>,
+    recipient_id: &str,
+    blind_secret: &[u8],
+    signing_key: &[u8; 32],
+) -> Result<(Vec<u8>, V3Bundle), ProduceError> {
+    let content_digest = blake3::hash(original);
+    let content_hash_raw = content_digest.as_bytes();
+
+    let redacted_obj_ids: Vec<u32> = redacted_set.iter().copied().collect();
+
+    // Apply the committed format's redaction transform and capture each segment's
+    // byte span in the produced artifact (ADR-0030 §2a).
+    let (artifact, spans) = apply_redaction_with_spans(original, manifest, &redacted_obj_ids)?;
+    let span_by_id: std::collections::HashMap<u32, (u64, u64)> = spans
+        .iter()
+        .map(|s| (s.segment_id, (s.artifact_offset, s.artifact_length)))
+        .collect();
+
     // Only `ooxml-part` binds the part-name label into its leaf; every other
     // format keys solely on the segment id, so its label is None in the bundle.
     let is_ooxml = manifest.format == crate::zk::segment::SegmentFormat::OoxmlPart;
@@ -125,12 +186,8 @@ pub(crate) async fn perform_redaction(
     let mut segments: Vec<V3Segment> = Vec::with_capacity(manifest.segments.len());
     for seg in &manifest.segments {
         let id = seg.segment_id;
-        let &(artifact_offset, artifact_length) = span_by_id.get(&id).ok_or_else(|| {
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                &format!("segment {id} missing from the produced artifact spans"),
-            )
-        })?;
+        let &(artifact_offset, artifact_length) =
+            span_by_id.get(&id).ok_or(ProduceError::MissingSpan(id))?;
         let redacted = redacted_set.contains(&id);
         let label = if is_ooxml { seg.label.clone() } else { None };
         let (blinding_decimal, leaf_hex) = if redacted {
@@ -151,29 +208,27 @@ pub(crate) async fn perform_redaction(
         });
     }
 
-    let recipient_id = recipient_id.trim().to_string();
     let bundle = bundle_v3::assemble_and_sign(
         &manifest.original_root_hex,
         manifest.format.as_tag(),
-        &recipient_id,
+        recipient_id.trim(),
         segments,
-        &signing_key,
-    )
-    .map_err(v3_err)?;
+        signing_key,
+    )?;
 
-    tracing::info!(
-        content_hash = %content_hash,
-        recipient_id = %recipient_id,
-        format = %manifest.format.as_tag(),
-        segment_count = bundle.segment_count,
-        redacted = redacted_set.len(),
-        "redaction_redact_v3",
-    );
+    Ok((artifact, bundle))
+}
 
-    Ok(Json(RedactionRedactResponse {
-        redacted_base64: STANDARD.encode(&artifact),
-        bundle,
-    }))
+/// Map a producer-core error to an HTTP status, preserving the split the
+/// handler had before [`produce_bundle`] was extracted: a refused transform is
+/// the caller's `422`, a missing span is our `500`, and bundle assembly keeps
+/// [`v3_err`]'s finer-grained mapping.
+fn produce_err(e: ProduceError) -> ApiError {
+    match e {
+        ProduceError::Segment(_) => err(StatusCode::UNPROCESSABLE_ENTITY, &format!("{e}")),
+        ProduceError::MissingSpan(_) => err(StatusCode::INTERNAL_SERVER_ERROR, &format!("{e}")),
+        ProduceError::Bundle(inner) => v3_err(inner),
+    }
 }
 
 /// Map a V3 assembly error to an HTTP status: caller-shape problems (bad
