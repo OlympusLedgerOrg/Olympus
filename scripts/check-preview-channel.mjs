@@ -22,10 +22,12 @@
  * Run via `pnpm preview-channel:check` (wired into `pnpm tooling:check`).
  */
 
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
+
+import { load as loadYaml } from "js-yaml";
 
 const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
 
@@ -211,9 +213,72 @@ export const checkPinAgreement = (root) => {
   return errors;
 };
 
+/**
+ * 3. NO EXPRESSIONS IN ACTION METADATA.
+ *
+ * The runner evaluates GitHub expressions in a composite action's `name`,
+ * `description`, and input `description` fields — they are template strings,
+ * not inert prose. A comment explaining that something is "not an
+ * `${...inputs...}` indirection" is therefore parsed as a real expression, and
+ * the manifest fails to load with "Unrecognized named-value" before a single
+ * step runs. That is exactly how the first preview tag died, and neither
+ * `js-yaml` nor prettier catches it, because the YAML is perfectly valid.
+ *
+ * Scoped to local composite actions under `.github/actions/`, where the failure
+ * mode is total (the action cannot load at all). Workflow files legitimately
+ * use expressions almost everywhere, so they are not scanned.
+ */
+export const checkActionMetadataExpressions = (root) => {
+  const errors = [];
+  const actionsDir = path.join(root, ".github", "actions");
+  if (!existsSync(actionsDir)) return errors;
+
+  const expression = /\$\{\{/;
+  for (const entry of readdirSync(actionsDir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const relative = path.posix.join(".github/actions", entry.name, "action.yml");
+    const absolute = path.join(root, relative);
+    if (!existsSync(absolute)) continue;
+
+    const contents = readFileSync(absolute, "utf8");
+    let manifest;
+    try {
+      manifest = loadYaml(contents);
+    } catch (error) {
+      errors.push(`${relative} is not valid YAML: ${error.message}`);
+      continue;
+    }
+
+    const fields = [
+      ["name", manifest?.name],
+      ["description", manifest?.description],
+      ...Object.entries(manifest?.inputs ?? {}).map(([input, spec]) => [
+        `inputs.${input}.description`,
+        spec?.description,
+      ]),
+      ...Object.entries(manifest?.outputs ?? {}).map(([output, spec]) => [
+        `outputs.${output}.description`,
+        spec?.description,
+      ]),
+    ];
+
+    for (const [field, value] of fields) {
+      if (typeof value === "string" && expression.test(value)) {
+        errors.push(
+          `${relative}: ${field} contains GitHub expression syntax. The runner evaluates ` +
+            `expressions in action metadata, so the manifest will fail to load with ` +
+            `"Unrecognized named-value" before any step runs. Describe it in words instead.`,
+        );
+      }
+    }
+  }
+  return errors;
+};
+
 export const checkPreviewChannel = (root = REPO_ROOT) => [
   ...checkContainment(root),
   ...checkPinAgreement(root),
+  ...checkActionMetadataExpressions(root),
 ];
 
 const main = () => {
@@ -226,7 +291,7 @@ const main = () => {
     process.exitCode = 1;
     return;
   }
-  console.log("preview-channel: containment and pin agreement OK");
+  console.log("preview-channel: containment, pin agreement, and action metadata OK");
 };
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
