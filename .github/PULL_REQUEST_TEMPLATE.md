@@ -2,6 +2,26 @@
 
 <!-- What does this PR change, and why? Link the issue if one exists. -->
 
+## Scope
+
+<!--
+The paths this PR intends to touch, one repo-root-relative glob per list item.
+The PR Scope Drift check fails if the diff reaches outside them.
+
+  "*" and "?" stay within one path segment; "**" crosses directories;
+  a trailing "/" means everything beneath; a plain path with no wildcards
+  covers itself and everything under it.
+
+Reaching further can be right — widen this list if the extra paths were always
+part of the task, or apply the `scope-override` label and say why below.
+Note that staging CLAUDE.md regenerates AGENTS.md, so declare both.
+
+  ## Scope
+
+  - app/public-ui/src/components/**
+  - src-tauri/src/api/ledger.rs
+-->
+
 ## Checklist
 
 - [ ] Non-DB `cargo nextest`, shared-process embedded-Postgres `cargo test`, workspace doctests, and Clippy pass locally (prefer the `.githooks/pre-push` hook, which runs the canonical commands)
