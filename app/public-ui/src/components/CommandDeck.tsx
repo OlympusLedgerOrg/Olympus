@@ -1,5 +1,4 @@
 import type { Tab } from "../lib/types";
-import { useSkin } from "../skins/SkinContext";
 
 type Command = {
   id: Tab;
@@ -51,8 +50,6 @@ export default function CommandDeck({
   activeTab: Tab;
   onSelect: (tab: Tab) => void;
 }) {
-  const { skin } = useSkin();
-
   return (
     <section className="command-deck" aria-label="Verification command deck">
       {COMMANDS.map((command) => {
@@ -61,7 +58,7 @@ export default function CommandDeck({
           <button
             key={command.id}
             type="button"
-            className={`command-card ${active ? "is-active" : ""} ${skin.classes.card}`}
+            className={`command-card ods-card${active ? " is-active" : ""}`}
             onClick={() => onSelect(command.id)}
             aria-pressed={active}
           >

@@ -16,7 +16,6 @@
  * == original_root + Ed25519 signature + nullifier.
  */
 import { useCallback, useRef, useState } from "react";
-import { useSkin } from "../skins/SkinContext";
 import type { RedactionAuditStage } from "../hooks/useRedactionAudit";
 import type { V3Bundle } from "../lib/redactionBinding";
 
@@ -62,7 +61,6 @@ export default function RedactionTab({
   onAudit,
   onReset,
 }: RedactionTabProps) {
-  const { skin } = useSkin();
   const fileRef = useRef<HTMLInputElement>(null);
   const bundleRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
@@ -109,7 +107,7 @@ export default function RedactionTab({
     textAlign: "center",
     cursor: busy ? "default" : "pointer",
     transition: "border-color 0.15s, background 0.15s",
-    fontFamily: "'DM Mono', monospace",
+    fontFamily: "var(--font-terminal)",
     fontSize: "0.75rem",
   };
   const slotFilled = (filled: boolean): React.CSSProperties =>
@@ -140,7 +138,7 @@ export default function RedactionTab({
           style={{
             margin: "0 0 0.75rem",
             fontSize: "0.72rem",
-            fontFamily: "'DM Mono', monospace",
+            fontFamily: "var(--font-terminal)",
             color: `${purple}0.7)`,
             textAlign: "center",
             letterSpacing: "0.06em",
@@ -243,7 +241,7 @@ export default function RedactionTab({
               placeholder="64-hex issuer verifying key"
               aria-label="Issuer Ed25519 public key"
               style={{
-                fontFamily: "'DM Mono', monospace",
+                fontFamily: "var(--font-terminal)",
                 fontSize: "0.7rem",
                 color: accent,
                 background: "rgba(0,0,0,0.25)",
@@ -286,18 +284,18 @@ export default function RedactionTab({
       </div>
 
       {error && (
-        <p className="err-text" style={{ marginTop: "0.5rem" }}>
+        <p className="ods-error" style={{ marginTop: "0.5rem" }}>
           {error}
         </p>
       )}
 
       {stage === "done" && verified !== null && (
         <div
-          className={skin.classes.panel}
+          className="ods-panel"
           style={{
             marginTop: "0.75rem",
             padding: "0.8rem 1rem",
-            fontFamily: "'DM Mono', monospace",
+            fontFamily: "var(--font-terminal)",
             fontSize: "0.78rem",
             borderColor: verified ? `${purple}0.55)` : "rgba(255,80,80,0.45)",
             background: verified ? `${purple}0.04)` : "rgba(255,80,80,0.04)",
@@ -314,7 +312,7 @@ export default function RedactionTab({
             {verified ? "✓ BUNDLE_VERIFIED" : "✗ BUNDLE_REJECTED"}
           </div>
           {!verified && verifyReason && (
-            <p className="err-text" style={{ margin: "0 0 0.5rem" }}>
+            <p className="ods-error" style={{ margin: "0 0 0.5rem" }}>
               {verifyReason}
             </p>
           )}
@@ -376,7 +374,7 @@ export default function RedactionTab({
       <div style={{ display: "flex", gap: "0.6rem", marginTop: "0.9rem" }}>
         <button
           type="button"
-          className={skin.classes.buttonPrimary}
+          className="ods-btn"
           onClick={onAudit}
           disabled={busy || !canAudit}
           style={{ flex: 1 }}
@@ -389,7 +387,7 @@ export default function RedactionTab({
         </button>
         <button
           type="button"
-          className={skin.classes.buttonSecondary}
+          className="ods-btn-ghost"
           onClick={onReset}
           disabled={busy || stage === "idle"}
           style={{ flex: "0 0 8rem" }}

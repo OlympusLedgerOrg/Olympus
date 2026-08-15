@@ -111,7 +111,7 @@ export default function FileHasher({ onHash, onProgress, onFile }: FileHasherPro
       {hashing ? (
         <>
           <p style={{ color: "#00FF41", fontSize: "0.85rem", margin: 0 }}>
-            HASHING: <span style={{ fontFamily: "'DM Mono', monospace" }}>{fileName}</span>
+            HASHING: <span style={{ fontFamily: "var(--font-terminal)" }}>{fileName}</span>
           </p>
           <div className="progress-track" style={{ marginTop: "0.85rem" }}>
             <div className="progress-fill" style={{ width: `${progress}%` }} />
@@ -126,7 +126,7 @@ export default function FileHasher({ onHash, onProgress, onFile }: FileHasherPro
               margin: "0 0 0.25rem",
             }}
           >
-            <span style={{ fontFamily: "'DM Mono', monospace" }}>{fileName}</span>
+            <span style={{ fontFamily: "var(--font-terminal)" }}>{fileName}</span>
           </p>
           <p
             style={{

@@ -59,7 +59,7 @@ export default function RecentVerifications({ onSelect }: RecentVerificationsPro
         {entries.length > 0 && (
           <button
             type="button"
-            className="icon-text-btn"
+            className="ods-btn-ghost"
             onClick={() => {
               clearRecentVerifications();
               setEntries([]);
@@ -95,7 +95,7 @@ export default function RecentVerifications({ onSelect }: RecentVerificationsPro
             <span
               style={{
                 color: "rgba(0,255,65,0.68)",
-                fontFamily: "'DM Mono', monospace",
+                fontFamily: "var(--font-terminal)",
                 overflow: "hidden",
                 textOverflow: "ellipsis",
                 whiteSpace: "nowrap",

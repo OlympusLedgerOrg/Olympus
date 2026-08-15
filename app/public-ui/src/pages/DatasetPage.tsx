@@ -199,7 +199,7 @@ export default function DatasetPage() {
           marginBottom: "1.5rem",
         }}
       >
-        <div className="cyber-panel-sm" style={{ padding: "0.85rem 1rem" }}>
+        <div className="ods-card" style={{ padding: "0.85rem 1rem" }}>
           <p
             style={{
               fontSize: "0.55rem",
@@ -212,7 +212,7 @@ export default function DatasetPage() {
           </p>
           <HashDisplay hash={ds.dataset_id} label="DATASET_ID" />
         </div>
-        <div className="cyber-panel-sm" style={{ padding: "0.85rem 1rem" }}>
+        <div className="ods-card" style={{ padding: "0.85rem 1rem" }}>
           <p
             style={{
               fontSize: "0.55rem",
@@ -225,7 +225,7 @@ export default function DatasetPage() {
           </p>
           <p
             style={{
-              fontFamily: "'DM Mono', monospace",
+              fontFamily: "var(--font-terminal)",
               fontSize: "0.68rem",
               color: "rgba(0,255,65,0.8)",
               wordBreak: "break-all",
@@ -235,7 +235,7 @@ export default function DatasetPage() {
             {ds.commit_id}
           </p>
         </div>
-        <div className="cyber-panel-sm" style={{ padding: "0.85rem 1rem" }}>
+        <div className="ods-card" style={{ padding: "0.85rem 1rem" }}>
           <p
             style={{
               fontSize: "0.55rem",
@@ -260,7 +260,7 @@ export default function DatasetPage() {
             {ds.source_uri}
           </a>
         </div>
-        <div className="cyber-panel-sm" style={{ padding: "0.85rem 1rem" }}>
+        <div className="ods-card" style={{ padding: "0.85rem 1rem" }}>
           <p
             style={{
               fontSize: "0.55rem",
@@ -335,7 +335,7 @@ export default function DatasetPage() {
             >
               <span
                 style={{
-                  fontFamily: "'DM Mono', monospace",
+                  fontFamily: "var(--font-terminal)",
                   color: "rgba(0,255,65,0.7)",
                   overflow: "hidden",
                   textOverflow: "ellipsis",
@@ -346,7 +346,7 @@ export default function DatasetPage() {
               </span>
               <span
                 style={{
-                  fontFamily: "'DM Mono', monospace",
+                  fontFamily: "var(--font-terminal)",
                   color: "rgba(0,255,65,0.4)",
                   textAlign: "right",
                   whiteSpace: "nowrap",
@@ -356,7 +356,7 @@ export default function DatasetPage() {
               </span>
               <span
                 style={{
-                  fontFamily: "'DM Mono', monospace",
+                  fontFamily: "var(--font-terminal)",
                   color: "rgba(0,255,65,0.35)",
                   overflow: "hidden",
                   textOverflow: "ellipsis",
@@ -393,7 +393,7 @@ export default function DatasetPage() {
           <pre
             style={{
               fontSize: "0.65rem",
-              fontFamily: "'DM Mono', monospace",
+              fontFamily: "var(--font-terminal)",
               color: "rgba(0,255,65,0.6)",
               padding: "1rem",
               overflowX: "auto",

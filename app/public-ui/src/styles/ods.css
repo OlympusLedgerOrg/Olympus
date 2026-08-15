@@ -1,0 +1,358 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Olympus Contributors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   ODS — Olympus Design System role classes
+   app/public-ui/src/styles/ods.css
+
+   One class per component role, driven entirely by skin tokens. Replaces the
+   three parallel families (.cyber-* / .term-* / .basic-*) and the
+   `html.skin-* .foo` override blocks previously in index.css.
+
+   Imported from index.css AFTER the token + skin blocks:
+       @import "./styles/ods.css";
+
+   NOTE (step 10): the per-skin token blocks below extend the ones still in
+   index.css. When index.css is split, both halves move into skins.css and
+   this file keeps only the role classes.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Per-skin SHAPE + EMPHASIS tokens ──────────────────────────────────────
+   These are what the three component families were actually encoding.
+   Colour tokens (--bg-*, --fg-*, --accent, --border-*) stay in index.css.   */
+
+:root,
+html.skin-glitch {
+  --accent-contrast: var(--void-black);
+  --ok: var(--terminal-green);
+
+  --shape-panel-clip: var(--clip-panel);
+  --shape-card-clip: var(--clip-panel-sm);
+  --shape-btn-clip: var(--clip-button);
+  --shape-radius: 0;
+  --shape-radius-sm: 0;
+
+  --elev-panel: var(--glow-sm), var(--inset-glow);
+  --elev-raised: var(--glow-md), var(--inset-glow);
+  --focus-ring: 0 0 0 1px var(--accent), var(--glow-sm);
+  --text-glow: 0 0 6px var(--accent-glow);
+
+  --btn-fill: transparent;
+  --btn-fg: var(--accent);
+}
+
+html.skin-terminal {
+  --accent-contrast: var(--crt-black);
+  --ok: var(--term-amber);
+
+  --shape-panel-clip: none;
+  --shape-card-clip: none;
+  --shape-btn-clip: none;
+  --shape-radius: 0;
+  --shape-radius-sm: 0;
+
+  --elev-panel: 0 0 14px rgba(228, 181, 90, 0.12);
+  --elev-raised: 0 0 20px rgba(228, 181, 90, 0.2);
+  --focus-ring: 0 0 0 2px var(--accent);
+  --text-glow: none;
+
+  --btn-fill: transparent;
+  --btn-fg: var(--accent);
+}
+
+html.skin-basic {
+  --accent-contrast: #ffffff;
+  --ok: #15803d;
+
+  --shape-panel-clip: none;
+  --shape-card-clip: none;
+  --shape-btn-clip: none;
+  --shape-radius: var(--radius-lg);
+  --shape-radius-sm: var(--radius-md);
+
+  --elev-panel: var(--shadow-2);
+  --elev-raised: var(--shadow-3);
+  --focus-ring: 0 0 0 3px rgba(59, 130, 246, 0.35);
+  --text-glow: none;
+
+  --btn-fill: var(--accent);
+  --btn-fg: var(--accent-contrast);
+}
+
+/* ── Page root ─────────────────────────────────────────────────────────────
+   Replaces .skin-page-glitch / -basic / -terminal.                          */
+.ods-page {
+  min-height: 100vh;
+  background: var(--bg-0);
+  color: var(--fg-1);
+}
+
+/* ── Surfaces ──────────────────────────────────────────────────────────── */
+.ods-panel {
+  background: var(--bg-1);
+  border: 1px solid var(--border-1);
+  border-radius: var(--shape-radius);
+  clip-path: var(--shape-panel-clip);
+  box-shadow: var(--elev-panel);
+  backdrop-filter: blur(10px);
+}
+.ods-card {
+  background: var(--bg-1);
+  border: 1px solid var(--border-1);
+  border-radius: var(--shape-radius-sm);
+  clip-path: var(--shape-card-clip);
+  box-shadow: var(--elev-panel);
+  backdrop-filter: blur(10px);
+}
+.ods-card--interactive {
+  cursor: pointer;
+  transition:
+    transform 0.16s ease,
+    border-color 0.16s ease,
+    box-shadow 0.16s ease;
+}
+.ods-card--interactive:hover,
+.ods-card--interactive:focus-visible {
+  border-color: var(--border-strong);
+  box-shadow: var(--elev-raised);
+  transform: translateY(-2px);
+  outline: none;
+}
+
+/* ── Buttons ───────────────────────────────────────────────────────────── */
+.ods-btn,
+.ods-btn-ghost,
+.ods-btn-danger {
+  font-family: var(--font-ui-cyber);
+  text-transform: uppercase;
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background 0.16s ease,
+    color 0.16s ease,
+    border-color 0.16s ease,
+    box-shadow 0.16s ease;
+}
+.ods-btn {
+  min-height: 2.6rem;
+  padding: 0.7rem 1.4rem;
+  font-size: 0.72rem;
+  letter-spacing: var(--tracking-mid);
+  background: var(--btn-fill);
+  color: var(--btn-fg);
+  border: 1px solid var(--accent);
+  border-radius: var(--shape-radius-sm);
+  clip-path: var(--shape-btn-clip);
+}
+.ods-btn:hover:not(:disabled) {
+  background: var(--accent);
+  color: var(--accent-contrast);
+  box-shadow: var(--elev-raised);
+}
+.ods-btn-ghost {
+  min-height: 2.2rem;
+  padding: 0.4rem 0.7rem;
+  font-size: 0.58rem;
+  letter-spacing: var(--tracking-mid);
+  background: var(--bg-2);
+  color: var(--fg-2);
+  border: 1px solid var(--border-2);
+  border-radius: var(--shape-radius-sm);
+}
+.ods-btn-ghost:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  color: var(--accent);
+}
+.ods-btn-danger {
+  min-height: 2.2rem;
+  padding: 0.4rem 0.7rem;
+  font-size: 0.58rem;
+  letter-spacing: var(--tracking-mid);
+  background: transparent;
+  color: var(--danger);
+  border: 1px solid var(--danger);
+  border-radius: var(--shape-radius-sm);
+}
+.ods-btn-danger:hover:not(:disabled) {
+  background: var(--danger);
+  color: var(--accent-contrast);
+}
+.ods-btn:disabled,
+.ods-btn-ghost:disabled,
+.ods-btn-danger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.ods-btn:focus-visible,
+.ods-btn-ghost:focus-visible,
+.ods-btn-danger:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+/* ── Fields ────────────────────────────────────────────────────────────── */
+.ods-field {
+  display: grid;
+  gap: 0.35rem;
+}
+.ods-label {
+  display: block;
+  color: var(--fg-3);
+  font-family: var(--font-section);
+  font-size: 0.62rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.ods-input {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 2.6rem;
+  padding: 0.7rem 0.85rem;
+  background: var(--bg-2);
+  color: var(--fg-1);
+  border: 1px solid var(--border-1);
+  border-radius: var(--shape-radius-sm);
+  font-family: var(--font-terminal);
+  font-size: 0.78rem;
+  outline: none;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+.ods-input::placeholder {
+  color: var(--fg-muted);
+}
+.ods-input:focus {
+  border-color: var(--accent);
+  box-shadow: var(--focus-ring);
+}
+.ods-input[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+.ods-hint {
+  color: var(--fg-muted);
+  font-size: 0.6rem;
+  line-height: 1.45;
+}
+.ods-error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 0.66rem;
+  line-height: 1.45;
+}
+
+/* ── Tabs ──────────────────────────────────────────────────────────────── */
+.ods-tablist {
+  display: flex;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--border-2);
+}
+.ods-tab {
+  flex: 1;
+  min-width: 8.2rem;
+  padding: 0.65rem 0.5rem;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--fg-muted);
+  font-family: var(--font-ui-cyber);
+  font-size: 0.62rem;
+  letter-spacing: var(--tracking-mid);
+  text-transform: uppercase;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    color 0.15s ease,
+    border-color 0.15s ease,
+    background 0.15s ease;
+}
+.ods-tab:hover:not([aria-selected="true"]) {
+  color: var(--fg-2);
+}
+.ods-tab[aria-selected="true"] {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  text-shadow: var(--text-glow);
+}
+.ods-tab:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+/* ── Status pills ──────────────────────────────────────────────────────── */
+.ods-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.45rem;
+  padding: 0.24rem 0.55rem;
+  border: 1px solid var(--border-2);
+  border-radius: 999px;
+  background: var(--bg-2);
+  color: var(--fg-2);
+  font-family: var(--font-ui-cyber);
+  font-size: 0.56rem;
+  line-height: 1;
+  letter-spacing: var(--tracking-mid);
+  white-space: nowrap;
+}
+.ods-pill[data-tone="ok"] {
+  border-color: var(--ok);
+  color: var(--ok);
+}
+.ods-pill[data-tone="err"] {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+.ods-pill[data-tone="warn"] {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+.ods-pill[data-tone="neutral"] {
+  border-color: var(--border-2);
+  color: var(--fg-3);
+}
+
+/* ── Monospace value display (hashes, roots, keys) ─────────────────────── */
+.ods-code {
+  display: block;
+  padding: 0.6rem 0.75rem;
+  background: var(--bg-2);
+  border: 1px solid var(--border-2);
+  border-radius: var(--shape-radius-sm);
+  color: var(--fg-1);
+  font-family: var(--font-proof);
+  font-size: 0.68rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+/* Secret-bearing surfaces read as caution, not as accent. */
+.ods-secret {
+  border-color: color-mix(in srgb, var(--warn) 45%, transparent);
+  background: color-mix(in srgb, var(--warn) 5%, transparent);
+  color: var(--warn);
+}
+
+/* ── Text roles ────────────────────────────────────────────────────────── */
+.ods-accent {
+  color: var(--accent);
+}
+.ods-muted {
+  color: var(--fg-muted);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ods-card--interactive,
+  .ods-btn,
+  .ods-btn-ghost,
+  .ods-btn-danger,
+  .ods-input,
+  .ods-tab {
+    transition: none;
+  }
+  .ods-card--interactive:hover {
+    transform: none;
+  }
+}

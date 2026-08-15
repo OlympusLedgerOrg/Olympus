@@ -97,7 +97,7 @@ const LoadingSplash: FC = () => (
       x="312"
       y="194"
       textAnchor="end"
-      fontFamily="'DM Mono', monospace"
+      style={{ fontFamily: "var(--font-terminal)" }}
       fontSize="6"
       fill="rgba(0,255,65,0.45)"
       letterSpacing="0.12em"

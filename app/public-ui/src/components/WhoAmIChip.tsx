@@ -83,7 +83,7 @@ const WhoAmIChip: React.FC = () => {
         display: "inline-flex",
         alignItems: "center",
         gap: "0.4rem",
-        fontFamily: "'DM Mono', monospace",
+        fontFamily: "var(--font-terminal)",
         fontSize: "0.55rem",
         letterSpacing: "0.06em",
         color: isAdmin ? "#ccffcc" : "rgba(0,255,65,0.7)",

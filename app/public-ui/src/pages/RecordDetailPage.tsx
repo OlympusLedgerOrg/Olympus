@@ -214,7 +214,7 @@ export default function RecordDetailPage() {
             color: "#ff0055",
             padding: 0,
             letterSpacing: "0.06em",
-            fontFamily: "'DM Mono', monospace",
+            fontFamily: "var(--font-terminal)",
           }}
         >
           DOWNLOAD_PROOF_BUNDLE
@@ -241,7 +241,7 @@ export default function RecordDetailPage() {
         <pre
           style={{
             fontSize: "0.68rem",
-            fontFamily: "'DM Mono', monospace",
+            fontFamily: "var(--font-terminal)",
             color: "rgba(0,255,65,0.6)",
             padding: "1rem",
             overflowX: "auto",

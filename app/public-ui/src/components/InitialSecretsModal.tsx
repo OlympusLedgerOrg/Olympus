@@ -8,7 +8,7 @@
 /// Backend wiring: see src-tauri/src/main.rs (take_initial_secrets +
 /// InitialSecretsState) and src-tauri/src/bootstrap.rs (FreshlyGenerated).
 import { useEffect, useState } from "react";
-import { setStoredAdminKey, setStoredApiKey } from "../lib/storage";
+import { getStoredApiKey, setStoredAdminKey, setStoredApiKey } from "../lib/storage";
 import { tauriInvoke } from "../lib/api";
 
 type InitialSecrets = {
@@ -28,6 +28,9 @@ const InitialSecretsModal: React.FC = () => {
   // bjjCopied flags. The manual-ack checkbox lets them confirm
   // explicitly so the dismiss button unblocks.
   const [manualAck, setManualAck] = useState(false);
+  // True when the bootstrap key failed to load into the in-memory store, so
+  // the "pre-filled for this session" note must not be shown.
+  const [prefillFailed, setPrefillFailed] = useState(false);
 
   useEffect(() => {
     // Skip if the operator already acknowledged on a prior launch — the
@@ -44,18 +47,27 @@ const InitialSecretsModal: React.FC = () => {
         if (cancelled) return;
         if (result && (result.system_api_key || result.bjj_authority_key_hex)) {
           setSecrets(result);
-          // Pre-fill the admin-key field that the existing AdminPage /
-          // IngestPage components read out of localStorage. The operator
-          // can change/delete it any time.
+          // Pre-fill the two in-memory slots that AdminPage / IngestPage
+          // read from. These are module-scoped variables in storage.ts,
+          // NOT localStorage — see the SECURITY MODEL comment there. The
+          // operator can change or clear the value any time, and it does
+          // not survive a reload, which is what the note in the modal body
+          // tells them.
           //
           // The system bootstrap key plays double duty: it's the operator-
           // tier admin secret (x-admin-key) AND a regular admin-scope API
-          // key. Store under both keys so the IngestPage's API-key field
-          // auto-fills too — otherwise the modal's "Already saved…" note
-          // is a lie and the operator has to manually paste it.
+          // key. Populate both slots so the IngestPage's API-key field
+          // auto-fills too, otherwise the operator has to paste it by hand
+          // into a surface the modal says is already wired up.
           if (result.system_api_key) {
             setStoredAdminKey(result.system_api_key);
             setStoredApiKey(result.system_api_key);
+            // setStoredApiKey silently discards a value that fails
+            // apiKeyProblem() — it clears the slot and returns void, so a
+            // malformed bootstrap key would leave the session unwired while
+            // the note below still claimed it was pre-filled. Read back
+            // instead of assuming, and downgrade the copy if it didn't take.
+            if (!getStoredApiKey()) setPrefillFailed(true);
           }
         }
       } catch (e) {
@@ -69,6 +81,10 @@ const InitialSecretsModal: React.FC = () => {
   }, []);
 
   if (!secrets) return null;
+
+  // Either secret may be null and each section renders conditionally, so the
+  // prompts must not say "both" when only one is on screen.
+  const bothShown = !!secrets.system_api_key && !!secrets.bjj_authority_key_hex;
 
   const dismiss = () => {
     localStorage.setItem(SEEN_KEY, new Date().toISOString());
@@ -112,7 +128,7 @@ const InitialSecretsModal: React.FC = () => {
           background: "#000",
           border: "2px solid rgba(0,255,65,0.55)",
           padding: "1.8rem 2rem",
-          fontFamily: "'DM Mono', monospace",
+          fontFamily: "var(--font-terminal)",
           color: "#00ff41",
         }}
       >
@@ -136,10 +152,23 @@ const InitialSecretsModal: React.FC = () => {
             marginTop: 0,
           }}
         >
-          These secrets were generated when the database was initialised. They are{" "}
-          <strong>not</strong> stored in recoverable form: the API key has only its BLAKE3 hash in
-          the database, and the BJJ private key is never persisted anywhere.{" "}
-          <strong>Copy them now</strong> — they will never appear in this dialog again.
+          {/*
+            Deliberately makes no claim about whether the BJJ authority key is
+            persisted. That is build-mode dependent and stating it either way
+            is a hazard: in production `bjj_private_dev` is left NULL and
+            bootstrap.rs refuses the keychain write, so the operator's env var
+            is the only copy — but a dev build persists the key to BOTH the DB
+            column and the OS keychain (load precedence env → keychain → DB).
+            Claiming "never persisted" is false on a dev machine; claiming it
+            is recoverable would tell a production operator they can skip
+            saving a key they cannot get back. The instruction below is the
+            one thing true in both modes, so say only that.
+          */}
+          These secrets are shown once. The API key is stored server-side only as a BLAKE3 hash, so
+          it cannot be read back from the database.{" "}
+          <strong>Copy {bothShown ? "both keys" : "it"} now</strong> and keep{" "}
+          {bothShown ? "them" : "it"} somewhere safe — treat this dialog as the only copy you will
+          get.
         </p>
 
         {secrets.system_api_key && (
@@ -175,7 +204,7 @@ const InitialSecretsModal: React.FC = () => {
                 background: apiCopied ? "rgba(0,255,65,0.22)" : "rgba(0,255,65,0.08)",
                 border: "1px solid rgba(0,255,65,0.5)",
                 color: "#00ff41",
-                fontFamily: "'DM Mono', monospace",
+                fontFamily: "var(--font-terminal)",
                 fontSize: "0.62rem",
                 letterSpacing: "0.08em",
                 padding: "0.42rem 0.9rem",
@@ -187,13 +216,14 @@ const InitialSecretsModal: React.FC = () => {
             <p
               style={{
                 fontSize: "0.62rem",
-                color: "rgba(0,255,65,0.45)",
+                color: prefillFailed ? "rgba(255,190,90,0.9)" : "rgba(0,255,65,0.45)",
                 marginTop: "0.5rem",
                 lineHeight: 1.4,
               }}
             >
-              Already saved to your browser's localStorage so the IngestPage / KEYS pages pick it up
-              automatically. Keep an external copy too — clearing browser storage loses it.
+              {prefillFailed
+                ? "This key was rejected as malformed and is NOT loaded into the session. Pasting it into an API key field will not help — those fields apply the same check. Generate a replacement key (the expected form is 64 hexadecimal characters, optionally prefixed oly_) before relying on this account."
+                : "Loaded into this session, so the IngestPage / KEYS pages pick it up automatically. It is held in memory only — never written to disk or browser storage — so reloading or restarting the app clears it. Save an external copy now."}
             </p>
           </section>
         )}
@@ -231,7 +261,7 @@ const InitialSecretsModal: React.FC = () => {
                 background: bjjCopied ? "rgba(0,255,65,0.22)" : "rgba(0,255,65,0.08)",
                 border: "1px solid rgba(0,255,65,0.5)",
                 color: "#00ff41",
-                fontFamily: "'DM Mono', monospace",
+                fontFamily: "var(--font-terminal)",
                 fontSize: "0.62rem",
                 letterSpacing: "0.08em",
                 padding: "0.42rem 0.9rem",
@@ -326,7 +356,7 @@ const InitialSecretsModal: React.FC = () => {
                       : blockedByCopy
                         ? "rgba(255,68,119,0.5)"
                         : "#ff4477",
-                    fontFamily: "'DM Mono', monospace",
+                    fontFamily: "var(--font-terminal)",
                     fontSize: "0.7rem",
                     letterSpacing: "0.1em",
                     padding: "0.6rem 1.4rem",
@@ -337,7 +367,9 @@ const InitialSecretsModal: React.FC = () => {
                     ? "DISMISSED"
                     : blockedByCopy
                       ? "COPY KEYS TO ENABLE"
-                      : "I'VE SAVED BOTH KEYS"}
+                      : bothShown
+                        ? "I'VE SAVED BOTH KEYS"
+                        : "I'VE SAVED THE KEY"}
                 </button>
               </div>
             </div>

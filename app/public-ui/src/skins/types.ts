@@ -4,30 +4,11 @@ export interface SkinDefinition {
   id: SkinId;
   label: string;
   description: string;
-  classes: {
-    /** Root wrapper — sets page background and default text colour. */
-    page: string;
-    /** Console-hero / page title area. */
-    hero: string;
-    /** Small stat cards. */
-    card: string;
-    /** Main verification panel. */
-    panel: string;
-    /** Primary CTA button (Verify, Submit…). */
-    buttonPrimary: string;
-    /** Secondary action button (PASTE, FORMAT, SAMPLE…). */
-    buttonSecondary: string;
-    /** Text inputs and textareas. */
-    input: string;
-    /** Active tab button. */
-    tabActive: string;
-    /** Inactive tab button. */
-    tabInactive: string;
-    /** Accent / highlight text colour class. */
-    accentText: string;
-    /** Muted / secondary text colour class. */
-    mutedText: string;
-  };
+  /**
+   * Behavioural toggles only. Appearance is expressed entirely through the
+   * `html.skin-*` token blocks in index.css + styles/ods.css — a skin no
+   * longer maps component roles to bespoke class names.
+   */
   effects?: {
     /** Show the Tyler Durden glitch mentor popups. */
     showGlitchMentor?: boolean;

@@ -132,7 +132,7 @@ const BootProgress: React.FC<{ onReady: () => void }> = ({ onReady }) => {
         flexDirection: "column",
         alignItems: "center",
         justifyContent: "center",
-        fontFamily: "'DM Mono', monospace",
+        fontFamily: "var(--font-terminal)",
         color: "#00ff41",
         padding: "2rem",
       }}

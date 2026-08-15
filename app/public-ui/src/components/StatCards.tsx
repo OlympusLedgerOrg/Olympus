@@ -1,4 +1,3 @@
-import { useSkin } from "../skins/SkinContext";
 import AnimatedNumber from "./AnimatedNumber";
 
 interface StatCard {
@@ -13,17 +12,11 @@ interface StatCardsProps {
 }
 
 export default function StatCards({ cards, onRefetch }: StatCardsProps) {
-  const { skin } = useSkin();
   return (
     <div className="stats-grid">
       {cards.map((s) => (
-        <button
-          key={s.label}
-          type="button"
-          className={`${skin.classes.card} stat-card`}
-          onClick={onRefetch}
-        >
-          <div className={skin.classes.accentText} style={{ fontSize: "1.1rem" }}>
+        <button key={s.label} type="button" className="stat-card ods-card" onClick={onRefetch}>
+          <div className="ods-accent" style={{ fontSize: "1.1rem" }}>
             {s.raw ? String(s.value) : <AnimatedNumber value={Number(s.value)} />}
           </div>
           <div className="stat-label">{s.label}</div>

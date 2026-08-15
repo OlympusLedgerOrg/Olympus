@@ -17,7 +17,6 @@
  * Browser fallback: `<input type="file">` + JS bytes + triggerDownload.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useSkin } from "../skins/SkinContext";
 import { describesWords, isTauri, supportsRender, tauriInvoke } from "../lib/api";
 import type { useRedactionCreate } from "../hooks/useRedactionCreate";
 import { PdfBoxSelect } from "../components/PdfBoxSelect";
@@ -51,7 +50,6 @@ const KIND_ICON: Record<string, string> = {
 };
 
 export default function RedactTab({ hook }: RedactTabProps) {
-  const { skin } = useSkin();
   const fileRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
 
@@ -161,7 +159,7 @@ export default function RedactTab({ hook }: RedactTabProps) {
   }, [hook.descriptions, objects, descById]);
 
   return (
-    <div style={{ fontFamily: "'DM Mono', monospace" }}>
+    <div style={{ fontFamily: "var(--font-terminal)" }}>
       {/* Original file drop zone */}
       <div
         role="region"
@@ -194,7 +192,7 @@ export default function RedactTab({ hook }: RedactTabProps) {
             textAlign: "center",
             cursor: busy ? "default" : "pointer",
             background: hook.fileName ? `${purple}0.04)` : "transparent",
-            fontFamily: "'DM Mono', monospace",
+            fontFamily: "var(--font-terminal)",
             fontSize: "0.75rem",
           }}
         >
@@ -620,7 +618,7 @@ export default function RedactTab({ hook }: RedactTabProps) {
       )}
 
       {hook.error && (
-        <p className="err-text" style={{ marginTop: "0.6rem" }}>
+        <p className="ods-error" style={{ marginTop: "0.6rem" }}>
           {hook.error}
         </p>
       )}
@@ -670,7 +668,7 @@ export default function RedactTab({ hook }: RedactTabProps) {
       {/* Result */}
       {hook.stage === "done" && hook.result && (
         <div
-          className={skin.classes.panel}
+          className="ods-panel"
           style={{
             marginTop: "0.85rem",
             padding: "0.8rem 1rem",
@@ -787,7 +785,7 @@ export default function RedactTab({ hook }: RedactTabProps) {
             {!isTauri() && (
               <button
                 type="button"
-                className={skin.classes.buttonPrimary}
+                className="ods-btn"
                 onClick={hook.downloadRedacted}
                 style={{ flex: 1 }}
               >
@@ -796,7 +794,7 @@ export default function RedactTab({ hook }: RedactTabProps) {
             )}
             <button
               type="button"
-              className={skin.classes.buttonPrimary}
+              className="ods-btn"
               onClick={() => void hook.downloadBundle()}
               style={{ flex: 1 }}
             >
@@ -823,7 +821,7 @@ export default function RedactTab({ hook }: RedactTabProps) {
       <div style={{ display: "flex", gap: "0.6rem", marginTop: "0.9rem" }}>
         <button
           type="button"
-          className={skin.classes.buttonPrimary}
+          className="ods-btn"
           onClick={() => void hook.redact()}
           disabled={busy || !hook.manifest || hook.selectedIds.length === 0}
           style={{ flex: 1 }}
@@ -832,7 +830,7 @@ export default function RedactTab({ hook }: RedactTabProps) {
         </button>
         <button
           type="button"
-          className={skin.classes.buttonSecondary}
+          className="ods-btn-ghost"
           onClick={hook.reset}
           disabled={busy || (hook.stage === "idle" && !hook.fileName)}
           style={{ flex: "0 0 8rem" }}
@@ -847,7 +845,7 @@ export default function RedactTab({ hook }: RedactTabProps) {
 /** Shared inline style for the recipient text input. */
 function textInput(purple: string, accent: string): React.CSSProperties {
   return {
-    fontFamily: "'DM Mono', monospace",
+    fontFamily: "var(--font-terminal)",
     fontSize: "0.7rem",
     color: accent,
     background: "rgba(0,0,0,0.25)",

@@ -40,7 +40,7 @@ const StartupErrorScreen: React.FC<{ children: React.ReactNode }> = ({ children 
         alignItems: "center",
         justifyContent: "center",
         padding: "2rem",
-        fontFamily: "'DM Mono', monospace",
+        fontFamily: "var(--font-terminal)",
         color: "#ff4477",
         textAlign: "center",
       }}

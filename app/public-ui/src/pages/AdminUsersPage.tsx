@@ -47,7 +47,7 @@ const inp: React.CSSProperties = {
   background: "rgba(0,0,0,0.7)",
   border: "1px solid rgba(0,255,65,0.25)",
   color: "#00ff41",
-  fontFamily: "'DM Mono', monospace",
+  fontFamily: "var(--font-terminal)",
   fontSize: "0.78rem",
   padding: "0.5rem 0.7rem",
   outline: "none",
@@ -64,7 +64,7 @@ const btn = (kind: "primary" | "ghost" | "danger" = "primary"): React.CSSPropert
   background: kind === "danger" ? "rgba(255,0,85,0.07)" : "rgba(0,255,65,0.08)",
   border: `1px solid ${kind === "danger" ? "rgba(255,0,85,0.45)" : "rgba(0,255,65,0.4)"}`,
   color: kind === "danger" ? "#ff4477" : "#00ff41",
-  fontFamily: "'DM Mono', monospace",
+  fontFamily: "var(--font-terminal)",
   fontSize: "0.6rem",
   letterSpacing: "0.08em",
   padding: "0.35rem 0.7rem",
@@ -244,7 +244,7 @@ const AdminUsersPage: React.FC = () => {
               background: "#000",
               border: "1px solid rgba(0,255,65,0.4)",
               color: "#00ff41",
-              fontFamily: "'DM Mono', monospace",
+              fontFamily: "var(--font-terminal)",
               fontSize: "0.78rem",
               wordBreak: "break-all",
               lineHeight: 1.4,
@@ -416,7 +416,7 @@ const UserCard: React.FC<{
       >
         <div>
           <div
-            style={{ fontSize: "0.85rem", color: "#00ff41", fontFamily: "'DM Mono', monospace" }}
+            style={{ fontSize: "0.85rem", color: "#00ff41", fontFamily: "var(--font-terminal)" }}
           >
             {user.email}
           </div>

@@ -58,7 +58,7 @@ const inp: React.CSSProperties = {
   background: "rgba(0,0,0,0.7)",
   border: "1px solid rgba(0,255,65,0.25)",
   color: "#00ff41",
-  fontFamily: "'DM Mono', monospace",
+  fontFamily: "var(--font-terminal)",
   fontSize: "0.78rem",
   padding: "0.5rem 0.7rem",
   outline: "none",
@@ -75,7 +75,7 @@ const btn = (kind: "primary" | "ghost" | "danger" = "primary"): React.CSSPropert
   background: kind === "danger" ? "rgba(255,0,85,0.07)" : "rgba(0,255,65,0.08)",
   border: `1px solid ${kind === "danger" ? "rgba(255,0,85,0.45)" : "rgba(0,255,65,0.4)"}`,
   color: kind === "danger" ? "#ff4477" : "#00ff41",
-  fontFamily: "'DM Mono', monospace",
+  fontFamily: "var(--font-terminal)",
   fontSize: "0.6rem",
   letterSpacing: "0.08em",
   padding: "0.35rem 0.7rem",
@@ -426,7 +426,7 @@ const CredentialsPage: React.FC = () => {
           <textarea
             value={newDetails}
             onChange={(e) => setNewDetails(e.target.value)}
-            style={{ ...inp, height: 96, fontFamily: "'DM Mono', monospace", resize: "vertical" }}
+            style={{ ...inp, height: 96, fontFamily: "var(--font-terminal)", resize: "vertical" }}
             spellCheck={false}
           />
         </div>

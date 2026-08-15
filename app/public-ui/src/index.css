@@ -2,6 +2,9 @@
 /* Self-hosted type system — replaces the former Google Fonts CDN <link>.
    See public/fonts/PROVENANCE.md. */
 @import "./styles/fonts.css";
+/* Role classes + per-skin shape/emphasis tokens (ADR: step 2/3/4 role-class
+   collapse). Extends — does not replace — the html.skin-* colour blocks below. */
+@import "./styles/ods.css";
 
 /* ════════════════════════════════════════════════════════════════════════
    OLYMPUS DIGITAL FORTRESS — design system token layer
@@ -522,93 +525,6 @@ body {
   line-height: 1.45;
 }
 
-/* ════════════════════════════════════════════════════════════════════════
-   CYBER PANELS & BUTTONS (Glitch skin primary components)
-   ════════════════════════════════════════════════════════════════════════ */
-.cyber-panel {
-  background: var(--bg-1);
-  border: 1px solid var(--border-1);
-  clip-path: var(--clip-panel);
-  box-shadow: var(--glow-sm), var(--inset-glow);
-}
-.cyber-panel-sm {
-  background: var(--bg-1);
-  border: 1px solid var(--border-1);
-  clip-path: var(--clip-panel-sm);
-}
-.cyber-button {
-  background: transparent;
-  color: var(--fg-1);
-  border: 1px solid var(--accent);
-  padding: 0.7rem 1.4rem;
-  text-transform: uppercase;
-  letter-spacing: var(--tracking-mid);
-  font-size: 0.72rem;
-  font-family: var(--font-ui-cyber);
-  cursor: pointer;
-  clip-path: var(--clip-button);
-  transition: all 0.18s;
-  white-space: nowrap;
-}
-.cyber-button:hover:not(:disabled) {
-  background: var(--accent);
-  color: var(--bg-0);
-  box-shadow: var(--glow-md);
-}
-.cyber-button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-.cyber-input {
-  width: 100%;
-  background: var(--bg-2);
-  border: 1px solid var(--border-1);
-  padding: 0.7rem 0.85rem;
-  color: var(--fg-1);
-  font-family: var(--font-terminal);
-  font-size: 0.78rem;
-  outline: none;
-  box-sizing: border-box;
-  transition: border-color 0.15s;
-}
-.cyber-input:focus {
-  border-color: var(--accent);
-  box-shadow: var(--glow-sm);
-}
-.cyber-input::placeholder {
-  color: var(--fg-muted);
-}
-
-/* ── Tabs ────────────────────────────────────────────────────────────── */
-.tab-btn {
-  flex: 1;
-  padding: 0.65rem 0.5rem;
-  border: none;
-  border-bottom: 2px solid transparent;
-  background: transparent;
-  color: var(--fg-muted);
-  font-family: var(--font-ui-cyber);
-  font-size: 0.62rem;
-  letter-spacing: var(--tracking-mid);
-  text-transform: uppercase;
-  cursor: pointer;
-  transition: all 0.15s;
-}
-.tab-btn[aria-selected="true"] {
-  color: var(--accent);
-  border-bottom-color: var(--accent);
-  background: rgba(0, 255, 65, 0.05);
-  text-shadow: 0 0 6px var(--accent-glow);
-}
-.tab-btn:hover:not([aria-selected="true"]) {
-  color: var(--fg-2);
-}
-
-.err-text {
-  color: var(--danger);
-  font-size: 0.7rem;
-  margin: 0.4rem 0 0;
-}
 .verdict-card {
   animation: verdict-in 0.2s ease;
 }
@@ -634,39 +550,6 @@ details summary::-webkit-details-marker {
   justify-content: flex-end;
   gap: 0.5rem;
 }
-.status-pill {
-  display: inline-flex;
-  align-items: center;
-  min-height: 1.45rem;
-  padding: 0.24rem 0.55rem;
-  border: 1px solid var(--border-2);
-  border-radius: 999px;
-  background: rgba(0, 0, 0, 0.46);
-  color: var(--fg-2);
-  font-family: var(--font-ui-cyber);
-  font-size: 0.56rem;
-  line-height: 1;
-  letter-spacing: 0.08em;
-  white-space: nowrap;
-}
-.status-ok {
-  border-color: var(--border-strong);
-  color: var(--accent);
-  box-shadow: var(--glow-sm);
-}
-.status-err {
-  border-color: rgba(255, 0, 85, 0.58);
-  color: var(--danger);
-}
-.status-warn {
-  border-color: rgba(245, 158, 11, 0.58);
-  color: var(--warn);
-}
-.status-neutral {
-  border-color: var(--border-2);
-  color: var(--fg-3);
-}
-
 .stats-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
@@ -710,23 +593,6 @@ details summary::-webkit-details-marker {
   gap: 1.25rem;
   align-items: start;
 }
-.tab-list {
-  display: flex;
-  overflow-x: auto;
-  border-bottom: 1px solid var(--border-2);
-}
-.tab-list .tab-btn {
-  min-width: 8.2rem;
-}
-
-.terminal-label {
-  display: block;
-  color: var(--fg-3);
-  font-family: var(--font-section);
-  font-size: 0.62rem;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-}
 .field-head {
   display: flex;
   align-items: center;
@@ -746,30 +612,6 @@ details summary::-webkit-details-marker {
   margin-top: 0.7rem;
 }
 
-.icon-text-btn {
-  appearance: none;
-  min-height: 2rem;
-  padding: 0.36rem 0.62rem;
-  border: 1px solid var(--border-2);
-  background: rgba(0, 0, 0, 0.34);
-  color: var(--fg-2);
-  font-family: var(--font-ui-cyber);
-  font-size: 0.58rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  cursor: pointer;
-  transition:
-    border-color 0.15s,
-    color 0.15s,
-    background 0.15s;
-}
-.icon-text-btn:hover,
-.icon-text-btn:focus-visible {
-  border-color: var(--border-strong);
-  background: rgba(0, 255, 65, 0.08);
-  color: var(--accent);
-  outline: none;
-}
 .ready-panel {
   display: flex;
   align-items: center;
@@ -899,281 +741,14 @@ details summary::-webkit-details-marker {
 }
 
 /* ════════════════════════════════════════════════════════════════════════
-   SKIN SYSTEM — page wrappers + per-skin component overrides
+   SKIN SYSTEM — per-skin screen-level overrides
+
+   Page wrappers and component-role overrides no longer live here. The page
+   root is `.ods-page` and every component role is token-driven, both in
+   styles/ods.css. What remains below is screen-level only (stat labels,
+   ready panel, side panel, flow steps) and moves to screens.css at step 10.
    ════════════════════════════════════════════════════════════════════════ */
-.skin-page-glitch {
-  background-color: var(--void-black);
-  color: var(--terminal-green);
-  min-height: 100vh;
-}
-.skin-page-basic {
-  background-color: var(--paper-white);
-  color: var(--ink);
-  min-height: 100vh;
-}
-.skin-page-terminal {
-  background-color: var(--crt-black);
-  color: var(--term-amber);
-  min-height: 100vh;
-}
-
-html.skin-glitch .skin-accent {
-  color: var(--terminal-green);
-}
-html.skin-glitch .skin-muted {
-  color: var(--green-40);
-}
-html.skin-basic .skin-accent {
-  color: var(--link-blue);
-}
-html.skin-basic .skin-muted {
-  color: var(--slate-5);
-}
-html.skin-terminal .skin-accent {
-  color: var(--term-amber);
-}
-html.skin-terminal .skin-muted {
-  color: rgba(228, 181, 90, 0.55);
-}
-
-/* ── Basic skin components ───────────────────────────────────────────── */
-.basic-panel {
-  background: var(--bg-1);
-  border: 1px solid var(--border-1);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-2);
-}
-.basic-card {
-  background: var(--bg-1);
-  border: 1px solid var(--border-1);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-1);
-}
-.basic-button {
-  background: var(--ink);
-  color: #fff;
-  border: 1px solid var(--ink);
-  border-radius: var(--radius-md);
-  padding: 0.7rem 1.4rem;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  font-size: 0.72rem;
-  font-family: var(--font-ui-cyber);
-  cursor: pointer;
-  transition: all 0.15s;
-  white-space: nowrap;
-}
-.basic-button:hover:not(:disabled) {
-  background: var(--slate-7);
-}
-.basic-button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-.basic-icon-btn {
-  appearance: none;
-  min-height: 2rem;
-  padding: 0.36rem 0.62rem;
-  border: 1px solid var(--slate-3);
-  background: var(--slate-1);
-  color: var(--slate-5);
-  font-family: var(--font-ui-cyber);
-  font-size: 0.58rem;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  transition: all 0.15s;
-}
-.basic-icon-btn:hover,
-.basic-icon-btn:focus-visible {
-  border-color: var(--slate-4);
-  color: var(--ink);
-  background: var(--slate-1);
-  outline: none;
-}
-.basic-input {
-  width: 100%;
-  background: var(--slate-1);
-  border: 1px solid var(--slate-3);
-  border-radius: var(--radius-md);
-  padding: 0.7rem 0.85rem;
-  color: var(--ink);
-  font-family: var(--font-terminal);
-  font-size: 0.78rem;
-  outline: none;
-  box-sizing: border-box;
-  transition: border-color 0.15s;
-}
-.basic-input:focus {
-  border-color: var(--link-blue);
-  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.15);
-}
-.basic-input::placeholder {
-  color: var(--slate-4);
-}
-.basic-tab,
-.basic-tab-active {
-  flex: 1;
-  padding: 0.65rem 0.5rem;
-  border: none;
-  border-bottom: 2px solid transparent;
-  background: transparent;
-  font-family: var(--font-ui-cyber);
-  font-size: 0.62rem;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  cursor: pointer;
-  transition: all 0.15s;
-  white-space: nowrap;
-  min-width: 8.2rem;
-}
-.basic-tab {
-  color: var(--slate-5);
-}
-.basic-tab:hover {
-  color: var(--slate-6);
-}
-.basic-tab-active {
-  color: var(--link-blue);
-  border-bottom-color: var(--link-blue-hover);
-  background: rgba(59, 130, 246, 0.05);
-}
-
-/* ── Terminal skin components ────────────────────────────────────────── */
-.term-panel {
-  background: var(--bg-1);
-  border: 1px solid var(--border-1);
-  box-shadow:
-    0 0 14px var(--glow-amber),
-    var(--inset-glow);
-}
-.term-card {
-  background: var(--bg-1);
-  border: 1px solid var(--border-2);
-}
-.term-button {
-  background: transparent;
-  color: var(--accent);
-  border: 1px solid var(--accent);
-  padding: 0.7rem 1.4rem;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  font-size: 0.72rem;
-  font-family: var(--font-ui-cyber);
-  cursor: pointer;
-  transition: all 0.18s;
-  white-space: nowrap;
-}
-.term-button:hover:not(:disabled) {
-  background: var(--accent);
-  color: var(--bg-0);
-  box-shadow: var(--glow-amber);
-}
-.term-button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-.term-icon-btn {
-  appearance: none;
-  min-height: 2rem;
-  padding: 0.36rem 0.62rem;
-  border: 1px solid var(--border-2);
-  background: rgba(0, 0, 0, 0.34);
-  color: var(--fg-2);
-  font-family: var(--font-ui-cyber);
-  font-size: 0.58rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  cursor: pointer;
-  transition: all 0.15s;
-}
-.term-icon-btn:hover,
-.term-icon-btn:focus-visible {
-  border-color: var(--border-strong);
-  background: rgba(228, 181, 90, 0.08);
-  color: var(--accent);
-  outline: none;
-}
-.term-input {
-  width: 100%;
-  background: var(--bg-2);
-  border: 1px solid var(--border-1);
-  padding: 0.7rem 0.85rem;
-  color: var(--fg-1);
-  font-family: var(--font-terminal);
-  font-size: 0.78rem;
-  outline: none;
-  box-sizing: border-box;
-  transition: border-color 0.15s;
-}
-.term-input:focus {
-  border-color: var(--accent);
-  box-shadow: var(--glow-amber);
-}
-.term-input::placeholder {
-  color: var(--fg-muted);
-}
-.term-tab,
-.term-tab-active {
-  flex: 1;
-  padding: 0.65rem 0.5rem;
-  border: none;
-  border-bottom: 2px solid transparent;
-  background: transparent;
-  font-family: var(--font-ui-cyber);
-  font-size: 0.62rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  cursor: pointer;
-  transition: all 0.15s;
-  white-space: nowrap;
-  min-width: 8.2rem;
-}
-.term-tab {
-  color: var(--fg-muted);
-}
-.term-tab:hover {
-  color: var(--fg-2);
-}
-.term-tab-active {
-  color: var(--accent);
-  border-bottom-color: var(--accent);
-  background: rgba(228, 181, 90, 0.05);
-}
-
-/* ── Basic skin: global overrides ────────────────────────────────────── */
-html.skin-basic .err-text {
-  color: var(--blood-red);
-}
-html.skin-basic .status-pill {
-  background: rgba(255, 255, 255, 0.7);
-  color: var(--slate-5);
-  border-color: var(--slate-3);
-}
-html.skin-basic .status-ok {
-  border-color: #22c55e;
-  color: #16a34a;
-  box-shadow: none;
-}
-html.skin-basic .status-err {
-  border-color: #f87171;
-  color: var(--blood-red);
-}
-html.skin-basic .status-warn {
-  border-color: #fbbf24;
-  color: #d97706;
-}
-html.skin-basic .status-neutral {
-  border-color: var(--slate-3);
-  color: var(--slate-5);
-}
-html.skin-basic .tab-list {
-  border-bottom-color: var(--slate-2);
-}
-html.skin-basic .terminal-label {
-  color: var(--slate-5);
-}
+/* ── Basic skin ───────────────────────────────────────────────────────── */
 html.skin-basic .stat-label {
   color: var(--slate-5);
 }
@@ -1200,48 +775,8 @@ html.skin-basic .flow-step {
 html.skin-basic .flow-step[data-active="true"] {
   color: var(--link-blue);
 }
-html.skin-basic .icon-text-btn {
-  border-color: var(--slate-3);
-  background: var(--slate-1);
-  color: var(--slate-5);
-}
-html.skin-basic .icon-text-btn:hover {
-  border-color: var(--slate-4);
-  color: var(--ink);
-}
 
-/* ── Terminal skin: global overrides ─────────────────────────────────── */
-html.skin-terminal .err-text {
-  color: #f87171;
-}
-html.skin-terminal .status-pill {
-  border-color: var(--border-2);
-  color: var(--fg-2);
-  background: rgba(0, 0, 0, 0.46);
-}
-html.skin-terminal .status-ok {
-  border-color: var(--border-strong);
-  color: var(--accent);
-  box-shadow: var(--glow-amber);
-}
-html.skin-terminal .status-err {
-  border-color: rgba(255, 0, 85, 0.55);
-  color: #ff5577;
-}
-html.skin-terminal .status-warn {
-  border-color: rgba(228, 181, 90, 0.55);
-  color: var(--accent);
-}
-html.skin-terminal .status-neutral {
-  border-color: var(--border-2);
-  color: var(--fg-3);
-}
-html.skin-terminal .tab-list {
-  border-bottom-color: var(--border-2);
-}
-html.skin-terminal .terminal-label {
-  color: var(--fg-3);
-}
+/* ── Terminal skin ────────────────────────────────────────────────────── */
 html.skin-terminal .stat-label {
   color: var(--fg-3);
 }
@@ -1312,16 +847,10 @@ html.skin-terminal .flow-step[data-active="true"] {
   .input-row {
     grid-template-columns: 1fr;
   }
-  .input-row .cyber-button,
-  .input-row .basic-button,
-  .input-row .term-button {
+  .input-row .ods-btn {
     width: 100%;
   }
-  .tab-list .tab-btn,
-  .tab-list .basic-tab,
-  .tab-list .basic-tab-active,
-  .tab-list .term-tab,
-  .tab-list .term-tab-active {
+  .ods-tablist .ods-tab {
     min-width: 7.4rem;
   }
 }
@@ -1549,14 +1078,6 @@ html.skin-terminal .command-code {
 
 header nav a:hover {
   filter: brightness(1.35);
-}
-.cyber-panel,
-.cyber-panel-sm,
-.term-panel,
-.term-card,
-.basic-panel,
-.basic-card {
-  backdrop-filter: blur(10px);
 }
 .ready-panel {
   position: relative;

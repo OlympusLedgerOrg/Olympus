@@ -13,7 +13,6 @@
  * verified in-app from the delivered artifact + bundle in the Redaction tab.
  */
 import { useCallback, useRef, useState } from "react";
-import { useSkin } from "../skins/SkinContext";
 import type { AuditStage } from "../hooks/useAuditProof";
 import type { AnchoredVerifyResult, ZkCircuit, ZkVerifyResponse } from "../lib/api";
 
@@ -57,7 +56,6 @@ export default function AuditProofTab({
   onAudit,
   onReset,
 }: AuditProofTabProps) {
-  const { skin } = useSkin();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
 
@@ -108,7 +106,7 @@ export default function AuditProofTab({
           padding: "1.25rem 1rem",
           background: dragging ? "rgba(0,255,128,0.05)" : "transparent",
           transition: "border-color 0.15s, background 0.15s",
-          fontFamily: "'DM Mono', monospace",
+          fontFamily: "var(--font-terminal)",
           fontSize: "0.75rem",
         }}
       >
@@ -137,7 +135,7 @@ export default function AuditProofTab({
             padding: "1rem 0.75rem",
             textAlign: "center",
             cursor: isVerifying ? "default" : "pointer",
-            fontFamily: "'DM Mono', monospace",
+            fontFamily: "var(--font-terminal)",
             fontSize: "0.75rem",
             color: bundleName ? "#00ff80" : "rgba(0,255,128,0.35)",
             wordBreak: "break-all",
@@ -175,7 +173,7 @@ export default function AuditProofTab({
         <summary
           style={{
             cursor: "pointer",
-            fontFamily: "'DM Mono', monospace",
+            fontFamily: "var(--font-terminal)",
             fontSize: "0.7rem",
             color: "rgba(0,255,128,0.5)",
             letterSpacing: "0.06em",
@@ -190,7 +188,7 @@ export default function AuditProofTab({
           style={{
             marginTop: "0.5rem",
             width: "100%",
-            fontFamily: "'DM Mono', monospace",
+            fontFamily: "var(--font-terminal)",
             fontSize: "0.72rem",
             background: "rgba(0,0,0,0.4)",
             color: "#00ff80",
@@ -202,18 +200,18 @@ export default function AuditProofTab({
       </details>
 
       {error && (
-        <p className="err-text" style={{ marginTop: "0.5rem" }}>
+        <p className="ods-error" style={{ marginTop: "0.5rem" }}>
           {error}
         </p>
       )}
 
       {result && (
         <div
-          className={skin.classes.panel}
+          className="ods-panel"
           style={{
             marginTop: "0.75rem",
             padding: "0.8rem 1rem",
-            fontFamily: "'DM Mono', monospace",
+            fontFamily: "var(--font-terminal)",
             fontSize: "0.78rem",
             borderColor: result.valid ? "rgba(0,255,128,0.55)" : "rgba(255,80,80,0.45)",
             background: result.valid ? "rgba(0,255,128,0.04)" : "rgba(255,80,80,0.04)",
@@ -310,7 +308,7 @@ export default function AuditProofTab({
       <div style={{ display: "flex", gap: "0.6rem", marginTop: "0.9rem" }}>
         <button
           type="button"
-          className={skin.classes.buttonPrimary}
+          className="ods-btn"
           onClick={onAudit}
           disabled={isVerifying || !canAudit}
           style={{ flex: 1 }}
@@ -319,7 +317,7 @@ export default function AuditProofTab({
         </button>
         <button
           type="button"
-          className={skin.classes.buttonSecondary}
+          className="ods-btn-ghost"
           onClick={onReset}
           disabled={isVerifying || stage === "idle"}
           style={{ flex: "0 0 8rem" }}
