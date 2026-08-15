@@ -10,9 +10,15 @@ description: |
 
   The Rust and Node versions are written as literals rather than inputs on
   purpose: `scripts/check-privileged-action-pins.mjs` requires every workflow
-  and local composite to select the exact reviewed toolchain versions, and a
-  `${{ inputs.* }}` indirection would defeat that review. They are a security
-  pin, not a knob.
+  and local composite to select the exact reviewed toolchain versions, and an
+  expression indirection through an action input would defeat that review. They
+  are a security pin, not a knob.
+
+  NOTE: do not write GitHub expression syntax (a dollar sign followed by double
+  braces) anywhere in this description. The runner evaluates expressions in the
+  `description` field, so prose mentioning one is parsed as a real expression
+  and the whole manifest fails to load before any step runs. This is enforced by
+  `scripts/check-preview-channel.mjs`.
 
 inputs:
   rust-targets:

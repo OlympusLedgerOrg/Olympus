@@ -10,6 +10,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
 import {
+  checkActionMetadataExpressions,
   checkContainment,
   checkPinAgreement,
   checkPreviewChannel,
@@ -185,6 +186,85 @@ test("pin agreement rejects the preview path dropping a pin entirely", () => {
       errors.some((error) => /does not pin rust/.test(error)),
       `expected a missing-pin error, got: ${JSON.stringify(errors)}`,
     );
+  });
+});
+
+// Regression: this is verbatim what killed the first preview tag
+// (preview-v0.10.0-rc.1). A comment in the composite action's `description`
+// explained that the toolchain versions were literals "rather than a
+// ${{ inputs.* }} indirection" — and the runner evaluated that prose as a real
+// expression, failing the manifest with "Unrecognized named-value: 'inputs'"
+// before a single step ran. The YAML was valid, so js-yaml and prettier both
+// passed it.
+test("action metadata rejects GitHub expression syntax in a description", () => {
+  withFixture((root) => {
+    write(
+      root,
+      ".github/actions/setup-build-toolchain/action.yml",
+      [
+        "name: Setup build toolchain",
+        "description: |",
+        "  Versions are literals, not a ${{ inputs.rust-toolchain }} indirection.",
+        "runs:",
+        "  using: composite",
+        "  steps: []",
+        "",
+      ].join("\n"),
+    );
+    const errors = checkActionMetadataExpressions(root);
+    assert.equal(errors.length, 1);
+    assert.match(errors[0], /description contains GitHub expression syntax/);
+    // The message must say why it is fatal, not merely that it is disallowed.
+    assert.match(errors[0], /before any step runs/);
+  });
+});
+
+test("action metadata rejects expressions in an input description too", () => {
+  withFixture((root) => {
+    write(
+      root,
+      ".github/actions/setup-build-toolchain/action.yml",
+      [
+        "name: Setup build toolchain",
+        "description: Fine.",
+        "inputs:",
+        "  cache-key:",
+        "    description: Defaults to ${{ github.job }} when empty.",
+        "    default: ''",
+        "runs:",
+        "  using: composite",
+        "  steps: []",
+        "",
+      ].join("\n"),
+    );
+    const errors = checkActionMetadataExpressions(root);
+    assert.equal(errors.length, 1);
+    assert.match(errors[0], /inputs\.cache-key\.description/);
+  });
+});
+
+test("action metadata allows expressions in steps, where they are legal", () => {
+  withFixture((root) => {
+    write(
+      root,
+      ".github/actions/setup-build-toolchain/action.yml",
+      [
+        "name: Setup build toolchain",
+        "description: Prose with no expressions.",
+        "inputs:",
+        "  rust-targets:",
+        "    description: Extra target triples.",
+        "    default: ''",
+        "runs:",
+        "  using: composite",
+        "  steps:",
+        "    - uses: dtolnay/rust-toolchain@aaaaaaa",
+        "      with:",
+        "        targets: ${{ inputs.rust-targets }}",
+        "",
+      ].join("\n"),
+    );
+    assert.deepEqual(checkActionMetadataExpressions(root), []);
   });
 });
 
