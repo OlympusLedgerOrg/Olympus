@@ -8,7 +8,7 @@
 /// Backend wiring: see src-tauri/src/main.rs (take_initial_secrets +
 /// InitialSecretsState) and src-tauri/src/bootstrap.rs (FreshlyGenerated).
 import { useEffect, useState } from "react";
-import { setStoredAdminKey, setStoredApiKey } from "../lib/storage";
+import { getStoredApiKey, setStoredAdminKey, setStoredApiKey } from "../lib/storage";
 import { tauriInvoke } from "../lib/api";
 
 type InitialSecrets = {
@@ -28,6 +28,9 @@ const InitialSecretsModal: React.FC = () => {
   // bjjCopied flags. The manual-ack checkbox lets them confirm
   // explicitly so the dismiss button unblocks.
   const [manualAck, setManualAck] = useState(false);
+  // True when the bootstrap key failed to load into the in-memory store, so
+  // the "pre-filled for this session" note must not be shown.
+  const [prefillFailed, setPrefillFailed] = useState(false);
 
   useEffect(() => {
     // Skip if the operator already acknowledged on a prior launch — the
@@ -59,6 +62,12 @@ const InitialSecretsModal: React.FC = () => {
           if (result.system_api_key) {
             setStoredAdminKey(result.system_api_key);
             setStoredApiKey(result.system_api_key);
+            // setStoredApiKey silently discards a value that fails
+            // apiKeyProblem() — it clears the slot and returns void, so a
+            // malformed bootstrap key would leave the session unwired while
+            // the note below still claimed it was pre-filled. Read back
+            // instead of assuming, and downgrade the copy if it didn't take.
+            if (!getStoredApiKey()) setPrefillFailed(true);
           }
         }
       } catch (e) {
@@ -201,14 +210,14 @@ const InitialSecretsModal: React.FC = () => {
             <p
               style={{
                 fontSize: "0.62rem",
-                color: "rgba(0,255,65,0.45)",
+                color: prefillFailed ? "rgba(255,190,90,0.9)" : "rgba(0,255,65,0.45)",
                 marginTop: "0.5rem",
                 lineHeight: 1.4,
               }}
             >
-              Loaded into this session, so the IngestPage / KEYS pages pick it up automatically. It
-              is held in memory only — never written to disk or browser storage — so reloading or
-              restarting the app clears it. Save an external copy now.
+              {prefillFailed
+                ? "This key could not be loaded into the session automatically — paste it into the API key field by hand. It is held in memory only, never written to disk or browser storage, so reloading or restarting the app clears it. Save an external copy now."
+                : "Loaded into this session, so the IngestPage / KEYS pages pick it up automatically. It is held in memory only — never written to disk or browser storage — so reloading or restarting the app clears it. Save an external copy now."}
             </p>
           </section>
         )}

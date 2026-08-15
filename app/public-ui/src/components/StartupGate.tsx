@@ -99,7 +99,7 @@ export default function StartupGate({ children }: { children: React.ReactNode })
             ) : (
               <p>
                 {mode === "setup"
-                  ? "Create your operator account. Your API key is generated server-side and stored locally — copy it before leaving."
+                  ? "Create your operator account. Your API key is generated server-side and held in memory for this session only — copy it before leaving."
                   : mode === "login"
                     ? "Sign in with your existing account to unlock the console."
                     : `Welcome back, ${profile?.operator ?? "OPERATOR"}. Enter your password to unlock this session.`}
@@ -161,9 +161,9 @@ export default function StartupGate({ children }: { children: React.ReactNode })
                   marginBottom: "1.25rem",
                 }}
               >
-                This key is held in memory for this session and pre-filled in the LEDGER tab. It is
-                not written to disk or browser storage, so reloading or restarting the app clears
-                it. Save a copy somewhere safe — it will not be shown again.
+                This key is held in memory for this session and pre-filled in the HASH_LOOKUP tab.
+                It is not written to disk or browser storage, so reloading or restarting the app
+                clears it. Save a copy somewhere safe — it will not be shown again.
               </div>
               <button
                 type="button"
