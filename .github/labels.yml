@@ -5,3 +5,7 @@
 - name: "security"
   color: "e11d48"
   description: "Pull requests that address a security vulnerability"
+
+- name: "scope-override"
+  color: "a855f7"
+  description: "Accepts changes outside the PR's declared Scope block (PR Scope Drift gate)"

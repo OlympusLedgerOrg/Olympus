@@ -1,0 +1,97 @@
+# Scope-drift gate.
+#
+# Every other review gate in this repo scores what a diff *changed*. This one
+# asks whether the author was supposed to be in those files at all: the PR body
+# declares the paths it intends to touch, and the diff is checked against that
+# declaration. An agent asked to fix a frontend bug that also adds a helper to
+# crates/olympus-crypto scores low on every severity heuristic and merges
+# quietly; here it fails, because the second subsystem was never declared.
+#
+# The check is overridable with the `scope-override` label — sometimes reaching
+# further is correct, and a gate with no escape hatch gets disabled instead of
+# obeyed. Each run prints one `scope-drift-record {...}` JSON line to its job
+# log so the override rate is recoverable later from the Actions API. Nothing
+# aggregates those records yet; that is deliberately a separate piece of work,
+# not something this workflow claims to do.
+#
+# Trigger safety: this uses `pull_request`, not `pull_request_target`, so a
+# fork PR gets a read-only token and no repository secrets; the job declares
+# `contents: read` and references no secrets in either case. The PR body and
+# label names are attacker-influenced strings on a fork PR, so both reach the
+# checker through `env:` and files — never interpolated into a `run:` script,
+# where `${{ }}` substitution happens before the shell parses the line.
+name: PR Scope Drift
+
+on:
+  pull_request:
+    # `edited` catches a body change (that is where the scope lives) and
+    # `labeled`/`unlabeled` re-run the gate when the override is applied or
+    # withdrawn, so the check reflects the PR's current state rather than its
+    # state when it was opened.
+    types: [opened, reopened, edited, synchronize, labeled, unlabeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-scope-drift-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  scope-drift:
+    name: declared scope vs changed files
+    runs-on: ubuntu-latest
+    # Bot-authored dependency PRs have generated bodies and no declared scope;
+    # their scope is already constrained by the bot's own configuration, so
+    # requiring a Scope block from them would only produce noise.
+    if: >-
+      github.event.pull_request.user.login != 'dependabot[bot]' &&
+      github.event.pull_request.user.login != 'github-actions[bot]'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history so both PR endpoints resolve for the three-dot diff.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22.14.0"
+
+      # The checker imports only `node:` builtins, so there is no install step.
+      - name: Collect the PR body and changed files
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$PR_BODY" > "$RUNNER_TEMP/pr-body.md"
+          for sha in "$BASE_SHA" "$HEAD_SHA"; do
+            if ! git cat-file -e "${sha}^{commit}" 2>/dev/null; then
+              echo "::error::commit $sha is not present in the checkout; cannot compute the PR diff"
+              exit 1
+            fi
+          done
+          # Three dots: changes on the PR branch since the merge base, not
+          # changes that landed on the base branch meanwhile.
+          # --no-renames so a file moved out of the declared scope shows up as
+          # a deletion plus an addition rather than only its destination path.
+          git diff --name-only --no-renames "$BASE_SHA...$HEAD_SHA" \
+            > "$RUNNER_TEMP/changed-files.txt"
+          echo "Changed files:"
+          cat "$RUNNER_TEMP/changed-files.txt"
+
+      - name: Check the diff against the declared scope
+        env:
+          PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: |
+          set -euo pipefail
+          # Drop --require-scope to make a missing Scope block a pass instead of
+          # a failure (advisory mode).
+          node scripts/check-pr-scope.mjs \
+            --body-file "$RUNNER_TEMP/pr-body.md" \
+            --changed-files-file "$RUNNER_TEMP/changed-files.txt" \
+            --labels-json "$PR_LABELS" \
+            --summary-file "$GITHUB_STEP_SUMMARY" \
+            --require-scope
