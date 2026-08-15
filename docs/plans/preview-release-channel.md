@@ -1,9 +1,12 @@
 # Plan (for review): `preview` release channel
 
-**Status:** Implemented on `claude/olympus-preview-release-plan-6dcde7`
-(2026-08-14). All four PRs from §12 are on the branch; `tauri-release.yml` is
-unchanged, as §3 requires. See "Implementation notes" at the end for the two
-things that differ from this plan and the one thing that must not be merged yet.
+**Status:** Shipped 2026-08-15. All four PRs from §12 landed as
+[#1648](https://github.com/OlympusLedgerOrg/Olympus/pull/1648); the first tag
+(`preview-v0.10.0-rc.1`) failed and was fixed by
+[#1649](https://github.com/OlympusLedgerOrg/Olympus/pull/1649), then re-cut as
+`preview-v0.10.0-rc.2`. `tauri-release.yml` is unchanged, as §3 requires. See
+§13 for what differs from this plan, the three traps found, and the rc.1
+postmortem.
 **Scope:** A publicly downloadable, unmistakably non-production installer channel
 built from a single-contributor development ceremony, with zero change to the
 `v*` tag path.
@@ -758,14 +761,18 @@ production tag easier to cut; PR 4 is the only one that publishes anything.
 
 ## 13. Implementation notes (2026-08-14)
 
-### ⚠ Do not merge the copy changes until a preview release exists
+### What shipped
 
-PR 4's copy is written and on the branch, but it makes a claim that is not yet
-true: `README.md`'s Download section and `docs/index.html`'s hero CTA both point
-at `/releases`, where no preview build has been published. Publishing that copy
-before the first successful `preview-v*` tag reproduces the exact problem this
-plan exists to fix, pointing the other way. **Push a preview tag first, confirm
-the prerelease page, then merge the copy.**
+All four PRs landed as one squash merge, [#1648](https://github.com/OlympusLedgerOrg/Olympus/pull/1648)
+(`f9851fad`), including the copy changes. The original advice was to hold the
+copy until a preview release existed; it merged with the rest on the reasoning
+that `/releases` is not a 404 — it already lists two releases — so the CTA is
+briefly *ahead of itself* rather than broken, and the tag was cut minutes later.
+If the preview channel ever goes dark for longer than a pipeline run, revert the
+Download section rather than leaving a promise the releases page cannot keep.
+
+`.github/workflows/tauri-preview.yml` is on `main`, so `workflow_dispatch` is
+now available as a dry run (`-f publish=false`) for any change to the channel.
 
 ### Two things that differ from the plan as written
 
@@ -777,12 +784,17 @@ the prerelease page, then merge the copy.**
   build.
 - **The drift tripwire is a script, not a workflow job.** §D1.3 proposed a
   "pin-agreement job". It landed as `scripts/check-preview-channel.mjs`
-  (+ `.test.mjs`, 10 tests), wired into `pnpm tooling:check`. That also carries a
-  second, more important check: **containment** — `OLYMPUS_RELEASE_CHANNEL` may
-  appear only in `tauri-preview.yml`, `build.rs`, and `env.rs`, so the variable
-  cannot leak into a workflow where a `v*` tag build or a test job would see it.
+  (+ `.test.mjs`, 13 tests), wired into `pnpm tooling:check`, and it carries
+  three checks rather than one:
+  1. **Containment** — `OLYMPUS_RELEASE_CHANNEL` may appear only in
+     `tauri-preview.yml`, `build.rs`, and `env.rs`, so it cannot leak into a
+     workflow where a `v*` tag build or a test job would see it.
+  2. **Pin agreement** — where the two workflows pin the same third-party action
+     or toolchain version, the pins must match.
+  3. **No expressions in action metadata** — added after it cost a pipeline; see
+     the rc.1 postmortem below.
 
-### Two traps found while implementing, worth remembering
+### Three traps found while implementing, worth remembering
 
 - **`startup.rs` is a `main.rs` module, not a `lib.rs` one.** `cargo test --lib`
   contains no startup tests at all, and libtest exits 0 when a filter matches
@@ -802,6 +814,50 @@ the prerelease page, then merge the copy.**
   They are now literals in the action, which is the correct posture anyway —
   they are a reviewed security pin, not a knob.
 
+### Postmortem: `preview-v0.10.0-rc.1` (2026-08-15)
+
+The first preview tag failed in four seconds, in `preflight`, at "Setup build
+toolchain":
+
+```
+.github/actions/setup-build-toolchain/action.yml (Line: 2, Col: 14):
+Unrecognized named-value: 'inputs'. Located at position 1 within expression: inputs.*
+```
+
+Line 2 is the `description:` field. The trap immediately above this section —
+"`check-privileged-action-pins.mjs` requires literal toolchain versions" — was
+written up *inside that description*, and the sentence explaining that the
+versions were literals "rather than a `${{ inputs.* }}` indirection" contained
+live expression syntax. **The runner evaluates expressions in action metadata**,
+so a comment about an expression was parsed as one, and the manifest failed to
+load before any step ran.
+
+Three things worth extracting:
+
+- **Prose in an Actions manifest is not inert.** `name`, `description`, and every
+  input/output `description` are template strings. This is the rare case where
+  documenting a decision *caused* the defect it documented.
+- **Nothing local could have caught it.** The YAML is valid, so `js-yaml` parsed
+  it and prettier formatted it; the file passed every gate in
+  `pnpm tooling:check` and the whole PR CI suite. The defect exists only for the
+  runner's template evaluator, at execution time.
+- **The job ordering held.** `guard` passed, `preflight` failed, and the publish
+  step is four jobs downstream — so rc.1 published nothing. That is the property
+  §3 was designed for, confirmed by accident rather than by the dry run.
+
+Fixed in [#1649](https://github.com/OlympusLedgerOrg/Olympus/pull/1649)
+(`7f73fb8a`): reworded, plus `checkActionMetadataExpressions` in the tripwire,
+which scans metadata fields of every local composite action and deliberately
+does **not** scan `steps:`, where expressions are legal and necessary. One of
+its three tests reintroduces the exact string that killed rc.1.
+
+Re-cut as `preview-v0.10.0-rc.2`. `rc.1` is left in place as honest history: it
+produced no artifacts and no release.
+
+**Method note.** `gh run watch --exit-status` exited 0 on the failed run; the
+verdict is `gh run view <id> --json conclusion`. A watcher's exit code is not the
+run's conclusion.
+
 ### Verified locally
 
 `cargo fmt --all --check` (root and `verifiers/rust`) · `cargo clippy -p
@@ -811,12 +867,20 @@ warnings` · `cargo test -p olympus-desktop … --lib -- env::tests` (10 passed)
 (1 passed) · `pnpm --filter public-ui test:run` (587 passed) · `tsc -b` ·
 `eslint . --max-warnings 0` from inside `app/public-ui` · `pnpm --filter
 public-ui build` · `node --test scripts/release-assets.test.mjs` (8 passed) ·
-`node --test scripts/check-preview-channel.test.mjs` (10 passed) ·
+`node --test scripts/check-preview-channel.test.mjs` (13 passed) ·
 `pnpm format:prettier:check` · `pnpm license:headers` · `pnpm
 release-actions:check`.
 
 **Not verified locally, and unverifiable on Windows:** the four-target Tauri
 build, whether the MSI bundler accepts the renamed product, the exact installer
-filenames the self-identification step matches against, and the whole workflow.
-The first `workflow_dispatch` run with `publish: false` is the real test — do
-that before tagging.
+filenames the self-identification step matches against, and the workflow itself.
+Only a real run exercises these — rc.1 proved the point by failing on something
+no local gate could see.
+
+Now that the workflow is on `main`, the cheap way to exercise a change to it is
+a dispatch dry run, which stages and validates the full asset set without
+publishing:
+
+```bash
+gh workflow run tauri-preview.yml --ref main -f publish=false
+```
