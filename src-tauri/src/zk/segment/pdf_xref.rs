@@ -987,6 +987,10 @@ pub(crate) fn logical_objects(b: &[u8]) -> Result<BTreeMap<u32, (u16, Vec<u8>)>,
 /// (ADR-0028 §2). The xref is emitted as **sparse subsections** over the in-use
 /// object numbers, so a sparse high obj-id (e.g. one object numbered 4 billion)
 /// costs one subsection, not a multi-GB dense table.
+/// A rebuilt traditional-xref PDF: the artifact bytes, plus one
+/// `(obj_id, artifact_offset, artifact_length)` span per emitted object.
+type RebuiltPdf = (Vec<u8>, Vec<container_pdf::ObjectSpan>);
+
 fn rebuild_traditional(
     bodies: &BTreeMap<u32, (u16, Vec<u8>)>,
     redacted: &HashSet<u32>,
@@ -1004,7 +1008,7 @@ pub(crate) fn rebuild_traditional_with_spans(
     bodies: &BTreeMap<u32, (u16, Vec<u8>)>,
     redacted: &HashSet<u32>,
     root_ref: Option<&[u8]>,
-) -> Result<(Vec<u8>, Vec<(u32, u64, u64)>), SegmentError> {
+) -> Result<RebuiltPdf, SegmentError> {
     // `bodies` is a BTreeMap, so this is already ascending by object id — the
     // order `write_traditional_xref` requires.
     let objects: Vec<EmittedObject> = bodies
