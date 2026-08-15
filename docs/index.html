@@ -6,7 +6,7 @@
     <title>Olympus — proof that a document is unaltered, including the parts you blacked out</title>
     <meta
       name="description"
-      content="Olympus is a verifiable ledger for sensitive documents. It proves a record existed at a given time, has not been altered, and that its redactions were honest — checkable offline, by anyone, years later."
+      content="Olympus — a verifiable ledger for sensitive information. Tamper-evident Sparse Merkle Tree ledger with redaction proofs via a signed Merkle fold, soulbound credentials, and offline-verifiable court evidence. Rust + Tauri 2 desktop app; Axum and pg_embed run in-process, so there is nothing to deploy. Pre-v1: development only."
     />
     <link
       rel="icon"
@@ -240,6 +240,15 @@
         font-size: var(--s-1);
         color: var(--ink-2);
         max-width: 34ch;
+      }
+
+      /* The stack line carries more text than the lead sub, so it steps down a
+         size and widens; at 34ch the mechanism list would set as a narrow column. */
+      .hero .sub--stack {
+        margin-top: 1rem;
+        font-size: var(--s-0);
+        color: var(--ink-3);
+        max-width: 48ch;
       }
 
       .cta {
@@ -687,10 +696,16 @@
         <div class="hero">
           <div>
             <span class="chip chip--pending">v0.10 · pre-1.0 · setup ceremony pending</span>
-            <h1>Prove the record is unaltered — including the parts you blacked out.</h1>
+            <h1>A verifiable ledger for sensitive information.</h1>
             <p class="sub">
-              Olympus is a verifiable ledger for sensitive documents. The file never leaves your
-              machine; the proof does.
+              Prove the record is unaltered — including the parts you blacked out. The file never
+              leaves your machine; the proof does.
+            </p>
+            <p class="sub sub--stack">
+              Tamper-evident Sparse Merkle Tree ledger, redaction proofs via a signed Merkle fold,
+              soulbound credentials, and offline-verifiable court evidence. Rust + Tauri 2 desktop
+              app; Axum and pg_embed run in-process, so there is nothing to deploy and no backend to
+              operate.
             </p>
             <div class="cta">
               <a class="btn btn--primary" href="https://github.com/OlympusLedgerOrg/Olympus/blob/main/docs/court-evidence.md">Evidence workflow</a>
