@@ -6,6 +6,61 @@ All notable changes to the Olympus protocol are documented in this file.
 
 ### Added
 
+- **ADR-0041 trust-list state machine, first runtime increment (persistence +
+  reconciliation; consumers unchanged).** Builds on the already-merged
+  protocol layer (`olympus_crypto::trust_list`: data model, canonical
+  encoders, pinned vectors). What this increment delivers:
+  - `olympus_crypto::trust_wire` (feature `trust-list-wire`): the lossless,
+    versioned serde JSON **storage** shape for `TrustListSnapshotV1` and for
+    signed transition files (snapshot + collected BJJ approvals). Storage
+    only — the digest is always recomputed from `canonical_snapshot_body`
+    over the decoded value, never from JSON bytes, and loads fail closed on
+    unknown/duplicate tags, non-canonical hex, and unknown fields.
+  - `olympus_crypto::trust_list::TrustResolver` (ADR §9) plus the
+    snapshot-backed `trust::SnapshotTrustResolver` in the desktop crate,
+    including the **continuous** decision-time max-age gate (security
+    invariant 18): a stale Active snapshot fails closed on every call, not
+    once at load.
+  - `quorum::trust`: typed `QuorumMessage` constructors + verifiers for the
+    three trust domains (`OLY:TRUST:ROTATE:V1`, `OLY:TRUST:RECOVER:V1`,
+    `OLY:TRUST:GENESIS:V1`) over the shared hardened M-of-N core, with a
+    regression matrix proving all five domains (SBT, checkpoint, rotation,
+    recovery, genesis) are pairwise non-replayable and the two legacy
+    messages are byte-unchanged.
+  - Migration `0062_trust_list_transitions` (ADR §6): immutable candidate
+    rows, append-only lifecycle events (`rejected`/`superseded`/`accepted`/
+    `activated`), and the insert-only accepted-transitions table whose
+    UNIQUE constraints are the successor-slot acquisition. All three tables
+    are runtime `SELECT`+`INSERT` only in the external-PG ACL contract
+    (docs/external-postgresql-roles.md; semantic-inventory digest
+    regenerated 683 → 745 rows).
+  - `trust::store`: stage (validating canonical encoding, invariants,
+    freshness plausibility, and approvals under the **currently accepted**
+    snapshot's policies — a candidate can never self-authorize), atomic
+    serialised acceptance under a dedicated `pg_advisory_xact_lock` (losers
+    get terminal `superseded`/`rejected` events referencing the winner;
+    candidate rows are never mutated), precondition-gated activation, and
+    full chain reconstruction that re-verifies digests, linkage, activation
+    ordering, and every link's approval signatures on every load.
+  - Startup reconciliation (`trust::reconcile`), wired into both binaries
+    exactly like the ceremony-manifest gate: **no accepted genesis (every
+    deployment today) → info log, legacy `OLYMPUS_BJJ_TRUSTED_ISSUERS_JSON`
+    path completely unchanged**; accepted state present → the chain is
+    authoritative, and failure to establish a fresh Active snapshot is
+    `exit(2)` in production / `tracing::error!` + legacy path in dev. New
+    env vars `OLYMPUS_TRUST_LIST_MAX_AGE_SECS` /
+    `OLYMPUS_TRUST_LIST_MAX_LIFETIME_SECS` are required in production only
+    once accepted state exists.
+
+  **Not delivered yet** (ADR-0041 stays Proposed; later PRs): the
+  genesis/recovery/inspection CLIs — so no production database can contain
+  accepted trust state yet and runtime behavior is identical to before —
+  plus mid-run activation scheduling (startup-time only for now), consumer
+  switchover onto the resolver (SBT scope resolution and ceremony-manifest
+  verification still read the legacy issuer set), bootstrap-key removal
+  after genesis, and the purpose-typed `ActiveSigners` / signer-activation
+  records of ADR §10.
+
 - **ADR-0021 Monitor API + Maximum Merge Delay policy, implemented.**
   Of ADR-0021's four CT-inspired operational controls, witness cosigning
   (ADR-0033) and gossip/equivocation detection (`federation::gossip`) were
