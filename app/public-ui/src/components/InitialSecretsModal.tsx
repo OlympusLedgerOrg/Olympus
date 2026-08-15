@@ -139,10 +139,21 @@ const InitialSecretsModal: React.FC = () => {
             marginTop: 0,
           }}
         >
-          These secrets were generated when the database was initialised. They are{" "}
-          <strong>not</strong> stored in recoverable form: the API key has only its BLAKE3 hash in
-          the database, and the BJJ private key is never persisted anywhere.{" "}
-          <strong>Copy them now</strong> — they will never appear in this dialog again.
+          {/*
+            Deliberately makes no claim about whether the BJJ authority key is
+            persisted. That is build-mode dependent and stating it either way
+            is a hazard: in production `bjj_private_dev` is left NULL and
+            bootstrap.rs refuses the keychain write, so the operator's env var
+            is the only copy — but a dev build persists the key to BOTH the DB
+            column and the OS keychain (load precedence env → keychain → DB).
+            Claiming "never persisted" is false on a dev machine; claiming it
+            is recoverable would tell a production operator they can skip
+            saving a key they cannot get back. The instruction below is the
+            one thing true in both modes, so say only that.
+          */}
+          These secrets are shown once. The API key is stored server-side only as a BLAKE3 hash,
+          so it cannot be read back from the database. <strong>Copy both now</strong> and keep
+          them somewhere safe — treat this dialog as the only copy you will get.
         </p>
 
         {secrets.system_api_key && (
