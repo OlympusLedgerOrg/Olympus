@@ -417,7 +417,12 @@ tempfile = "3"
 # coverage scope), and stays that way; a path dev-dependency does not make it a
 # member. Dev-only, so it never enters the shipped runtime graph. The version
 # pins line up because both crates already fix `ark-*` at `=0.6.0`.
-olympus-verifier = { path = "../verifiers/rust" }
+#
+# `default-features = false` drops the verifier's `cli` feature: the gate needs
+# the library (`redaction::verify_bundle`, `pedersen::Curve`), never the
+# argument parser its CLI binary uses. With defaults on, clap + its ANSI stack
+# landed here as 13 crates `cargo vet` demanded attestations for.
+olympus-verifier = { path = "../verifiers/rust", default-features = false }
 
 # The #1011 diagnostic test uses the `CircomProvingKey::from_proving_key_for_tests`
 # and `proving_key_for_tests` escape hatches to compare two zkey-load paths.
