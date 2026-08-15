@@ -33,13 +33,16 @@ All notable changes to the Olympus protocol are documented in this file.
     UNIQUE constraints are the successor-slot acquisition. All three tables
     are runtime `SELECT`+`INSERT` only in the external-PG ACL contract
     (docs/external-postgresql-roles.md; semantic-inventory digest
-    regenerated 683 → 745 rows).
+    regenerated 685 → 747 rows).
   - `trust::store`: stage (validating canonical encoding, invariants,
     freshness plausibility, and approvals under the **currently accepted**
     snapshot's policies — a candidate can never self-authorize), atomic
-    serialised acceptance under a dedicated `pg_advisory_xact_lock` (losers
-    get terminal `superseded`/`rejected` events referencing the winner;
-    candidate rows are never mutated), precondition-gated activation, and
+    serialised acceptance under a dedicated `pg_advisory_xact_lock` (a
+    candidate that loses the successor slot gets a terminal `superseded`
+    event referencing the winner; a candidate that fails validation gets a
+    terminal `rejected` event carrying the typed reason but no winner —
+    there isn't one; candidate rows are never mutated), precondition-gated
+    activation, and
     full chain reconstruction that re-verifies digests, linkage, activation
     ordering, and every link's approval signatures on every load.
   - Startup reconciliation (`trust::reconcile`), wired into both binaries

@@ -739,12 +739,14 @@ mod tests {
         );
 
         // An unknown JSON field is a serde-level rejection (deny_unknown_fields),
-        // not a silent drop.
+        // not a silent drop. Assert the specific rejection reason, not just
+        // is_err(), so this doesn't pass on an unrelated parse failure.
         let mut value: serde_json::Value = serde_json::to_value(wire()).expect("encode");
         value["surprise_field"] = serde_json::json!(true);
+        let error = serde_json::from_value::<TrustSnapshotWireV1>(value).unwrap_err();
         assert!(
-            serde_json::from_value::<TrustSnapshotWireV1>(value).is_err(),
-            "unknown fields must fail deserialization outright"
+            error.to_string().contains("surprise_field"),
+            "expected an unknown-field rejection naming surprise_field, got: {error}"
         );
     }
 
