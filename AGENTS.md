@@ -340,5 +340,18 @@ Key `.env` variables:
 - Always reply to CodeRabbit findings by mentioning `@coderabbitai` in the
   response (fix confirmations and declines alike) — replies feed its
   learnings database, so decisions persist across future reviews.
+- **CodeRabbit allows 10 PR reviews per developer per hour** on this plan
+  (Pro Plus), as a rolling window rather than an hourly reset. **Every push to a
+  PR consumes one**, because a push triggers an automatic review — manual
+  `@coderabbitai review` comments are not the main cost. A run of small
+  fix-up commits therefore exhausts the budget silently, and further triggers
+  return only a generic "Review limit reached" notice.
+  - Batch fixes into fewer pushes when a review round is in flight.
+  - Recognise the failure shape: the bot answers "Review triggered", then
+    *edits* that comment into the rate-limit warning. The acknowledgement is
+    not confirmation a review started; only the absence of that edit is.
+  - The escape hatch is usage-based reviews in Billing ($0.25/file), an
+    org-admin setting. Repeating the trigger before the window reopens does
+    nothing except consume another attempt.
 
-<!-- wiserepo:source-sha256:792266d988a69bcb40b310d2a8b07e64a81934325c75a4d9bdc3d2ffe5d94e89 -->
+<!-- wiserepo:source-sha256:2a9b3c3e06a9d85d8fa7e96dbc550348a0a1bf66f09bc730c301b1b80f79f910 -->
