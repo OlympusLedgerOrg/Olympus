@@ -125,7 +125,7 @@ Olympus/
   reject invalid sigs before touching shared state — DoS hardening).
 - **Quorum requires real multi-party threshold** — a single node MUST NOT
   satisfy its own M-of-N quorum cert. Quorum / single-issuer / revocation
-  signatures are **domain-separated** (`OLY:SBT:QUORUM:V1` / bare `commit_id` /
+  signatures are **domain-separated** (`OLY:SBT:QUORUM:V2` / `OLY:SBT:V1` /
   `OLY:SBT:REVOKE:V1`) — never cross-wire the digests.
 
 ### Other pinned invariants

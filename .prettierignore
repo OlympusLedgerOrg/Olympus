@@ -35,6 +35,10 @@ src-tauri/gen/
 **/*vectors*.json
 test_vectors/
 verifiers/test_vectors/
+# Generated circom witness fixtures (emitted by the Rust test
+# zk::witness::quorum::tests::emit_circom_fixtures_for_the_witness_harness;
+# formatting them would churn against regeneration).
+proofs/test_inputs/quorum_fixtures/
 
 # Vendored or patched upstream trees should stay close to upstream.
 crates/glib-0.18.5-patched/
