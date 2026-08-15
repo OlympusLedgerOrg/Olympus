@@ -315,10 +315,14 @@ impl AcceptedChain {
 /// together cover a role that starts, stays, or is discovered LocalOnly,
 /// since none of them re-runs another's work.
 pub(crate) fn local_only_active_role(snapshot: &TrustListSnapshotV1) -> Option<&'static str> {
-    snapshot.rotation_policies.iter().find_map(|(role, policy)| {
-        (snapshot.active_roles.contains(role) && policy.profile == RotationPolicyProfile::LocalOnly)
-            .then(|| role.wire_tag())
-    })
+    snapshot
+        .rotation_policies
+        .iter()
+        .find_map(|(role, policy)| {
+            (snapshot.active_roles.contains(role)
+                && policy.profile == RotationPolicyProfile::LocalOnly)
+                .then(|| role.wire_tag())
+        })
 }
 
 fn hex_digest(digest: &[u8; 32]) -> String {
@@ -1232,7 +1236,9 @@ pub async fn activate_transition(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::quorum::trust::{approve_trust_genesis, approve_trust_recovery, approve_trust_rotation};
+    use crate::quorum::trust::{
+        approve_trust_genesis, approve_trust_recovery, approve_trust_rotation,
+    };
     use crate::trust::config::FreshnessLimit;
     use olympus_crypto::trust_list::{GenesisApprovalPolicy, RecoveryReason, TrustedIssuerEntry};
     use std::collections::BTreeSet;
