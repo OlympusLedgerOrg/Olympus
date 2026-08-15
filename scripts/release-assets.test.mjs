@@ -187,6 +187,68 @@ test("binds the release asset manifest to its tag", () => {
   }
 });
 
+// GitHub rewrites release asset filenames on upload — spaces become periods —
+// so a staged name containing a space can never match what `gh release
+// download` returns, and both `verify` and every downloader's `sha256sum -c`
+// fail on names while the bytes are intact. preview-v0.10.0-rc.3 shipped
+// exactly this. Staging must therefore emit GitHub-stable names.
+test("stages Tauri's spaced bundle names as the dotted names GitHub will serve", () => {
+  const dirs = fixture();
+  try {
+    const staged = stageFixture(dirs);
+    const names = staged.assets.map((asset) => asset.name);
+    // The fixture's Windows source file is "Olympus Ledger.msi" (real Tauri
+    // bundles carry the space, derived from productName).
+    assert.ok(
+      names.includes("x86_64-pc-windows-msvc--Olympus.Ledger.msi"),
+      `expected the dotted name, got: ${JSON.stringify(names)}`,
+    );
+    for (const name of names) {
+      assert.ok(!name.includes(" "), `staged asset name contains a space: ${name}`);
+    }
+    // The verifier must accept the whole staged set under the new names.
+    verifyReleaseAssets({ input: dirs.output, tag: TAG, commit: COMMIT });
+  } finally {
+    rmSync(dirs.root, { recursive: true, force: true });
+  }
+});
+
+test("rejects asset names GitHub would rewrite beyond the space transform", () => {
+  const dirs = fixture();
+  try {
+    writeFileSync(
+      path.join(dirs.input, "olympus-x86_64-pc-windows-msvc", "bundle-output", "Olympus#1.msi"),
+      "installer\n",
+    );
+    assert.throws(
+      () => stageFixture(dirs),
+      /characters GitHub rewrites on upload/,
+      "an unmappable character must fail at stage time, before anything is hashed",
+    );
+  } finally {
+    rmSync(dirs.root, { recursive: true, force: true });
+  }
+});
+
+test("verify refuses a pre-fix manifest whose asset names contain spaces", () => {
+  const dirs = fixture();
+  try {
+    stageFixture(dirs);
+    const manifestPath = path.join(dirs.output, "RELEASE_ASSETS.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    const victim = manifest.assets.find((asset) => asset.name.endsWith(".msi"));
+    victim.name = victim.name.replace(/\./g, " "); // simulate a pre-fix spaced manifest
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+    assert.throws(
+      () => verifyReleaseAssets({ input: dirs.output, tag: TAG, commit: COMMIT }),
+      /not GitHub-stable/,
+      "a spaced manifest must be named as the cause, not surface as N per-file mismatches",
+    );
+  } finally {
+    rmSync(dirs.root, { recursive: true, force: true });
+  }
+});
+
 // docs/plans/preview-release-channel.md §4 claims the asset contract needs no
 // channel parameter — the tag is opaque data, and preview bundles are unsigned
 // but otherwise identical in shape. Assert that rather than assuming it, so the

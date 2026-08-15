@@ -896,6 +896,47 @@ emit an unsigned macOS bundle is contradicted by rc.2's evidence. The tag path
 the prime constraint, and the preview channel now serves the unsigned-bundle
 use case the dispatch path was carrying.
 
+### Postmortem: `preview-v0.10.0-rc.3` (2026-08-15)
+
+**All four builds succeeded** — the macOS fix held, and every remaining
+packaging unknown resolved. The failure moved to the last possible step:
+`Verify the published preview asset contract`, *after* the prerelease was
+published.
+
+```
+release asset verification failed: stale or unmanifested release asset:
+aarch64-apple-darwin--Olympus.Ledger.Preview_0.10.0_aarch64.dmg
+```
+
+Root cause: **GitHub rewrites release asset filenames on upload — spaces become
+periods.** The pipeline staged and hashed
+`…--Olympus Ledger Preview_0.10.0_aarch64.dmg`; GitHub served
+`…--Olympus.Ledger.Preview_0.10.0_aarch64.dmg`. The manifest and `SHA256SUMS`
+referenced the spaced names, so post-publish verification — and any downloader's
+`sha256sum -c` — failed on *names* while every byte was intact. §4's review of
+`safeAssetName` noted spaces were permitted "because today's names already have
+them" and stopped there; the question that mattered was not whether the *stager*
+accepts a space but whether *GitHub* preserves one, and nothing had ever
+published an asset to find out.
+
+**This was a latent production bug, not a preview bug.** `tauri-release.yml`
+stages `Olympus Ledger_…` names with the same space through the same shared
+script and the same post-publish verify. No `v*` release has ever run, so the
+first production release would have failed identically — discovered here
+instead, which is constraint 5's argument ("the cheapest place to prove the
+path works before it matters") paying out in full.
+
+Fixed in the shared `scripts/release-assets.mjs` (both channels at once, zero
+workflow diff): `stage` now normalises names exactly as GitHub does (space →
+`.`) *before hashing*, hard-errors on any character outside the known-stable
+set rather than guessing further transforms, and runs the duplicate-name check
+post-normalisation so a rewrite collision cannot silently clobber an asset.
+`verify` rejects a pre-fix spaced manifest with one named error instead of N
+per-file mismatches. Re-cut as `preview-v0.10.0-rc.4`.
+
+rc.3's published prerelease has intact installers but self-mismatched
+checksums; superseded by rc.4 and annotated rather than deleted.
+
 ### Verified locally
 
 `cargo fmt --all --check` (root and `verifiers/rust`) · `cargo clippy -p
