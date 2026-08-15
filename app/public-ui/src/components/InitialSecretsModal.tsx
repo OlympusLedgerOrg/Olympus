@@ -82,6 +82,10 @@ const InitialSecretsModal: React.FC = () => {
 
   if (!secrets) return null;
 
+  // Either secret may be null and each section renders conditionally, so the
+  // prompts must not say "both" when only one is on screen.
+  const bothShown = !!secrets.system_api_key && !!secrets.bjj_authority_key_hex;
+
   const dismiss = () => {
     localStorage.setItem(SEEN_KEY, new Date().toISOString());
     setAcknowledged(true);
@@ -161,8 +165,10 @@ const InitialSecretsModal: React.FC = () => {
             one thing true in both modes, so say only that.
           */}
           These secrets are shown once. The API key is stored server-side only as a BLAKE3 hash, so
-          it cannot be read back from the database. <strong>Copy both now</strong> and keep them
-          somewhere safe — treat this dialog as the only copy you will get.
+          it cannot be read back from the database.{" "}
+          <strong>Copy {bothShown ? "both keys" : "it"} now</strong> and keep{" "}
+          {bothShown ? "them" : "it"} somewhere safe — treat this dialog as the only copy you will
+          get.
         </p>
 
         {secrets.system_api_key && (
@@ -216,7 +222,7 @@ const InitialSecretsModal: React.FC = () => {
               }}
             >
               {prefillFailed
-                ? "This key could not be loaded into the session automatically — paste it into the API key field by hand. It is held in memory only, never written to disk or browser storage, so reloading or restarting the app clears it. Save an external copy now."
+                ? "This key was rejected as malformed and is NOT loaded into the session. Pasting it into an API key field will not help — those fields apply the same check. Generate a replacement key (the expected form is 64 hexadecimal characters, optionally prefixed oly_) before relying on this account."
                 : "Loaded into this session, so the IngestPage / KEYS pages pick it up automatically. It is held in memory only — never written to disk or browser storage — so reloading or restarting the app clears it. Save an external copy now."}
             </p>
           </section>
@@ -361,7 +367,9 @@ const InitialSecretsModal: React.FC = () => {
                     ? "DISMISSED"
                     : blockedByCopy
                       ? "COPY KEYS TO ENABLE"
-                      : "I'VE SAVED BOTH KEYS"}
+                      : bothShown
+                        ? "I'VE SAVED BOTH KEYS"
+                        : "I'VE SAVED THE KEY"}
                 </button>
               </div>
             </div>
