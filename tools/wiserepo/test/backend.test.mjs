@@ -8,8 +8,31 @@ import {
   ModelRequestError,
   classifyHttpFailure,
   numericEnv,
+  callModel,
   DEFAULT_OLLAMA_MODEL,
+  DEFAULT_OLLAMA_URL,
 } from "../src/backend.mjs";
+
+// Stubs global.fetch for one call, captures what was sent, and always
+// restores the real fetch. `respond` returns the { ok, status, text } shape
+// callModel consumes, or throws to simulate a dead daemon.
+async function withStubbedFetch(respond, fn) {
+  const realFetch = global.fetch;
+  const calls = [];
+  global.fetch = async (url, options) => {
+    calls.push({ url, options });
+    return respond();
+  };
+  try {
+    return { result: await fn(), calls };
+  } finally {
+    global.fetch = realFetch;
+  }
+}
+
+function okResponse(bodyObj) {
+  return () => ({ ok: true, status: 200, text: async () => JSON.stringify(bodyObj) });
+}
 
 // The exit-code contract in bin/sync-agent-docs.mjs rests entirely on this
 // classification: "unavailable" must never block a commit, "request error"
@@ -93,5 +116,164 @@ test("numericEnv rejects an out-of-range value", () => {
     );
   } finally {
     delete process.env.WISEREPO_TEST_VAR;
+  }
+});
+
+// ── callModel wire contract ────────────────────────────────────────────────
+//
+// These stub global.fetch rather than talk to a real daemon, so they run in
+// CI with no Ollama installed. That is a genuine limit: they prove wiserepo
+// sends what Ollama's /api/chat documents and parses the response shape it
+// documents, NOT that a live daemon accepts it. A first real run against
+// qwen3-coder:30b is still the thing that closes that gap. What they do
+// close is the silent-drift case -- an edit that swaps num_predict back to
+// max_tokens, or reads data.choices[0] instead of data.message.content,
+// now fails here instead of at the first use on the GPU box.
+
+test("callModel POSTs the documented Ollama /api/chat request shape", async () => {
+  const { result, calls } = await withStubbedFetch(
+    okResponse({ message: { content: "hello" } }),
+    () => callModel({ system: "SYS", prompt: "PROMPT" }),
+  );
+
+  assert.equal(result, "hello");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, `${DEFAULT_OLLAMA_URL}/api/chat`);
+  assert.equal(calls[0].options.method, "POST");
+  assert.equal(calls[0].options.headers["content-type"], "application/json");
+
+  const sent = JSON.parse(calls[0].options.body);
+  assert.equal(sent.model, DEFAULT_OLLAMA_MODEL);
+  // stream:false is load-bearing -- a streaming response body is NDJSON, and
+  // parseJsonBody would reject the whole thing as non-JSON.
+  assert.equal(sent.stream, false);
+  assert.deepEqual(sent.messages, [
+    { role: "system", content: "SYS" },
+    { role: "user", content: "PROMPT" },
+  ]);
+  assert.equal(sent.options.temperature, 0);
+});
+
+// Ollama's cap is options.num_predict, NOT max_tokens (that's the OpenAI
+// spelling this backend used to carry). Sending the wrong key doesn't error
+// -- Ollama ignores unknown options -- so an unbounded generation would just
+// silently run long. Assert both directions.
+test("callModel omits num_predict unless maxTokens was requested", async () => {
+  const { calls } = await withStubbedFetch(okResponse({ message: { content: "x" } }), () =>
+    callModel({ prompt: "p" }),
+  );
+  const sent = JSON.parse(calls[0].options.body);
+  assert.ok(!("num_predict" in sent.options), `unexpected num_predict: ${calls[0].options.body}`);
+  assert.ok(!("max_tokens" in sent), "max_tokens is the OpenAI spelling; Ollama ignores it");
+});
+
+test("callModel maps maxTokens onto options.num_predict", async () => {
+  const { calls } = await withStubbedFetch(okResponse({ message: { content: "x" } }), () =>
+    callModel({ prompt: "p", maxTokens: 8192 }),
+  );
+  assert.equal(JSON.parse(calls[0].options.body).options.num_predict, 8192);
+});
+
+test("callModel forwards an explicit temperature", async () => {
+  const { calls } = await withStubbedFetch(okResponse({ message: { content: "x" } }), () =>
+    callModel({ prompt: "p", temperature: 0.7 }),
+  );
+  assert.equal(JSON.parse(calls[0].options.body).options.temperature, 0.7);
+});
+
+// A 200 carrying no usable text must not be handed back as a "successful"
+// empty generation -- sync-agent-docs.mjs would write an empty AGENTS.md.
+test("callModel rejects a 200 with an empty or whitespace-only completion", async () => {
+  for (const body of [{ message: { content: "" } }, { message: { content: "   \n" } }, {}]) {
+    await assert.rejects(
+      () => withStubbedFetch(okResponse(body), () => callModel({ prompt: "p" })),
+      ModelUnavailableError,
+      `body ${JSON.stringify(body)} should be rejected`,
+    );
+  }
+});
+
+test("callModel treats a non-JSON 200 body as unavailable, not as content", async () => {
+  await assert.rejects(
+    () =>
+      withStubbedFetch(
+        () => ({ ok: true, status: 200, text: async () => "<html>proxy error</html>" }),
+        () => callModel({ prompt: "p" }),
+      ),
+    ModelUnavailableError,
+  );
+});
+
+test("callModel surfaces an unpulled model (404) as blocking, with the pull command", async () => {
+  await assert.rejects(
+    () =>
+      withStubbedFetch(
+        () => ({ ok: false, status: 404, text: async () => 'model "x" not found' }),
+        () => callModel({ prompt: "p" }),
+      ),
+    (err) => err instanceof ModelRequestError && /ollama pull/.test(err.message),
+  );
+});
+
+test("callModel treats a dead daemon (fetch throws) as unavailable, not as a bug", async () => {
+  await assert.rejects(
+    () =>
+      withStubbedFetch(
+        () => {
+          throw new Error("connect ECONNREFUSED 127.0.0.1:11434");
+        },
+        () => callModel({ prompt: "p" }),
+      ),
+    (err) => err instanceof ModelUnavailableError && /Ollama daemon running/.test(err.message),
+  );
+});
+
+// REGRESSION (CodeRabbit #1641): WISEREPO_OLLAMA_URL is operator-supplied and
+// may carry userinfo or a token query for a proxied/remote daemon. The whole
+// URL used to be interpolated into ModelUnavailableError, and
+// sync-agent-docs.mjs prints err.message straight to stdout -- so a
+// credentialed endpoint leaked into CI logs and pre-commit output. Constants
+// are read at module load, so this re-imports with a cache-busting query to
+// get a module instance bound to the credentialed URL.
+test("callModel strips credentials from the endpoint before putting it in an error", async () => {
+  const original = process.env.WISEREPO_OLLAMA_URL;
+  process.env.WISEREPO_OLLAMA_URL = "http://user:sup3rs3cret@ollama.internal:11434/?token=abc123";
+  try {
+    const mod = await import(`../src/backend.mjs?credleak=${Date.now()}`);
+    await assert.rejects(
+      () =>
+        withStubbedFetch(
+          () => {
+            throw new Error("connect ECONNREFUSED");
+          },
+          () => mod.callModel({ prompt: "p" }),
+        ),
+      (err) => {
+        assert.ok(!err.message.includes("sup3rs3cret"), `password leaked: ${err.message}`);
+        assert.ok(!err.message.includes("abc123"), `token leaked: ${err.message}`);
+        assert.ok(!err.message.includes("user:"), `userinfo leaked: ${err.message}`);
+        // Still useful for debugging: the host must survive.
+        assert.match(err.message, /ollama\.internal/);
+        return true;
+      },
+    );
+  } finally {
+    if (original !== undefined) process.env.WISEREPO_OLLAMA_URL = original;
+    else delete process.env.WISEREPO_OLLAMA_URL;
+  }
+});
+
+test("callModel tolerates trailing slashes on WISEREPO_OLLAMA_URL", async () => {
+  const original = process.env.WISEREPO_OLLAMA_URL;
+  process.env.WISEREPO_OLLAMA_URL = "http://localhost:11434///";
+  try {
+    const mod = await import(`../src/backend.mjs?slash=${Date.now()}`);
+    const { calls } = await withStubbedFetch(okResponse({ message: { content: "x" } }), () =>
+      mod.callModel({ prompt: "p" }),
+    );
+    assert.equal(calls[0].url, "http://localhost:11434/api/chat");
+  } finally {
+    if (original !== undefined) process.env.WISEREPO_OLLAMA_URL = original;
+    else delete process.env.WISEREPO_OLLAMA_URL;
   }
 });
