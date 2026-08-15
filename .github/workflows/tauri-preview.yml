@@ -348,19 +348,18 @@ jobs:
       - name: Generate icons from source SVG
         run: cargo tauri icon src-tauri/icons/source.svg
 
+      # No APPLE_* env vars here, and their ABSENCE is load-bearing — do not
+      # "restore" them as empty strings. rc.2 failed on both macOS legs with
+      # `failed to run command security import: failed to import keychain
+      # certificate` because APPLE_CERTIFICATE was set to "": tauri-action's JS
+      # wrapper skips signing on an empty value, but the Rust bundler reads the
+      # variable itself via `var_os`, which returns Some("") for set-but-empty —
+      # so it entered the certificate-import branch with zero-byte cert
+      # material. Unset is the only true "no signing" state. Unsigned bundles
+      # are what this channel ships; the Gatekeeper workaround is documented in
+      # the release body.
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
-        env:
-          # Empty, always. tauri-action attempts `security import` whenever
-          # APPLE_CERTIFICATE is non-empty and fails (exit 1) on an
-          # unconfigured placeholder; empty makes it skip signing and emit an
-          # UNSIGNED bundle, which is what the preview channel ships. The
-          # Gatekeeper workaround is documented in the release body.
-          APPLE_ID: ""
-          APPLE_PASSWORD: ""
-          APPLE_TEAM_ID: ""
-          APPLE_CERTIFICATE: ""
-          APPLE_CERTIFICATE_PASSWORD: ""
         with:
           target: ${{ matrix.target }}
           # The preview overlay renames the product to "Olympus Ledger Preview"
