@@ -8,6 +8,7 @@ EMBEDDED_POSTGRES_TESTS=(
     e2e_http
     smt_pg_backend
     checkpoint_transition_attestation
+    checkpoint_smt_root_attestation
     federation_equivocation
     db_init_embedded
 )

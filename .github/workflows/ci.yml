@@ -2036,10 +2036,27 @@ jobs:
   #
   # To accept new noise (e.g. a new hash constant lands and gitleaks flags
   # it): regenerate the baseline locally with the same pinned version --
-  #   gitleaks detect --source . --report-format json \
-  #     --report-path .gitleaks-baseline.json
+  #   gitleaks detect --source . --log-opts="--full-history HEAD" \
+  #     --report-format json --report-path .gitleaks-baseline.json
   # -- review the diff, and commit it. Do not regenerate the baseline to make
   # a real finding disappear; fix the finding instead.
+  #
+  # --log-opts pins the scan to the checked-out ref's own ancestry. gitleaks
+  # `detect` defaults to `git log --full-history --all`, which scans EVERY ref
+  # the runner has -- and `fetch-depth: 0` above fetches all branches, so a PR
+  # was graded on commits belonging to other people's open PRs. Observed
+  # directly: run 31860303521 failed this PR's branch on four
+  # proofs/keys/PROVENANCE.md findings at commit a9d9bc7, a commit on the
+  # unrelated fix/quorum-circuit-soundness branch and NOT an ancestor of this
+  # branch (`git merge-base --is-ancestor a9d9bc7 HEAD` exits 1). The branch's
+  # own diff was clean.
+  #
+  # This does not narrow real coverage: HEAD's FULL ancestry is still scanned,
+  # so a secret introduced anywhere in a branch's history still fails that
+  # branch, and it fails main again on merge. What it drops is precisely the
+  # commits the checked-out ref does not contain, which no gate should judge.
+  # It also stops the baseline from accreting entries for branches that were
+  # never merged -- the churn that already made this file 88 entries long.
   secrets-scan:
     name: secret scan (gitleaks)
     runs-on: ubuntu-latest
@@ -2063,5 +2080,6 @@ jobs:
       - name: Run gitleaks against baseline
         run: |
           gitleaks detect --source . \
+            --log-opts="--full-history HEAD" \
             --baseline-path .gitleaks-baseline.json \
             --redact -v
