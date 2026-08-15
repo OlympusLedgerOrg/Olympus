@@ -138,6 +138,34 @@ const safeAssetName = (name) => {
   return name;
 };
 
+// GitHub rewrites release asset filenames on upload (spaces become periods,
+// among others). A staged name must survive that rewrite UNCHANGED: the
+// manifest and SHA256SUMS record the staged name, `gh release download` hands
+// back the rewritten one, and `verify` compares the two — so any character
+// GitHub touches turns into a post-publish "stale or unmanifested release
+// asset" failure AND breaks `sha256sum -c` for every downloader. Not
+// hypothetical: preview-v0.10.0-rc.3 staged `…--Olympus Ledger Preview_….dmg`
+// and GitHub served `…--Olympus.Ledger.Preview_….dmg`.
+//
+// Spaces are expected (Tauri derives bundle filenames from a productName that
+// contains them), so they are normalised here exactly as GitHub would — at
+// stage time, before anything is hashed. Any OTHER character outside the
+// known-stable set is a hard error rather than a guessed transform: better to
+// fail in `stage`, an hour before publish, than in `verify`, minutes after.
+const GITHUB_STABLE_ASSET_NAME = /^[A-Za-z0-9._@+-]+$/;
+
+const githubStableAssetName = (name) => {
+  const normalised = name.replace(/ /g, ".");
+  if (!GITHUB_STABLE_ASSET_NAME.test(normalised)) {
+    throw new Error(
+      `release asset name contains characters GitHub rewrites on upload: ` +
+        `${JSON.stringify(name)} — the published name would no longer match the ` +
+        `manifest and SHA256SUMS`,
+    );
+  }
+  return normalised;
+};
+
 const validateInstallerCoverage = (assets) => {
   const installers = assets.filter((asset) => asset.kind === "installer");
 
@@ -204,7 +232,10 @@ export const stageReleaseAssets = ({ input, sbom, output, tag, commit, installer
         throw new Error(`unexpected release artifact for ${target}: ${sourceName}`);
       }
 
-      const name = safeAssetName(`${target}--${sourceName}`);
+      // The duplicate check below runs on the POST-normalisation name, so two
+      // source files that GitHub's rewrite would collide (e.g. "A B.dmg" and
+      // "A.B.dmg") are caught here instead of silently overwriting an asset.
+      const name = safeAssetName(githubStableAssetName(`${target}--${sourceName}`));
       if (installerNames.has(name)) throw new Error(`duplicate release asset name: ${name}`);
       installerNames.add(name);
 
@@ -286,6 +317,15 @@ const parseManifest = (input, expectedTag, expectedCommit) => {
   const names = new Set();
   for (const asset of manifest.assets) {
     safeAssetName(asset.name);
+    if (!GITHUB_STABLE_ASSET_NAME.test(asset.name)) {
+      // A spaced (or otherwise unstable) name means the manifest predates the
+      // GitHub-rename fix: the published assets will carry rewritten names and
+      // every per-file comparison below would fail one by one. Say why once.
+      throw new Error(
+        `manifest asset name is not GitHub-stable (GitHub rewrites it on upload, ` +
+          `so downloaded assets cannot match): ${JSON.stringify(asset.name)}`,
+      );
+    }
     if (names.has(asset.name)) throw new Error(`duplicate manifest asset: ${asset.name}`);
     names.add(asset.name);
     if (asset.kind !== "installer" && asset.kind !== "sbom") {

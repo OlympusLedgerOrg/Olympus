@@ -829,7 +829,7 @@ impl Segmenter for PdfTextRunSegmenter {
 
         // No object-level redaction — the content is already blanked in new_bodies.
         let (artifact, obj_spans) =
-            rebuild_traditional_with_spans(&new_bodies, &HashSet::new(), root_ref.as_deref());
+            rebuild_traditional_with_spans(&new_bodies, &HashSet::new(), root_ref.as_deref())?;
         let obj_off: BTreeMap<u32, u64> = obj_spans.iter().map(|&(id, off, _)| (id, off)).collect();
         let obj_span: BTreeMap<u32, (u64, u64)> = obj_spans
             .iter()

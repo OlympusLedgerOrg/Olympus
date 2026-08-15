@@ -417,3 +417,182 @@ async fn register_shard_rejects_nonexistent_owner() {
         "registering a shard with a non-existent owner_user_id must be 400"
     );
 }
+
+// ── Checkpoint-quorum threshold override (ADR-0033) ─────────────────────────────
+
+#[tokio::test]
+async fn set_checkpoint_quorum_threshold_requires_admin() {
+    let h = common::boot().await;
+    let shard = common::unique_id("cqt-noadmin");
+
+    let resp = h
+        .client
+        .patch(common::url(
+            h,
+            &format!("/admin/shards/{shard}/checkpoint-quorum-threshold"),
+        ))
+        .json(&serde_json::json!({ "threshold": 2 }))
+        .send()
+        .await
+        .expect("PATCH");
+    assert_eq!(
+        resp.status(),
+        401,
+        "setting the checkpoint-quorum threshold without admin auth must be 401"
+    );
+}
+
+#[tokio::test]
+async fn set_checkpoint_quorum_threshold_on_unregistered_shard_is_404() {
+    let h = common::boot().await;
+    let shard = common::unique_id("cqt-unreg");
+
+    let resp = common::patch_admin_json(
+        &h.client,
+        &common::url(
+            h,
+            &format!("/admin/shards/{shard}/checkpoint-quorum-threshold"),
+        ),
+        &h.admin_key,
+        &serde_json::json!({ "threshold": 2 }),
+    )
+    .await;
+    assert_eq!(
+        resp.status(),
+        404,
+        "setting the override on an unregistered shard must be 404, not a silent upsert"
+    );
+}
+
+#[tokio::test]
+async fn set_checkpoint_quorum_threshold_rejects_zero() {
+    let h = common::boot().await;
+    let shard = common::unique_id("cqt-zero");
+    let reg = common::post_admin_json(
+        &h.client,
+        &common::url(h, "/admin/shards"),
+        &h.admin_key,
+        &serde_json::json!({ "shard_id": shard }),
+    )
+    .await;
+    assert_eq!(reg.status(), 201);
+
+    let resp = common::patch_admin_json(
+        &h.client,
+        &common::url(
+            h,
+            &format!("/admin/shards/{shard}/checkpoint-quorum-threshold"),
+        ),
+        &h.admin_key,
+        &serde_json::json!({ "threshold": 0 }),
+    )
+    .await;
+    assert_eq!(
+        resp.status(),
+        422,
+        "a zero checkpoint-quorum threshold can never be satisfied and must be rejected"
+    );
+}
+
+#[tokio::test]
+async fn set_checkpoint_quorum_threshold_rejects_above_i32_max() {
+    let h = common::boot().await;
+    let shard = common::unique_id("cqt-overflow");
+    let reg = common::post_admin_json(
+        &h.client,
+        &common::url(h, "/admin/shards"),
+        &h.admin_key,
+        &serde_json::json!({ "shard_id": shard }),
+    )
+    .await;
+    assert_eq!(reg.status(), 201);
+
+    // One past i32::MAX: an unchecked `as i32` cast would wrap this negative
+    // and the column's CHECK constraint would reject it as a DB error rather
+    // than a clean 422 — the handler must catch it first.
+    let resp = common::patch_admin_json(
+        &h.client,
+        &common::url(
+            h,
+            &format!("/admin/shards/{shard}/checkpoint-quorum-threshold"),
+        ),
+        &h.admin_key,
+        &serde_json::json!({ "threshold": 2_147_483_648u64 }),
+    )
+    .await;
+    assert_eq!(
+        resp.status(),
+        422,
+        "a threshold above i32::MAX must be rejected as 422, not surfaced as a DB error"
+    );
+}
+
+#[tokio::test]
+async fn set_checkpoint_quorum_threshold_sets_then_clears() {
+    let h = common::boot().await;
+    let shard = common::unique_id("cqt-setclear");
+    let reg = common::post_admin_json(
+        &h.client,
+        &common::url(h, "/admin/shards"),
+        &h.admin_key,
+        &serde_json::json!({ "shard_id": shard }),
+    )
+    .await;
+    assert_eq!(reg.status(), 201);
+    let reg_body: serde_json::Value = reg.json().await.expect("JSON");
+    assert!(
+        reg_body["checkpoint_quorum_threshold_override"].is_null(),
+        "a freshly-registered shard has no override"
+    );
+
+    // Set it.
+    let set = common::patch_admin_json(
+        &h.client,
+        &common::url(
+            h,
+            &format!("/admin/shards/{shard}/checkpoint-quorum-threshold"),
+        ),
+        &h.admin_key,
+        &serde_json::json!({ "threshold": 3 }),
+    )
+    .await;
+    assert_eq!(set.status(), 200, "setting a valid override should be 200");
+    let set_body: serde_json::Value = set.json().await.expect("JSON");
+    assert_eq!(
+        set_body["checkpoint_quorum_threshold_override"].as_i64(),
+        Some(3)
+    );
+
+    // It's reflected in the admin listing.
+    let list = common::get_admin(&h.client, &common::url(h, "/admin/shards"), &h.admin_key).await;
+    let arr: serde_json::Value = list.json().await.expect("JSON");
+    let row = arr
+        .as_array()
+        .expect("array")
+        .iter()
+        .find(|r| r["shard_id"].as_str() == Some(shard.as_str()))
+        .expect("shard must be listed");
+    assert_eq!(
+        row["checkpoint_quorum_threshold_override"].as_i64(),
+        Some(3)
+    );
+
+    // Clear it — an explicit `null` (not an omitted field) round-trips back
+    // to no override.
+    let clear = common::patch_admin_json(
+        &h.client,
+        &common::url(
+            h,
+            &format!("/admin/shards/{shard}/checkpoint-quorum-threshold"),
+        ),
+        &h.admin_key,
+        &serde_json::json!({ "threshold": null }),
+    )
+    .await;
+    assert_eq!(clear.status(), 200, "clearing the override should be 200");
+    let clear_body: serde_json::Value = clear.json().await.expect("JSON");
+    assert!(
+        clear_body["checkpoint_quorum_threshold_override"].is_null(),
+        "explicit null must clear the override back to the env default"
+    );
+}

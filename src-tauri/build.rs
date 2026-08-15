@@ -196,6 +196,70 @@ fn verify_manifest_vkey_blake3() {
     }
 }
 
+/// Stamp the build-time release channel into the binary
+/// (docs/plans/preview-release-channel.md §D2).
+///
+/// `OLYMPUS_RELEASE_CHANNEL` selects which channel this binary reports and,
+/// for `preview`, flips the *default* interpretation of an absent `OLYMPUS_ENV`
+/// from production to development — see `src/env.rs::is_production_on`. That
+/// is the whole reason this stamp exists: a downloaded preview installer is
+/// run by people who will never set an environment variable, and the
+/// fail-closed default would otherwise `exit(2)` before the server binds.
+///
+/// Unset — every ordinary developer build, every CI job, and every `v*` tag
+/// build — means `stable`, which keeps the historical fail-closed default
+/// exactly as it was. A channel is deliberately *not* a cargo feature: features
+/// are additive and get swept up by `--all-features`, and a boolean cannot
+/// carry the preview tag this also stamps.
+///
+/// `OLYMPUS_PREVIEW_TAG` records which preview this is (e.g.
+/// `preview-v0.10.0-rc.1`) so a downloaded build can identify itself long after
+/// the user has forgotten where it came from. It is rejected on `stable`,
+/// where it would be meaningless.
+fn stamp_release_channel() {
+    println!("cargo:rerun-if-env-changed=OLYMPUS_RELEASE_CHANNEL");
+    println!("cargo:rerun-if-env-changed=OLYMPUS_PREVIEW_TAG");
+
+    let raw_channel = env::var("OLYMPUS_RELEASE_CHANNEL").unwrap_or_default();
+    let channel = match raw_channel.trim() {
+        "" => "stable",
+        other => other,
+    };
+    if !matches!(channel, "stable" | "preview") {
+        panic!(
+            "build.rs: OLYMPUS_RELEASE_CHANNEL must be `stable` or `preview` (or unset, \
+             meaning `stable`), got {channel:?}"
+        );
+    }
+
+    let raw_tag = env::var("OLYMPUS_PREVIEW_TAG").unwrap_or_default();
+    let preview_tag = raw_tag.trim();
+    if !preview_tag.is_empty() {
+        if channel != "preview" {
+            panic!(
+                "build.rs: OLYMPUS_PREVIEW_TAG={preview_tag:?} is set but \
+                 OLYMPUS_RELEASE_CHANNEL is `{channel}`; a preview tag is only meaningful \
+                 on the preview channel"
+            );
+        }
+        // This string is surfaced verbatim in `/health` JSON and in the app's
+        // header chip. Keep it to characters that cannot confuse either.
+        if preview_tag.len() > 64
+            || !preview_tag
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
+        {
+            panic!(
+                "build.rs: OLYMPUS_PREVIEW_TAG must be at most 64 characters of \
+                 [A-Za-z0-9._-], got {preview_tag:?}"
+            );
+        }
+    }
+
+    println!("cargo:rustc-env=OLYMPUS_RELEASE_CHANNEL={channel}");
+    println!("cargo:rustc-env=OLYMPUS_PREVIEW_TAG={preview_tag}");
+}
+
 /// Run Tauri's build helper without its workspace-global MSVC library search
 /// path, then apply the same static CRT policy with a package-local `/LIBPATH`.
 ///
@@ -283,6 +347,7 @@ fn write_empty_msvcrt_override(out_dir: &Path, machine: &[u8]) {
 }
 
 fn main() {
+    stamp_release_channel();
     ensure_zk_artifact_placeholders();
     verify_manifest_vkey_blake3();
     build_tauri()

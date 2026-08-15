@@ -309,7 +309,7 @@ The nonce `SELECT` columns are exactly those used by `DELETE` predicates.
 write-once redaction manifest read takes no row-update lock. Immutable evidence
 columns therefore remain unmodifiable by the runtime identity. The three
 ADR-0041 trust-transition tables (`trust_transition_candidates`,
-`trust_candidate_events`, `trust_accepted_transitions`, migration 0062) are
+`trust_candidate_events`, `trust_accepted_transitions`, migration 0063) are
 append-only by protocol design — candidate rows are immutable and every
 lifecycle change is an appended event — so they carry `SELECT`+`INSERT` only
 and no column-level `UPDATE` at all.

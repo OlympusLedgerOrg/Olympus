@@ -8,7 +8,7 @@ pragma circom 2.0.0;
  *   prover knows a 32-byte `key` and a 256-level Merkle authentication
  *   path such that:
  *     1. The path indices are the MSB-first bit decomposition of key
- *        (matching protocol/ssmf.py::_key_to_path_bits exactly).
+ *        (matching olympus_crypto::smt::key_to_path_bits exactly).
  *     2. The leaf at that path is the empty sentinel value 0.
  *     3. `keyHash == Poseidon(key_lo, key_hi)` where `key_lo`/`key_hi` are
  *        the two halves of `key` packed as field elements.
@@ -58,11 +58,12 @@ template NonExistence(depth) {
     // --- Step 2: Derive pathIndices from key bytes ---
     // The Merkle proof template traverses from leaf (level 0) to root
     // (level depth-1), so pathIndices[0] must be the bit used at the leaf
-    // level.  The Python SMT uses bit_pos = 255 - level, meaning the leaf
-    // level uses the LAST bit of the key (bit 255) and the root level uses
-    // the FIRST bit (bit 0).
+    // level.  The Rust SMT proof fold (fold_to_root in
+    // crates/olympus-crypto/src/smt.rs) uses bit_pos = 255 - level, meaning
+    // the leaf level uses the LAST bit of the key (bit 255) and the root
+    // level uses the FIRST bit (bit 0).
     //
-    // _key_to_path_bits produces MSB-first ordering: index k = byte k/8,
+    // key_to_path_bits produces MSB-first ordering: index k = byte k/8,
     // bit 7 - (k % 8).  To align with the bottom-up Merkle walk we reverse
     // the mapping: pathIndices[j] = key-bit (255 - j).
     for (var b = 0; b < 32; b++) {

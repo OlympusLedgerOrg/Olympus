@@ -1,7 +1,7 @@
 -- SPDX-FileCopyrightText: 2026 Olympus Contributors
 -- SPDX-License-Identifier: Apache-2.0
 
--- 0062_trust_list_transitions.sql
+-- 0063_trust_list_transitions.sql
 --
 -- ADR-0041 §6: append-only trust-list transition records.
 --

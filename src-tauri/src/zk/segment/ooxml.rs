@@ -31,8 +31,9 @@
 //! explicit reason ADR-0023/0024 were rejected).
 
 use std::collections::{HashMap, HashSet};
-use std::io::{Cursor, Read, Write};
+use std::io::{Cursor, Read};
 
+use olympus_crypto::container::ooxml as container_ooxml;
 use olympus_crypto::length_prefixed as lp;
 use olympus_crypto::redaction::redaction_leaf_for_segment;
 #[cfg(test)]
@@ -267,26 +268,14 @@ fn structural_part_names(parts: &[(String, Vec<u8>)]) -> Result<HashSet<String>,
 }
 
 /// Re-emit `parts` as a canonical **Stored** ZIP: sorted order (as supplied),
-/// no compression, fixed write-default metadata. Deterministic output.
+/// no compression, metadata pinned to a fixed 1980-01-01 epoch. Deterministic
+/// output — see audit finding I-02 for why the epoch is pinned explicitly rather
+/// than taken from the `zip` crate's write default.
+///
+/// The bytes come from [`olympus_crypto::container::ooxml`] so this producer and
+/// the conformance-vector generator share one writer (audit V6 `I-01`).
 fn build_canonical_zip(parts: &[(String, Vec<u8>)]) -> Result<Vec<u8>, SegmentError> {
-    use zip::write::SimpleFileOptions;
-    let mut cursor = Cursor::new(Vec::new());
-    {
-        let mut zw = zip::ZipWriter::new(&mut cursor);
-        let opts = SimpleFileOptions::default()
-            .compression_method(zip::CompressionMethod::Stored)
-            .last_modified_time(zip::DateTime::default_for_write())
-            .unix_permissions(0o644);
-        for (name, payload) in parts {
-            zw.start_file(name.as_str(), opts)
-                .map_err(|e| malformed(format!("start entry {name}: {e}")))?;
-            zw.write_all(payload)
-                .map_err(|e| malformed(format!("write entry {name}: {e}")))?;
-        }
-        zw.finish()
-            .map_err(|e| malformed(format!("finish zip: {e}")))?;
-    }
-    Ok(cursor.into_inner())
+    container_ooxml::write_canonical_stored_zip(parts).map_err(|e| malformed(e.to_string()))
 }
 
 /// Re-derive the canonical parts from the committed original bytes and empty the
@@ -355,28 +344,7 @@ fn redacted_parts(
 /// `size` IS the on-disk data length, so `artifact[offset..offset+len]` is the
 /// raw payload (ADR-0030 §3 `ooxml-part`).
 fn stored_data_spans(artifact: &[u8]) -> Result<HashMap<String, (u64, u64)>, SegmentError> {
-    let mut archive = zip::ZipArchive::new(Cursor::new(artifact))
-        .map_err(|e| malformed(format!("re-read canonical zip: {e}")))?;
-    let mut out = HashMap::with_capacity(archive.len());
-    for i in 0..archive.len() {
-        let f = archive
-            .by_index(i)
-            .map_err(|e| malformed(format!("re-read entry {i}: {e}")))?;
-        let name = f.name().to_string();
-        let size = f.size();
-        let hs = f.header_start() as usize;
-        drop(f);
-        // Need bytes [hs+26, hs+30) for the two LE u16 length fields.
-        let after_fixed = hs
-            .checked_add(30)
-            .filter(|&e| e <= artifact.len())
-            .ok_or_else(|| malformed("local file header past end of produced zip".to_string()))?;
-        let name_len = u16::from_le_bytes([artifact[hs + 26], artifact[hs + 27]]) as u64;
-        let extra_len = u16::from_le_bytes([artifact[hs + 28], artifact[hs + 29]]) as u64;
-        let data_offset = after_fixed as u64 + name_len + extra_len;
-        out.insert(name, (data_offset, size));
-    }
-    Ok(out)
+    container_ooxml::stored_data_spans(artifact).map_err(|e| malformed(e.to_string()))
 }
 
 impl Segmenter for OoxmlSegmenter {
@@ -483,6 +451,7 @@ impl Segmenter for OoxmlSegmenter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
 
     const SECRET: &[u8] = &[0x5au8; 32];
 

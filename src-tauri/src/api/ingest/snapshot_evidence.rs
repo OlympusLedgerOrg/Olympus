@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Shared lookup + parse of a committed record's stored Poseidon
-//! ledger-snapshot inclusion witness (migration 0029's `snapshot_*` columns).
+//! ledger-snapshot inclusion witness (migration 0029's `snapshot_*` columns),
+//! plus (ADR-0044) the bare record-identity lookup the BLAKE3 proof-serving
+//! endpoint needs.
 //!
 //! Split out of `proof_verify.rs` (`POST /ingest/proofs/verify`, which
 //! verifies the stored snapshot server-side and returns only a verdict) so
@@ -10,7 +12,10 @@
 //! offline verification, per ADR-0021's Monitor API) can reuse the exact same
 //! row-fetch and JSON-shape parsing instead of maintaining a second copy that
 //! could drift from `build_snapshot_in_tx`'s producer shape
-//! (`src-tauri/src/api/ingest/files/snapshot.rs`).
+//! (`src-tauri/src/api/ingest/files/snapshot.rs`). `api::monitor::proof_blake3`
+//! reuses [`fetch_record_identity_row`] for the same reason: one earliest-wins
+//! `content_hash → record identity` lookup, shared by every proof-serving path
+//! so none of them can disagree about which row a hash refers to.
 //!
 //! `parse_stored_snapshot` is deliberately pure (no DB, no I/O) so the JSON
 //! shape it accepts is unit-testable without a pool.
@@ -51,6 +56,38 @@ pub(crate) async fn fetch_snapshot_row(
         "SELECT proof_id, shard_id, record_type, ts, original_root, snapshot_root, \
                 snapshot_index, snapshot_size, snapshot_path, snapshot_sig, \
                 snapshot_sig_legacy \
+         FROM ingest_records WHERE content_hash = $1 \
+         ORDER BY ts ASC, proof_id ASC LIMIT 1",
+    )
+    .bind(content_hash)
+    .fetch_optional(pool)
+    .await
+}
+
+/// One `ingest_records` row's identity columns — enough to rebuild the
+/// parser-SMT tree key (`shard_record_key(shard_id, record_key(record_type,
+/// record_id, version))`, matching `api::ingest::files::parser_smt`'s
+/// derivation exactly). Used by `api::monitor::proof_blake3`, which needs
+/// the BLAKE3-tree key rather than the Poseidon snapshot [`SnapshotRow`]
+/// carries.
+#[derive(sqlx::FromRow)]
+pub(crate) struct RecordIdentityRow {
+    pub(crate) shard_id: String,
+    pub(crate) record_type: String,
+    pub(crate) record_id: String,
+    pub(crate) version: i32,
+}
+
+/// Fetch the earliest-committed row's identity for `content_hash` — same
+/// per-shard-unique, earliest-wins selection as [`fetch_snapshot_row`], so
+/// the Poseidon and BLAKE3 proof-serving endpoints can never disagree about
+/// which row a given `content_hash` refers to.
+pub(crate) async fn fetch_record_identity_row(
+    pool: &PgPool,
+    content_hash: &str,
+) -> Result<Option<RecordIdentityRow>, sqlx::Error> {
+    sqlx::query_as::<_, RecordIdentityRow>(
+        "SELECT shard_id, record_type, record_id, version \
          FROM ingest_records WHERE content_hash = $1 \
          ORDER BY ts ASC, proof_id ASC LIMIT 1",
     )

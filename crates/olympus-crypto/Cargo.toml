@@ -43,6 +43,11 @@ trust-list = [  ]
 # digest with nothing but BLAKE3), and serde stays out of any consumer that
 # only needs the protocol types.
 trust-list-wire = [ "trust-list", "dep:serde" ]
+# Canonical container writers (traditional-xref PDF + Stored ZIP) shared by the
+# desktop redaction producer and `examples/gen_redaction_vectors.rs`, so the
+# conformance vectors are derived from production code rather than hand-matched
+# to it (audit V6 `I-01`, second route).
+container = [ "dep:zip" ]
 
 [dependencies]
 blake3 = "1"
@@ -70,6 +75,10 @@ babyjubjub-permissive = { path = "../babyjubjub-permissive", optional = true }
 zeroize = { version = "1.8", optional = true }
 # Ed25519 verification/signing for the opt-in signature-envelope module.
 ed25519-dalek = { version = "2", features = [ "rand_core" ], optional = true }
+# Canonical Stored-ZIP writer for OOXML redaction artifacts. Only compiled with
+# the `container` feature; the ADR-0040 canonicalization guest does not enable it,
+# so the pinned guest ELF/ImageID is unaffected.
+zip = { version = "8", default-features = false, optional = true }
 
 # Examples import the feature-gated `smt` module. Declaring `required-features`
 # keeps them out of a default `cargo test --workspace` / `--all-targets` build
@@ -85,7 +94,7 @@ required-features = [ "smt" ]
 
 [[example]]
 name = "gen_redaction_vectors"
-required-features = [ "redaction" ]
+required-features = [ "redaction", "container" ]
 
 [dev-dependencies]
 # Cross-implementation Poseidon parity test (R6-M1): light-poseidon is the

@@ -27,7 +27,7 @@ All notable changes to the Olympus protocol are documented in this file.
     regression matrix proving all five domains (SBT, checkpoint, rotation,
     recovery, genesis) are pairwise non-replayable and the two legacy
     messages are byte-unchanged.
-  - Migration `0062_trust_list_transitions` (ADR §6): immutable candidate
+  - Migration `0063_trust_list_transitions` (ADR §6): immutable candidate
     rows, append-only lifecycle events (`rejected`/`superseded`/`accepted`/
     `activated`), and the insert-only accepted-transitions table whose
     UNIQUE constraints are the successor-slot acquisition. All three tables

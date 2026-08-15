@@ -1,0 +1,155 @@
+# SPDX-FileCopyrightText: 2026 Olympus Contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Custom Semgrep rules encoding invariants documented in CLAUDE.md's
+# "Critical Invariants" section as static checks, rather than leaving them
+# as prose a reviewer has to remember. Each rule below corresponds to an
+# invariant that already has a real, current-tree confirmation of where the
+# sanctioned code lives -- these are not speculative; they were checked
+# against the actual repo before being written, and every pattern below was
+# proven to actually fire against a synthetic violation before being
+# trusted -- an earlier draft's metavariable-regex silently matched nothing
+# because it anchored on `^\s*` when metavariable-regex matches the raw
+# source text of a string literal metavariable INCLUDING the surrounding
+# quote character, and a separate `"...text..."` ellipsis-inside-a-string
+# pattern (meant to mean "any string containing this substring") also does
+# not work for Rust string literals in this semgrep version -- both were
+# dropped rather than shipped looking correct while matching nothing.
+#
+# Plain ASCII only in this file, deliberately: an earlier draft used
+# typographic dashes and a section-sign character that survived fine in the
+# editor but round-tripped through a tool as mojibake once written to disk,
+# which Semgrep then failed to parse. Cheap to avoid entirely.
+
+rules:
+  - id: smt-write-outside-backend
+    languages: [rust]
+    severity: ERROR
+    message: >-
+      Direct write to smt_nodes/smt_leaves outside src-tauri/src/smt/backend.rs.
+      CLAUDE.md's "Persistent SMT batches are atomic and writers serialise"
+      invariant (ADR-0039) requires every leaf/node write to go through the
+      single transaction returned by NodeBackend::begin_write, so the hot
+      cache refresh and the lock scope stay correct. A write issued from
+      anywhere else bypasses that transaction and the serialisation it
+      provides. If this is a legitimate new backend implementation, add it
+      to backend.rs; if it's test fixture setup, add the file to this
+      rule's exclude list explicitly rather than suppressing the finding.
+    # Four call shapes covered, all verified to fire against a synthetic
+    # bypass in each shape before trusting this list: the direct-string
+    # forms (`sqlx::query(...)`, `QueryBuilder::new(...)`) catch the common
+    # case; `sqlx::query!(...)` (not used anywhere in this repo today, but
+    # costs nothing to cover) and `$QB.push(...)` close two real blind spots
+    # a query builder started with an empty/unrelated string and then
+    # `.push()`ed the actual DML into would otherwise sail through. Left
+    # out: `.push_values(...)` -- its real sqlx signature takes an iterator
+    # + closure, not a SQL string, so a pattern for "DML keyword as
+    # push_values' first argument" would be dead weight matching code that
+    # cannot compile, not a real bypass shape.
+    patterns:
+      - pattern-either:
+          - pattern: sqlx::query($SQL)
+          - pattern: sqlx::query!($SQL, ...)
+          - pattern: QueryBuilder::<$DB>::new($SQL)
+          - pattern: $QB.push($SQL)
+      - metavariable-regex:
+          metavariable: $SQL
+          regex: (?i)^"\s*(INSERT INTO|UPDATE)\s+smt_(nodes|leaves)\b
+    paths:
+      exclude:
+        - "**/src-tauri/src/smt/backend.rs"
+        - "**/src-tauri/tests/smt_pg_backend.rs"
+
+  - id: ledger-delete-violates-insert-only
+    languages: [rust]
+    severity: ERROR
+    message: >-
+      DELETE FROM or TRUNCATE on smt_nodes/smt_leaves in application code.
+      CLAUDE.md's "The ledger is insert-only (ADR-0031)" invariant states
+      there is NO leaf-delete/tombstone path -- LeafUpdate is the only
+      mutation entry, and TRUNCATE is at least as destructive as a targeted
+      DELETE (it wipes the whole table). Either a real regression or (if
+      this is a one-time maintenance migration like 0044's lazy-deep-node
+      pruning, or a benchmark tool that resets a THROWAWAY database) does
+      not belong scanned as application Rust -- migrations are SQL files
+      under migrations/, and a benchmark's own exclude entry below should
+      say why it's gated. If this is a test that exercises migration-
+      mirroring DELETE logic (like src-tauri/tests/smt_pg_backend.rs does
+      for 0044), add the file to this rule's exclude list explicitly
+      rather than suppressing the finding.
+    # Same three call-shape rationale as smt-write-outside-backend above.
+    # TRUNCATE's regex branch matches smt_nodes/smt_leaves ANYWHERE in the
+    # table list, not just immediately after the keyword: PostgreSQL's
+    # TRUNCATE accepts a comma-separated list of tables in one statement
+    # (unlike DELETE FROM, which only ever targets one), and a naive
+    # `^TRUNCATE\s+smt_...` anchor misses e.g. `TRUNCATE a, b, smt_nodes` --
+    # confirmed as a real, not hypothetical, gap: it silently passed
+    # src-tauri/tests/checkpoint_smt_root_attestation.rs's
+    # `TRUNCATE own_checkpoints, ingest_records, smt_leaves, smt_nodes
+    # CASCADE` before this fix. Re-ran the broadened regex unscoped against
+    # the full repo before trusting it -- surfaces exactly the already-known
+    # excluded files below plus that one genuinely new case, nothing else.
+    patterns:
+      - pattern-either:
+          - pattern: sqlx::query($SQL)
+          - pattern: sqlx::query!($SQL, ...)
+          - pattern: $QB.push($SQL)
+      - metavariable-regex:
+          metavariable: $SQL
+          regex: (?i)^"\s*(DELETE\s+FROM\s+smt_(nodes|leaves)\b|TRUNCATE\s+(TABLE\s+)?[\w",\s]*\bsmt_(nodes|leaves)\b)
+    paths:
+      exclude:
+        - "**/src-tauri/tests/smt_pg_backend.rs"
+        # Test-isolation TRUNCATE against a throwaway/embedded test database
+        # (see open_pool()'s own doc comment) -- same class as the other
+        # exclusions here, just a multi-table TRUNCATE rather than a
+        # single-table one.
+        - "**/src-tauri/tests/checkpoint_smt_root_attestation.rs"
+        # Benchmark tools gated on OLYMPUS_BENCH_DATABASE_URL, explicitly
+        # documented in their own headers as operating on a throwaway
+        # database (histogram: measures storage-size tradeoffs; persistent
+        # benchmark: TRUNCATEs before each size to measure exact-N-leaves
+        # on-disk cost) -- not part of the application's write path. Neither
+        # does a raw INSERT/UPDATE bypassing PersistentSmt's real write
+        # path, confirmed by grep before excluding them from the sibling
+        # smt-write-outside-backend rule too (they are NOT excluded there,
+        # deliberately -- only this rule's DELETE/TRUNCATE concern applies).
+        - "**/src-tauri/examples/smt_node_depth_histogram.rs"
+        - "**/src-tauri/examples/smt_persistent_benchmark.rs"
+        - "**/src-tauri/examples/smt_read_stress_benchmark.rs"
+
+  - id: crypto-todo-fixme
+    languages: [rust]
+    severity: WARNING
+    message: >-
+      TODO/FIXME/XXX left in a cryptographic hot-path module (blake3,
+      poseidon, canonical, smt, quorum, zk). Not an invariant violation by
+      itself, but this repo's CLAUDE.md treats these modules as the parts
+      where "claims must match the code" matters most, and a stray TODO is
+      exactly the kind of thing that survives review because nobody reads
+      comments in a crypto file twice. Resolve it or turn it into a tracked
+      issue reference (e.g. "see #1234") so it isn't silently forgotten.
+    # Matches `//`, `///` (outer doc), `//!` (inner doc), and single-line
+    # `/* ... */` block comments. The original version only matched a bare
+    # `//` prefix -- `\s*` after it happened to also catch `///` (the regex
+    # engine finds a `//` substring starting at the SECOND slash), but `//!`
+    # never matched (`!` isn't whitespace, so `\s*` can't skip past it to
+    # reach TODO/FIXME/XXX) and `/* ... */` never matched at all (no `//`
+    # substring exists in it). Verified against all four forms plus a
+    # negative case (`TODO` inside an identifier, e.g. `todo_list`) before
+    # trusting this.
+    #
+    # Known gap, not silently papered over: pattern-regex in Semgrep matches
+    # per line, so a marker on its own continuation line inside a multi-line
+    # `/* ... \n * TODO \n */` block comment is invisible to this rule --
+    # confirmed by testing that exact shape. Catching it would need a
+    # genuinely multiline construct, which is a bigger change than this
+    # rule's scope; flagging the gap here rather than claiming coverage this
+    # rule doesn't have.
+    pattern-regex: (?i)(?://!?|/\*)\s*(TODO|FIXME|XXX)(?!.*#\d+)
+    paths:
+      include:
+        - "**/crates/olympus-crypto/src/**/*.rs"
+        - "**/src-tauri/src/smt/**/*.rs"
+        - "**/src-tauri/src/quorum/**/*.rs"
+        - "**/src-tauri/src/zk/**/*.rs"

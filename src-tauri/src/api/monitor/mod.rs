@@ -19,6 +19,9 @@
 //!   see `api::ingest::snapshot_evidence` — but returns the raw witness
 //!   itself instead of only a verdict, so a monitor can check it without
 //!   trusting this server's computation.
+//! * `GET /monitor/proof/blake3/{content_hash}` — (ADR-0044) the analogous
+//!   BLAKE3 CD-HS-ST parser-bound SMT membership proof, verified against the
+//!   shard's signed `SmtRootAttestation` — see `proof_blake3`'s module doc.
 //! * `GET /monitor/mmd/{content_hash}` — Maximum Merge Delay evidence: how
 //!   long after ingest the record's first covering signed checkpoint
 //!   appeared, and whether that met the configured MMD policy
@@ -28,15 +31,17 @@
 //! `quorum::checkpoint`) and gossip/equivocation detection
 //! (`federation::gossip`, `federation::equivocation`) already exist and are
 //! documented in ADR-0021's update — this module does not duplicate them.
-//! What this module serves is the **Poseidon ledger-snapshot tree**
-//! (`crates/olympus-crypto::ledger_snapshot`, depth 20) that `own_checkpoints`
-//! actually signs — NOT the separate BLAKE3 CD-HS-ST parser-bound SMT
-//! (`crate::smt::tree::PersistentSmt`, depth 256) that ADR-0003/0004/0005
-//! describe as the canonical per-leaf commitment. Nothing in this codebase
-//! signs or checkpoints that second tree's root today, so a proof against it
-//! would have no signed statement to verify against; serving one here would
-//! misrepresent what a monitor can actually establish. See ADR-0021's
-//! "Known limitation" note.
+//! This module serves both trees Olympus signs: the **Poseidon
+//! ledger-snapshot tree** (`crates/olympus-crypto::ledger_snapshot`, depth 20)
+//! via `/monitor/proof/{content_hash}`, and the **BLAKE3 CD-HS-ST
+//! parser-bound SMT** (`crate::smt::tree::PersistentSmt`, depth 256, the tree
+//! ADR-0003/0004/0005 describe as the canonical per-leaf commitment) via
+//! `/monitor/proof/blake3/{content_hash}` — ADR-0044 made the latter's shard
+//! subtree root signable, closing the gap this doc comment used to describe
+//! as unaddressed (see ADR-0021's "Known limitation" note, now superseded by
+//! ADR-0044). Federation gossip carriage of the BLAKE3 attestation is still a
+//! separate, unaddressed follow-up (ADR-0044's own "what this does not do
+//! yet").
 //!
 //! Every route here takes only `RateLimit` (no `AuthenticatedKey`) and is
 //! mounted on both the default loopback listener and, when the `federation`
@@ -49,6 +54,7 @@
 mod checkpoints;
 mod mmd;
 mod proof;
+mod proof_blake3;
 
 use axum::{routing::get, Router};
 
@@ -57,6 +63,7 @@ use crate::state::AppState;
 pub use checkpoints::{CheckpointSummary, CheckpointsResponse};
 pub use mmd::MmdResponse;
 pub use proof::MonitorProofResponse;
+pub use proof_blake3::MonitorBlake3ProofResponse;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -66,6 +73,10 @@ pub fn router() -> Router<AppState> {
             get(checkpoints::latest_checkpoint),
         )
         .route("/monitor/proof/{content_hash}", get(proof::get_proof))
+        .route(
+            "/monitor/proof/blake3/{content_hash}",
+            get(proof_blake3::get_blake3_proof),
+        )
         .route("/monitor/mmd/{content_hash}", get(mmd::get_mmd_evidence))
 }
 
@@ -98,7 +109,7 @@ mod tests {
             .lines()
             .filter(|l| l.trim_start().starts_with(".route("))
             .collect();
-        assert_eq!(routes.len(), 4, "expected exactly 4 routes in router()");
+        assert_eq!(routes.len(), 5, "expected exactly 5 routes in router()");
 
         let (_, after) = src
             .split_once("pub fn public_router()")

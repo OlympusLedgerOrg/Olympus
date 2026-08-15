@@ -69,8 +69,24 @@ risc0-zkvm = { version = "=3.0.6", default-features = false, features = [
   "disable-dev-mode",
 ] }
 
-# Clap for the verify CLI.
-clap = { version = "4", features = [ "derive" ] }
+# Clap for the verify CLI. OPTIONAL, behind the default-on `cli` feature: it is
+# used only by `src/bin/verify.rs`, never by the library. `src-tauri` takes this
+# crate as a `default-features = false` dev-dependency for the producer→verifier
+# round-trip gate, and a library consumer has no use for an argument parser —
+# without the gate, clap + its ANSI stack landed in the desktop lockfile as 13
+# crates `cargo vet` then required attestations for. Not adding supply-chain
+# surface beats attesting to surface nothing calls.
+#
+# `default = [ "cli" ]` keeps every existing invocation unchanged, including the
+# `cargo run --release -- verify --circuit ...` documented in
+# docs/court-evidence.md §2 and this crate's own CI.
+clap = { version = "4", features = [ "derive" ], optional = true }
+
+[features]
+default = [ "cli" ]
+# The `olympus-verifier` command-line binary (`src/bin/verify.rs`). The other
+# binary, `hash_batch`, parses `std::env::args` directly and needs nothing here.
+cli = [ "dep:clap" ]
 
 [dev-dependencies]
 criterion = "0.8"
@@ -83,3 +99,6 @@ harness = false
 [[bin]]
 name = "olympus-verifier"
 path = "src/bin/verify.rs"
+# Skips this target when `cli` is off, so `cargo clippy --all-targets` on a
+# lib-only consumer does not fail on the unresolved `clap` import.
+required-features = [ "cli" ]

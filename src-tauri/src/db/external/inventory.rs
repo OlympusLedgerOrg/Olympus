@@ -21,7 +21,7 @@ use sqlx::postgres::PgConnection;
 /// which is why the pinned value did not change with the query hardening.
 ///
 /// Regenerated for the merged migration set ending in
-/// `0062_trust_list_transitions`:
+/// `0063_trust_list_transitions`:
 ///
 /// - `0058_peer_checkpoints_v3_indexes` drops the three `wire_version = 2`
 ///   partial indexes on `peer_checkpoints` (`peer_checkpoints_v2_statement_unique`,
@@ -42,21 +42,26 @@ use sqlx::postgres::PgConnection;
 ///   `checkpoint_quorum_signers`) plus the guarded
 ///   `ck_own_checkpoints_quorum_threshold_positive` CHECK constraint — 680
 ///   inventory rows before, 683 after.
-/// - `0062_trust_list_transitions` (ADR-0041 §6) adds the three append-only
+/// - `0062_shards_checkpoint_quorum_threshold` (ADR-0033 per-shard threshold
+///   override) adds one nullable column to `shards`
+///   (`checkpoint_quorum_threshold_override`) plus the guarded
+///   `ck_shards_checkpoint_quorum_threshold_positive` CHECK constraint — 683
+///   inventory rows before, 685 after.
+/// - `0063_trust_list_transitions` (ADR-0041 §6) adds the three append-only
 ///   trust-transition tables (`trust_transition_candidates`,
 ///   `trust_candidate_events`, `trust_accepted_transitions`) with their
 ///   CHECK/UNIQUE constraints, foreign keys, and partial/expression unique
-///   indexes — 683 inventory rows before, 745 after.
+///   indexes — 685 inventory rows before, 747 after.
 ///
 /// The previous value was
-/// `d552c8ced722cec672e1c71ad698c12b3aeaeaa8298d643eab708349aaeb0572` (itself
-/// set by `0061_own_checkpoints_quorum_params`, 680 -> 683; reproduced exactly
-/// against the pre-0062 migration set as the regeneration protocol's control
-/// run). Regenerated 2026-08-15 by applying the full migration set against a
-/// real PostgreSQL 16.15 database and running
+/// `f4a75b468899d53e052916b79c160b03b64348388fd301740e00eca695cffb2d` (itself
+/// set by `0062_shards_checkpoint_quorum_threshold`, 683 -> 685; reproduced
+/// exactly against the pre-0063 migration set as the regeneration protocol's
+/// control run). Regenerated 2026-08-15 by applying the full migration set
+/// against a real PostgreSQL 16 database and running
 /// `regen_semantic_inventory_digest` — see the ignored maintenance test below.
 const EXTERNAL_PG_SEMANTIC_INVENTORY_BLAKE3: &str =
-    "46830539be447023af4cf8eac4d7057dfb01ce3e534241d079256d633ef645ef";
+    "PENDING_REGENERATION";
 
 #[derive(Clone, Debug, PartialEq, Eq, sqlx::FromRow)]
 pub(super) struct ExternalPgTrustedBoundaryProbe {

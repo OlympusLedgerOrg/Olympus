@@ -2631,7 +2631,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0015cb20a284ec944852820598af3aef6309ea8dc317a0304441272ed620f196"
 dependencies = [
  "derive-deftly-macros",
- "heck 0.4.1",
+ "heck 0.5.0",
 ]
 
 [[package]]
@@ -2640,8 +2640,8 @@ version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b48e8e38a4aa565da767322b5ca55fb0f8347983c5bc7f7647db069405420479"
 dependencies = [
- "heck 0.4.1",
- "indexmap 1.9.3",
+ "heck 0.5.0",
+ "indexmap 2.14.0",
  "itertools 0.14.0",
  "proc-macro-crate 3.5.0",
  "proc-macro2",
@@ -6175,6 +6175,7 @@ dependencies = [
  "thiserror 2.0.19",
  "unicode-normalization",
  "zeroize",
+ "zip 8.6.0",
 ]
 
 [[package]]
@@ -6215,6 +6216,7 @@ dependencies = [
  "light-poseidon",
  "num-bigint 0.4.6",
  "olympus-crypto",
+ "olympus-verifier",
  "openssl",
  "p256",
  "parking_lot",
@@ -6270,6 +6272,28 @@ dependencies = [
  "hex",
  "olympus-crypto",
  "rayon",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "olympus-verifier"
+version = "0.1.0"
+dependencies = [
+ "ark-bn254 0.6.0",
+ "ark-ec 0.6.0",
+ "ark-ff 0.6.0",
+ "ark-groth16 0.6.0",
+ "ark-serialize 0.6.0",
+ "ark-snark 0.6.0",
+ "base64 0.23.1",
+ "blake3",
+ "ed25519-dalek",
+ "hex",
+ "light-poseidon",
+ "num-bigint 0.4.6",
+ "risc0-zkvm",
  "serde",
  "serde_json",
  "thiserror 2.0.19",
@@ -9822,7 +9846,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.2",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",

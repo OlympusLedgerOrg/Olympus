@@ -1749,6 +1749,82 @@ mod tests {
         assert!(err.contains("A-4"), "error must cite finding: {err}");
     }
 
+    /// T4 (docs/plans/preview-release-channel.md §9): the ceremony manifests
+    /// this binary **actually embeds** are a single-contributor `olympus-dev-*`
+    /// ceremony, and production mode refuses them.
+    ///
+    /// This is the property that makes publishing preview installers safe: the
+    /// exact bytes an evaluator downloads cannot be pressed into service as a
+    /// production node, because reaching production mode means reaching A-4.
+    /// The sibling tests above prove A-4 works on a synthetic manifest; this one
+    /// proves the shipped manifests are the kind A-4 catches, which is the half
+    /// a hand-built fixture can never establish.
+    ///
+    /// Deliberately calls `apply_extra_prod_gates` rather than
+    /// `verify_ceremony_manifests`: the latter reads
+    /// `OLYMPUS_CEREMONY_TRUSTED_CONTRIBUTORS_JSON` from the live process
+    /// environment and re-reads `.ark.zkey` from disk, neither of which is
+    /// deterministic under a parallel test runner.
+    ///
+    /// **Expected to fail the day the real multi-party ceremony lands** — see
+    /// §10 of the plan. That failure is the retirement signal, not a
+    /// regression: delete this test along with the preview channel.
+    #[test]
+    fn embedded_ceremony_manifests_are_dev_and_refused_in_production() {
+        use crate::zk::manifest::CeremonyManifest;
+        use crate::zk::verify as zk_verify;
+
+        // Distinct from any coordinator key in the manifests, so A-3
+        // (self-attestation) cannot fire and mask the A-4 result.
+        let bootstrap = second_nonzero_pubkey();
+        // An empty allowlist is the honest production posture for a dev
+        // ceremony: no contributor key is independently authorized.
+        let trusted: Vec<crate::api::trusted_issuers::TrustedIssuer> = Vec::new();
+
+        let embedded: &[(&str, &str)] = &[
+            ("document_existence", zk_verify::EXISTENCE_MANIFEST_JSON),
+            ("non_existence", zk_verify::NON_EXISTENCE_MANIFEST_JSON),
+            (
+                "unified_canonicalization_inclusion_root_sign",
+                zk_verify::UNIFIED_MANIFEST_JSON,
+            ),
+        ];
+
+        for (circuit, manifest_json) in embedded {
+            if CeremonyManifest::is_placeholder(manifest_json) {
+                // A checkout that has not run setup_circuits.sh embeds stubs.
+                // The placeholder gate in `run_preflight_checks` covers that
+                // case; there is no ceremony here to assert anything about.
+                continue;
+            }
+            let manifest = CeremonyManifest::parse(manifest_json)
+                .unwrap_or_else(|e| panic!("embedded {circuit} manifest must parse: {e}"));
+
+            assert!(
+                manifest.ceremony_id.starts_with("olympus-dev-"),
+                "embedded {circuit} manifest carries ceremony_id={:?}. If the real \
+                 multi-party ceremony has landed, retire the preview channel \
+                 (docs/plans/preview-release-channel.md §10) instead of relaxing \
+                 this assertion.",
+                manifest.ceremony_id
+            );
+
+            let error = apply_extra_prod_gates(
+                circuit,
+                &manifest,
+                /* is_prod */ true,
+                Some(&bootstrap),
+                Ok(&trusted),
+            )
+            .expect_err("a dev ceremony must be refused under OLYMPUS_ENV=production");
+            assert!(
+                error.contains("A-4"),
+                "{circuit} must be refused specifically for the dev ceremony marker, \
+                 not merely for some unrelated reason: {error}"
+            );
+        }
+    }
+
     fn runtime_errors_from(entries: &[(&str, &str)]) -> Vec<String> {
         let env: std::collections::HashMap<String, String> = entries
             .iter()

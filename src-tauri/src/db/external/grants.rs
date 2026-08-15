@@ -153,7 +153,7 @@ pub(super) const EXTERNAL_PG_TABLE_GRANTS: &[ExternalPgTableGrant] = &[
         name: "anchor_submission_claims",
         privileges: &["SELECT", "INSERT"],
     },
-    // ADR-0041 append-only trust-transition records (migration 0062). All
+    // ADR-0041 append-only trust-transition records (migration 0063). All
     // three are insert-only by protocol design — lifecycle changes are
     // appended events, never row mutations — so the runtime holds no UPDATE
     // or DELETE on any of them.

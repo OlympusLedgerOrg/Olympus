@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Append-only persistence for ADR-0041 trust-list transitions
-//! (migration `0062`): immutable candidates, lifecycle events, and the
+//! (migration `0063`): immutable candidates, lifecycle events, and the
 //! monotonic accepted chain.
 //!
 //! # Lifecycle

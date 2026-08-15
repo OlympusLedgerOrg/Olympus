@@ -9,10 +9,13 @@
 #     (composite mode, matches `pnpm build` in CI — `tsc --noEmit` is
 #     looser and misses type narrowing that CI catches).
 #   - Re-stages files the formatter touched (intentional per dev preference).
-#   - If only docs / config files are staged, exits quickly with no checks.
+#   - If CLAUDE.md is staged, regenerates AGENTS.md from it via wiserepo
+#     (tools/wiserepo) and re-stages the result — see that block below.
+#   - If only docs / config files are staged, exits quickly with no other checks.
 #
 # Bypass with: OLYMPUS_SKIP_PRECOMMIT=1 git commit ...
 # Or:          git commit --no-verify ...
+# wiserepo's AGENTS.md sync alone can be skipped with: WISEREPO_SKIP=1
 
 set -euo pipefail
 
@@ -55,6 +58,80 @@ if [ -z "$STAGED_ALL" ]; then
     exit 0
 fi
 
+FAILED=()
+# Parallel counter. `${#FAILED[@]}` on an EMPTY array is an "unbound variable"
+# error under `set -u` in bash < 4.4 — which includes the bash 3.2 that ships
+# with macOS, a platform this repo targets. Tracking the count separately
+# keeps every check below portable.
+FAILED_COUNT=0
+
+record_failure() {
+    fail "$1"
+    FAILED+=("$1")
+    FAILED_COUNT=$((FAILED_COUNT + 1))
+}
+
+print_failures() {
+    echo ""
+    echo "────────────────────────────────────"
+    echo -e "${RED}${BOLD}Pre-commit gate failed:${RESET}"
+    for f in ${FAILED[@]+"${FAILED[@]}"}; do
+        echo -e "  ${RED}✗${RESET} $f"
+    done
+}
+
+echo -e "${BOLD}Olympus pre-commit hook${RESET}"
+echo "────────────────────────────────────"
+
+# ── wiserepo: keep AGENTS.md synced with CLAUDE.md ─────────────────────────
+# CLAUDE.md is the source of truth; AGENTS.md is the Codex-framed copy of it
+# and drifts the moment someone edits one but not the other (this happened
+# for real — see commit 4f5e270f). Regenerate AGENTS.md via wiserepo whenever
+# CLAUDE.md is staged, and re-stage the result so it commits atomically with
+# the CLAUDE.md change.
+STAGED_CLAUDE_MD="$(echo "$STAGED_ALL" | grep -E '^CLAUDE\.md$' || true)"
+if [ -n "$STAGED_CLAUDE_MD" ] && [ "${WISEREPO_SKIP:-0}" != "1" ]; then
+    step "wiserepo: sync AGENTS.md from CLAUDE.md"
+    if [ ! -d "$ROOT/tools/wiserepo/node_modules" ]; then
+        echo "  (skipped — run 'npm install' in tools/wiserepo first)"
+    else
+        # sync-agent-docs.mjs reads CLAUDE.md/AGENTS.md straight off disk —
+        # i.e. the WORKING TREE, not the index. If either file has unstaged
+        # edits on top of what's staged, a regeneration reads content that
+        # is not part of this commit, and `git add AGENTS.md` below would
+        # stage a file generated from bytes that never entered the commit.
+        # The two docs can then disagree with what was actually committed,
+        # which is exactly the drift this whole mechanism exists to prevent.
+        # Refuse to run in that situation rather than risk it.
+        UNSTAGED_DOC_CHANGES="$(git diff --name-only -- CLAUDE.md AGENTS.md || true)"
+        if [ -n "$UNSTAGED_DOC_CHANGES" ]; then
+            echo "  (skipped — CLAUDE.md and/or AGENTS.md has unstaged changes on top of what's"
+            echo "   staged; sync would read content outside this commit. Stage or stash the rest"
+            echo "   first, or set WISEREPO_SKIP=1. CI's docs-agent-sync job still hard-gates real"
+            echo "   drift regardless — a stale AGENTS.md will not silently merge.)"
+        else
+            rc=0
+            node tools/wiserepo/bin/sync-agent-docs.mjs || rc=$?
+            if [ "$rc" -eq 0 ]; then
+                git add AGENTS.md
+                pass "AGENTS.md synced"
+            elif [ "$rc" -eq 2 ]; then
+                # Ollama daemon not running / timed out — the check didn't
+                # run, it didn't fail. Non-blocking: not everyone has the
+                # local GPU box up, and a stale AGENTS.md is still hard-
+                # gated by CI's docs-agent-sync job on push.
+                echo "  (skipped — wiserepo backend unavailable, see output above)"
+            else
+                # Structural-parity check failed, or wiserepo itself is
+                # broken. Either way the model's output cannot be trusted
+                # into a security-relevant doc — block the commit
+                # deliberately.
+                record_failure "wiserepo AGENTS.md sync"
+            fi
+        fi
+    fi
+fi
+
 # Partition into Rust and frontend buckets.
 # Rust: *.rs anywhere, plus Cargo.toml / Cargo.lock at any depth.
 STAGED_RS="$(echo "$STAGED_ALL" | grep -E '(^|/)Cargo\.(toml|lock)$|\.rs$' || true)"
@@ -63,14 +140,15 @@ STAGED_RS="$(echo "$STAGED_ALL" | grep -E '(^|/)Cargo\.(toml|lock)$|\.rs$' || tr
 STAGED_FE="$(echo "$STAGED_ALL" | grep -E '^app/public-ui/.*\.(ts|tsx|js|jsx|css|html)$|^pnpm-lock\.yaml$|^app/public-ui/package\.json$' || true)"
 
 if [ -z "$STAGED_RS" ] && [ -z "$STAGED_FE" ]; then
-    # Docs / config / migrations / etc. — nothing for us to do.
+    if [ "$FAILED_COUNT" -gt 0 ]; then
+        print_failures
+        exit 1
+    fi
+    # Docs / config / migrations / etc. and nothing else to do.
+    echo ""
+    echo -e "${GREEN}${BOLD}All checks passed.${RESET}\n"
     exit 0
 fi
-
-echo -e "${BOLD}Olympus pre-commit hook${RESET}"
-echo "────────────────────────────────────"
-
-FAILED=()
 
 # Run a formatter over the working tree and stage ONLY what was already staged.
 #
@@ -190,8 +268,7 @@ if [ -n "$STAGED_RS" ]; then
         if format_staged_only "$STAGED_RS_SRC" run_rustfmt_src; then
             pass "rustfmt"
         else
-            fail "rustfmt"
-            FAILED+=("rustfmt")
+            record_failure "rustfmt"
         fi
     fi
 
@@ -205,8 +282,7 @@ if [ -n "$STAGED_RS" ]; then
         if format_staged_only "$STAGED_RS_PG_EMBED" run_cargo_fmt_pg_embed pg-embed-local; then
             pass "cargo fmt (pg-embed-local)"
         else
-            fail "cargo fmt (pg-embed-local)"
-            FAILED+=("cargo fmt (pg-embed-local)")
+            record_failure "cargo fmt (pg-embed-local)"
         fi
     fi
 
@@ -214,8 +290,7 @@ if [ -n "$STAGED_RS" ]; then
     if cargo clippy --workspace --all-targets --quiet -- -D warnings; then
         pass "cargo clippy"
     else
-        fail "cargo clippy"
-        FAILED+=("cargo clippy")
+        record_failure "cargo clippy"
     fi
 fi
 
@@ -231,8 +306,7 @@ if [ -n "$STAGED_FE" ]; then
             echo "$STAGED_FE" | grep '^app/public-ui/' | xargs -r git add --
             pass "eslint"
         else
-            fail "eslint"
-            FAILED+=("eslint")
+            record_failure "eslint"
         fi
     fi
 
@@ -247,17 +321,16 @@ if [ -n "$STAGED_FE" ]; then
     if (cd app/public-ui && pnpm exec tsc -b); then
         pass "tsc"
     else
-        fail "tsc"
-        FAILED+=("tsc")
+        record_failure "tsc"
     fi
 fi
 
 echo ""
 echo "────────────────────────────────────"
 
-if [ ${#FAILED[@]} -gt 0 ]; then
+if [ "$FAILED_COUNT" -gt 0 ]; then
     echo -e "${RED}${BOLD}Pre-commit gate failed:${RESET}"
-    for f in "${FAILED[@]}"; do
+    for f in ${FAILED[@]+"${FAILED[@]}"}; do
         echo -e "  ${RED}✗${RESET} $f"
     done
     echo ""

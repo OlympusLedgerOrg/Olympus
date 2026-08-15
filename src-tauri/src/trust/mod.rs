@@ -9,7 +9,7 @@
 //! This module implements, of ADR-0041's implementation plan:
 //!
 //! * **step 8** — persistent accepted state, successor-uniqueness
-//!   constraints, and append-only transition tables (migration `0062`;
+//!   constraints, and append-only transition tables (migration `0063`;
 //!   [`store`]);
 //! * **step 5** — the snapshot-backed [`resolver::SnapshotTrustResolver`]
 //!   behind the `TrustResolver` trait, including the continuous
