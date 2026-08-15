@@ -8,6 +8,7 @@ import SkinSelector from "./SkinSelector";
 import WhoAmIChip from "./WhoAmIChip";
 import { useSkin } from "../skins/SkinContext";
 import { hasStoredAdminKey } from "../lib/storage";
+import { useReleaseChannel } from "../hooks/useReleaseChannel";
 
 // SkylineBackdrop is the biggest paint surface in the app (parallax,
 // per-cell window grid animations, neon-smiley drop-shadow stack). It
@@ -19,10 +20,21 @@ const SkylineBackdrop = lazy(() => import("./SkylineBackdrop"));
 const PRE_V1_NOTICE =
   "PRE-V1 / AS-IS: development databases are disposable; records committed before v1 are not permanent public-interest records across the v1 boundary.";
 
+// Shown in addition to PRE_V1_NOTICE on preview builds. Preview installers are
+// built from a single-contributor development trusted setup, so their proofs
+// carry no soundness guarantee — that is a stronger claim than "pre-v1" and
+// needs saying separately. See docs/plans/preview-release-channel.md.
+const PREVIEW_NOTICE =
+  "PREVIEW BUILD — NOT FOR PRODUCTION USE: built from a single-contributor development trusted setup, so proofs from this build carry no soundness guarantee. Do not use it to record evidence you intend to rely on.";
+
 export default function Layout({ children }: { children: React.ReactNode }) {
   const location = useLocation();
   const { skin } = useSkin();
   const fx = skin.effects ?? {};
+  // Preview builds carry an extra, stronger notice inside the pre-v1 banner.
+  // `isPreview` is false until /health positively reports the preview channel,
+  // so a slow probe under-claims rather than mislabelling a preview build.
+  const { info: releaseInfo, isPreview } = useReleaseChannel();
   // ⚠ Audit L-UI-5: client-side route gating is UX-only, not a security
   // boundary. Hiding the KEYS/USERS/SBTs nav entries from non-admin sessions
   // is a convenience; a user who pastes an admin-scoped path directly into
@@ -189,6 +201,22 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           }}
         >
           {PRE_V1_NOTICE}
+          {isPreview && (
+            <div
+              data-testid="preview-channel-notice"
+              style={{
+                marginTop: "0.4rem",
+                paddingTop: "0.4rem",
+                borderTop: isLight
+                  ? "1px solid rgba(154,52,18,0.25)"
+                  : "1px solid rgba(255,190,90,0.25)",
+                fontWeight: 700,
+              }}
+            >
+              {PREVIEW_NOTICE}
+              {releaseInfo?.preview_tag ? ` (${releaseInfo.preview_tag})` : ""}
+            </div>
+          )}
         </div>
       </section>
 

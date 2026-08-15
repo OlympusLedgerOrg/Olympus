@@ -17,10 +17,22 @@ vi.mock("./SkylineBackdrop", () => ({ default: () => <div data-testid="skyline" 
 vi.mock("./SkinSelector", () => ({ default: () => <div data-testid="skin-selector" /> }));
 vi.mock("./WhoAmIChip", () => ({ default: () => <div data-testid="whoami" /> }));
 
+// Layout reads the build channel through useReleaseChannel, which is a
+// React Query hook over /health. Mocked here so Layout's own tests keep
+// rendering without a QueryClientProvider; the preview/stable branch is
+// exercised explicitly in the two channel tests below.
+vi.mock("../hooks/useReleaseChannel", () => ({
+  useReleaseChannel: vi.fn(),
+}));
+
 import { hasStoredAdminKey } from "../lib/storage";
+import { useReleaseChannel } from "../hooks/useReleaseChannel";
 import Layout from "./Layout";
 
 const mockedHasStoredAdminKey = vi.mocked(hasStoredAdminKey);
+const mockedUseReleaseChannel = vi.mocked(useReleaseChannel);
+
+const STABLE_CHANNEL = { info: null, isPreview: false };
 
 function renderLayout(path = "/", children: React.ReactNode = <div>child content</div>) {
   return render(
@@ -34,6 +46,8 @@ function renderLayout(path = "/", children: React.ReactNode = <div>child content
 
 beforeEach(() => {
   mockedHasStoredAdminKey.mockReset();
+  mockedUseReleaseChannel.mockReset();
+  mockedUseReleaseChannel.mockReturnValue(STABLE_CHANNEL);
 });
 
 afterEach(() => {
@@ -103,5 +117,47 @@ describe("<Layout>", () => {
     mockedHasStoredAdminKey.mockReturnValue(false);
     renderLayout("/");
     expect(screen.getByText(/ENCRYPTED/)).toBeInTheDocument();
+  });
+
+  it("shows the preview notice, with its tag, on a preview build", () => {
+    mockedHasStoredAdminKey.mockReturnValue(false);
+    mockedUseReleaseChannel.mockReturnValue({
+      isPreview: true,
+      info: {
+        stage: "pre-v1",
+        production_trust_ready: false,
+        data_durability: "development-disposable",
+        notice: "",
+        channel: "preview",
+        preview_tag: "preview-v0.10.0-rc.1",
+      },
+    });
+    renderLayout("/");
+    const notice = screen.getByTestId("preview-channel-notice");
+    expect(notice).toHaveTextContent(/NOT FOR PRODUCTION USE/i);
+    expect(notice).toHaveTextContent(/single-contributor development trusted setup/i);
+    expect(notice).toHaveTextContent(/preview-v0\.10\.0-rc\.1/);
+  });
+
+  it("shows no preview notice on a stable build, or before /health answers", () => {
+    mockedHasStoredAdminKey.mockReturnValue(false);
+    // Default mock is the "not yet known" state (info: null, isPreview: false),
+    // which must render as no claim rather than as a production claim.
+    renderLayout("/");
+    expect(screen.queryByTestId("preview-channel-notice")).not.toBeInTheDocument();
+
+    mockedUseReleaseChannel.mockReturnValue({
+      isPreview: false,
+      info: {
+        stage: "pre-v1",
+        production_trust_ready: false,
+        data_durability: "development-disposable",
+        notice: "",
+        channel: "stable",
+        preview_tag: null,
+      },
+    });
+    renderLayout("/");
+    expect(screen.queryByTestId("preview-channel-notice")).not.toBeInTheDocument();
   });
 });

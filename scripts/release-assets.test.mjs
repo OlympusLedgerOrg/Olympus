@@ -187,6 +187,42 @@ test("binds the release asset manifest to its tag", () => {
   }
 });
 
+// docs/plans/preview-release-channel.md §4 claims the asset contract needs no
+// channel parameter — the tag is opaque data, and preview bundles are unsigned
+// but otherwise identical in shape. Assert that rather than assuming it, so the
+// claim cannot quietly stop being true.
+test("stages and verifies a preview-channel tag with no contract changes", () => {
+  const previewTag = "preview-v0.10.0-rc.1";
+  const dirs = fixture();
+  try {
+    const staged = stageReleaseAssets({
+      input: dirs.input,
+      sbom: dirs.sbom,
+      output: dirs.output,
+      tag: previewTag,
+      commit: COMMIT,
+      installerChecksums: path.join(dirs.root, "INSTALLER_SHA256SUMS"),
+    });
+    assert.equal(staged.releaseTag, previewTag);
+
+    const verified = verifyReleaseAssets({
+      input: dirs.output,
+      tag: previewTag,
+      commit: COMMIT,
+    });
+    assert.deepEqual(verified, staged);
+
+    // A preview manifest must not verify against a production tag, and vice
+    // versa — the same binding that protects the `v*` path protects this one.
+    assert.throws(
+      () => verifyReleaseAssets({ input: dirs.output, tag: "v0.10.0" }),
+      /tag mismatch/,
+    );
+  } finally {
+    rmSync(dirs.root, { recursive: true, force: true });
+  }
+});
+
 test("binds the release asset manifest to its source commit", () => {
   const dirs = fixture();
   try {
