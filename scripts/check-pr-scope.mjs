@@ -64,6 +64,15 @@ export const normalizePattern = (raw) => {
   if (pattern.split("/").includes("..")) {
     throw new Error(`pattern "${raw}" escapes the repository root`);
   }
+  // Comment-stripping runs to a fixpoint, so a surviving marker means the body
+  // nests or overlaps them in a way whose rendered form is not what this parser
+  // sees. No path glob contains one; refuse rather than guess which view is
+  // authoritative.
+  if (pattern.includes("<!--") || pattern.includes("-->")) {
+    throw new Error(
+      `pattern "${raw}" contains an HTML comment marker — unbalanced or nested comments in the Scope block`,
+    );
+  }
   return pattern;
 };
 
@@ -127,6 +136,34 @@ export const matchesAnyPattern = (file, patterns) =>
   patterns.some((pattern) => globToRegExp(pattern).test(file));
 
 /**
+ * Remove HTML comments, repeating until the text stops changing.
+ *
+ * A single pass is not enough, and not merely in theory: on "<!-<!-- -->- -->"
+ * one pass returns "<!-- -->", because deleting an inner match splices its
+ * neighbours into a comment marker that was not a comment start in the input.
+ * A pass therefore cannot be assumed to leave comment-free text, so proving no
+ * crafted body smuggles a list item past it would mean enumerating shapes
+ * rather than fixing the primitive.
+ *
+ * Iterating is deliberately *more* aggressive than a Markdown renderer, which
+ * strips comments in one left-to-right pass. That direction is the safe one
+ * here: over-removal narrows the parsed scope, so the gate fails and the author
+ * fixes an unambiguous body. Under-removal would widen the parsed scope past
+ * what the rendered body shows a reviewer — a silent bypass of the whole check.
+ *
+ * Terminates because every iteration either shortens the string or is a no-op.
+ */
+const stripHtmlComments = (input) => {
+  let text = input;
+  let previous;
+  do {
+    previous = text;
+    text = text.replace(/<!--[\s\S]*?-->/g, "");
+  } while (text !== previous);
+  return text;
+};
+
+/**
  * Extract the declared scope from a PR body.
  *
  * The block starts at a "Scope" heading or a bare "Scope:" line and runs to the
@@ -135,7 +172,7 @@ export const matchesAnyPattern = (file, patterns) =>
  * "<!-- list the globs -->" guidance is never parsed as a declaration.
  */
 export const parseScopeBlock = (body) => {
-  const text = String(body ?? "").replace(/<!--[\s\S]*?-->/g, "");
+  const text = stripHtmlComments(String(body ?? ""));
   const lines = text.split(/\r?\n/);
 
   let start = -1;

@@ -148,6 +148,47 @@ test("HTML comments never contribute patterns", () => {
   assert.deepEqual(parseScopeBlock(body), { found: true, patterns: ["docs/**"] });
 });
 
+test("comment stripping reaches a fixpoint instead of one pass", () => {
+  // One pass over "<!-<!-- -->- -->" returns "<!-- -->": deleting the inner
+  // match splices its neighbours into a marker that was not a comment start in
+  // the input. Flagged by CodeQL as incomplete multi-character sanitization.
+  const onePass = (text) => text.replace(/<!--[\s\S]*?-->/g, "");
+  const crafted = "## Scope\n\n<!-<!-- -->- crates/olympus-crypto/**\n-->\n";
+  assert.ok(
+    onePass(crafted).includes("<!--"),
+    "fixture no longer exercises the residual-marker case",
+  );
+
+  // Whatever the crafted body renders as, the parser must not silently adopt a
+  // pattern from it: over-removal narrows the scope and fails the gate, which
+  // is the safe direction.
+  const parsed = parseScopeBlock(crafted);
+  assert.deepEqual(parsed.patterns, []);
+  const result = evaluateScope({ body: crafted, changedFiles: ["crates/olympus-crypto/src/x.rs"] });
+  assert.equal(result.status, "empty-scope");
+  assert.equal(result.ok, false);
+});
+
+test("a surviving comment marker in a list item is rejected, not treated as a path", () => {
+  assert.throws(() => normalizePattern("crates/**<!--"), /contains an HTML comment marker/);
+  assert.throws(() => normalizePattern("-->"), /contains an HTML comment marker/);
+  // And it fails the whole check rather than dropping that one entry, so a
+  // narrowed scope can never pass unnoticed.
+  const result = evaluateScope({
+    body: "## Scope\n\n- docs/**\n- crates/**-->\n",
+    changedFiles: ["docs/a.md"],
+  });
+  assert.equal(result.status, "invalid-pattern");
+  assert.equal(result.ok, false);
+});
+
+test("well-formed comments still strip in a single logical step", () => {
+  // The fixpoint loop must not disturb the ordinary case: a comment that ends
+  // at its first "-->" hides exactly what a renderer hides, no more.
+  const body = "## Scope\n\n<!-- guidance: - placeholder/** -->\n\n- docs/**\n";
+  assert.deepEqual(parseScopeBlock(body).patterns, ["docs/**"]);
+});
+
 test("a 'Scope' line inside a fenced block does not start the section", () => {
   const body = ["```", "Scope:", "- fake/**", "```", "", "## Scope", "", "- real/**"].join("\n");
   assert.deepEqual(parseScopeBlock(body), { found: true, patterns: ["real/**"] });
