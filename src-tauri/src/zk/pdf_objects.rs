@@ -942,7 +942,11 @@ fn rebuild_redacted(
 
     // The committed span is exactly the emitted object; the `\n` separator is
     // outside it (objects are located by xref offset, so it is cosmetic).
-    let (out, spans) = container_pdf::write_traditional_xref(&objects, Some(&root_ref));
+    // `manifest.objects` is persisted in ascending obj-id order; the writer
+    // re-checks that, and rejects the reserved id 0 / generation 65535, so a
+    // malformed xref can never reach an artifact.
+    let (out, spans) = container_pdf::write_traditional_xref(&objects, Some(&root_ref))
+        .map_err(|e| PdfObjectError::MalformedXref(format!("rebuild traditional xref: {e}")))?;
 
     Ok((out, spans))
 }

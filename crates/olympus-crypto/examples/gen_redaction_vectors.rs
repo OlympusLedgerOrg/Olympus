@@ -210,7 +210,8 @@ fn build_traditional_pdf(objects: &[(u32, &[u8])]) -> (Vec<u8>, Vec<BuiltSegment
     let root_ref = format!("{root_id} 0 R");
 
     let (artifact, spans) =
-        container::pdf::write_traditional_xref(&emitted, Some(root_ref.as_bytes()));
+        container::pdf::write_traditional_xref(&emitted, Some(root_ref.as_bytes()))
+            .expect("fixture objects must form a valid traditional xref");
     // Slice the committed bytes back out of the artifact rather than reusing the
     // input: if a span were wrong, the leaf would be computed over the wrong bytes
     // and the vector would encode the bug instead of hiding it.
@@ -232,6 +233,14 @@ fn build_traditional_pdf(objects: &[(u32, &[u8])]) -> (Vec<u8>, Vec<BuiltSegment
 /// shipping producer uses (`zk::segment::ooxml`). `segment_id` is the part's index
 /// in the supplied order, matching the producer's canonical (sorted) order.
 fn build_stored_zip(parts: &[(&str, &[u8])]) -> (Vec<u8>, Vec<BuiltSegment>) {
+    // `segment_id` is the index, and the shipping producer derives ids from
+    // *sorted* part names. An unsorted fixture would emit ids that disagree with
+    // production while every vector still verified — the exact drift class I-01
+    // exists to close, so assert the precondition rather than trust it.
+    assert!(
+        parts.windows(2).all(|w| w[0].0 < w[1].0),
+        "fixture parts must be in canonical sorted-name order"
+    );
     let owned: Vec<(String, Vec<u8>)> = parts
         .iter()
         .map(|&(name, payload)| (name.to_string(), payload.to_vec()))

@@ -991,8 +991,8 @@ fn rebuild_traditional(
     bodies: &BTreeMap<u32, (u16, Vec<u8>)>,
     redacted: &HashSet<u32>,
     root_ref: Option<&[u8]>,
-) -> Vec<u8> {
-    rebuild_traditional_with_spans(bodies, redacted, root_ref).0
+) -> Result<Vec<u8>, SegmentError> {
+    Ok(rebuild_traditional_with_spans(bodies, redacted, root_ref)?.0)
 }
 
 /// Like [`rebuild_traditional`] but also returns each emitted object's output span
@@ -1004,7 +1004,7 @@ pub(crate) fn rebuild_traditional_with_spans(
     bodies: &BTreeMap<u32, (u16, Vec<u8>)>,
     redacted: &HashSet<u32>,
     root_ref: Option<&[u8]>,
-) -> (Vec<u8>, Vec<(u32, u64, u64)>) {
+) -> Result<(Vec<u8>, Vec<(u32, u64, u64)>), SegmentError> {
     // `bodies` is a BTreeMap, so this is already ascending by object id — the
     // order `write_traditional_xref` requires.
     let objects: Vec<EmittedObject> = bodies
@@ -1023,7 +1023,11 @@ pub(crate) fn rebuild_traditional_with_spans(
         })
         .collect();
 
+    // `bodies` is a BTreeMap so ids are already ascending and unique; the writer
+    // re-checks (and also rejects the reserved id 0 / generation 65535) so a
+    // malformed xref can never reach an artifact.
     container_pdf::write_traditional_xref(&objects, root_ref)
+        .map_err(|e| malformed(format!("rebuild traditional xref: {e}")))
 }
 
 /// Best-effort `/Root` indirect reference for the rebuilt trailer — `None` if the
@@ -1139,7 +1143,7 @@ impl Segmenter for ModernPdfSegmenter {
         redacted_ids: &[u32],
     ) -> Result<Vec<u8>, SegmentError> {
         let (bodies, redacted, root_ref) = prepare_rebuild(bytes, manifest, redacted_ids)?;
-        Ok(rebuild_traditional(&bodies, &redacted, root_ref.as_deref()))
+        rebuild_traditional(&bodies, &redacted, root_ref.as_deref())
     }
 
     /// The output spans are the rebuilt traditional-xref PDF's per-object offsets
@@ -1154,7 +1158,7 @@ impl Segmenter for ModernPdfSegmenter {
     ) -> Result<(Vec<u8>, Vec<SegmentSpan>), SegmentError> {
         let (bodies, redacted, root_ref) = prepare_rebuild(bytes, manifest, redacted_ids)?;
         let (artifact, obj_spans) =
-            rebuild_traditional_with_spans(&bodies, &redacted, root_ref.as_deref());
+            rebuild_traditional_with_spans(&bodies, &redacted, root_ref.as_deref())?;
         let span_map: BTreeMap<u32, (u64, u64)> = obj_spans
             .into_iter()
             .map(|(id, off, len)| (id, (off, len)))
@@ -1744,7 +1748,7 @@ mod tests {
         bodies.insert(7, (3, b"<< /Note (keep) >>".to_vec())); // gen 3
         bodies.insert(4_000_000_000, (0, b"<< /Note (huge id) >>".to_vec()));
         let redacted: HashSet<u32> = HashSet::new();
-        let out = rebuild_traditional(&bodies, &redacted, Some(b"1 0 R"));
+        let out = rebuild_traditional(&bodies, &redacted, Some(b"1 0 R")).expect("rebuild");
 
         assert!(
             find(&out, b"7 3 obj").is_some(),

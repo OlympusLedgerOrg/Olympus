@@ -35,6 +35,18 @@ impl ContainerError {
 pub fn write_canonical_stored_zip(parts: &[(String, Vec<u8>)]) -> Result<Vec<u8>, ContainerError> {
     use zip::write::SimpleFileOptions;
 
+    // Reject duplicates before writing anything. A ZIP may physically carry two
+    // entries with one name, but `stored_data_spans` keys by name, so the second
+    // would silently displace the first and a signed span could then address the
+    // wrong payload. There is no unambiguous mapping to produce here, so refuse.
+    let mut seen: std::collections::HashSet<&str> =
+        std::collections::HashSet::with_capacity(parts.len());
+    for (name, _) in parts {
+        if !seen.insert(name.as_str()) {
+            return Err(ContainerError::new(format!("duplicate part name {name}")));
+        }
+    }
+
     let mut cursor = Cursor::new(Vec::new());
     {
         let mut zw = zip::ZipWriter::new(&mut cursor);
@@ -67,6 +79,45 @@ pub fn write_canonical_stored_zip(parts: &[(String, Vec<u8>)]) -> Result<Vec<u8>
 /// commits to. Deriving spans this way means what a producer signs is a property
 /// of the artifact's actual bytes rather than of the writer's bookkeeping.
 pub fn stored_data_spans(artifact: &[u8]) -> Result<HashMap<String, (u64, u64)>, ContainerError> {
+    // Duplicate names must be caught from the RAW local headers, not from
+    // `ZipArchive`: the crate keys entries by name and silently collapses a
+    // duplicate, so by the time we iterate it, two entries have already become
+    // one and the surviving span addresses the *later* payload while the earlier
+    // bytes sit unreferenced. Checking here means an ambiguous package fails
+    // closed instead of producing a confident, wrong span.
+    let mut seen: std::collections::HashSet<&[u8]> = std::collections::HashSet::new();
+    let mut cursor = 0usize;
+    while cursor + 30 <= artifact.len() && &artifact[cursor..cursor + 4] == b"PK\x03\x04" {
+        let le16 = |off: usize| u16::from_le_bytes([artifact[off], artifact[off + 1]]) as usize;
+        let le32 = |off: usize| {
+            u32::from_le_bytes([
+                artifact[off],
+                artifact[off + 1],
+                artifact[off + 2],
+                artifact[off + 3],
+            ]) as usize
+        };
+        let compressed = le32(cursor + 18);
+        let name_len = le16(cursor + 26);
+        let extra_len = le16(cursor + 28);
+        let name_end = cursor
+            .checked_add(30)
+            .and_then(|x| x.checked_add(name_len))
+            .filter(|&e| e <= artifact.len())
+            .ok_or_else(|| ContainerError::new("local file header past end of produced zip"))?;
+        let name = &artifact[cursor + 30..name_end];
+        if !seen.insert(name) {
+            return Err(ContainerError::new(format!(
+                "duplicate part name {}",
+                String::from_utf8_lossy(name)
+            )));
+        }
+        cursor = name_end
+            .checked_add(extra_len)
+            .and_then(|x| x.checked_add(compressed))
+            .ok_or_else(|| ContainerError::new("zip entry length overflows the artifact"))?;
+    }
+
     let mut archive = zip::ZipArchive::new(Cursor::new(artifact))
         .map_err(|e| ContainerError::new(format!("re-read canonical zip: {e}")))?;
     let mut out = HashMap::with_capacity(archive.len());
@@ -86,7 +137,11 @@ pub fn stored_data_spans(artifact: &[u8]) -> Result<HashMap<String, (u64, u64)>,
         let name_len = u16::from_le_bytes([artifact[hs + 26], artifact[hs + 27]]) as u64;
         let extra_len = u16::from_le_bytes([artifact[hs + 28], artifact[hs + 29]]) as u64;
         let data_offset = after_fixed as u64 + name_len + extra_len;
-        out.insert(name, (data_offset, size));
+        // The raw-header scan above is what actually catches duplicates; this is
+        // a cheap backstop in case a future `zip` version stops collapsing them.
+        if out.insert(name.clone(), (data_offset, size)).is_some() {
+            return Err(ContainerError::new(format!("duplicate part name {name}")));
+        }
     }
     Ok(out)
 }
@@ -228,6 +283,67 @@ mod tests {
             entries += 1;
         }
         assert_eq!(entries, parts().len(), "walked every local header");
+    }
+
+    /// Two entries under one name have no unambiguous span: `stored_data_spans`
+    /// keys by name, so the second would displace the first and a signed segment
+    /// could end up addressing the wrong payload. Refuse to write it.
+    #[test]
+    fn duplicate_part_names_are_rejected_by_the_writer() {
+        let parts = vec![
+            ("word/document.xml".to_string(), b"first".to_vec()),
+            ("word/document.xml".to_string(), b"second".to_vec()),
+        ];
+        let err = write_canonical_stored_zip(&parts).expect_err("duplicate must be refused");
+        assert!(
+            err.to_string()
+                .contains("duplicate part name word/document.xml"),
+            "unexpected error: {err}"
+        );
+    }
+
+    /// The reader refuses them too, so a package produced *elsewhere* cannot
+    /// smuggle an ambiguous mapping past the span derivation.
+    ///
+    /// The fixture is a structurally valid duplicate: two equal-length names in a
+    /// real package, with the second renamed to match the first in both its local
+    /// header and its central-directory record. Equal lengths keep every offset
+    /// and the EOCD intact, so the archive still parses — which is exactly the
+    /// case a length-changing hand-splice would fail to exercise.
+    #[test]
+    fn duplicate_part_names_are_rejected_by_the_span_reader() {
+        let artifact = write_canonical_stored_zip(&[
+            ("a.bin".to_string(), b"first".to_vec()),
+            ("b.bin".to_string(), b"second".to_vec()),
+        ])
+        .expect("write");
+
+        let mut duplicated = artifact.clone();
+        let needle = b"b.bin";
+        let mut renamed = 0usize;
+        let mut i = 0usize;
+        while i + needle.len() <= duplicated.len() {
+            if &duplicated[i..i + needle.len()] == needle {
+                duplicated[i..i + needle.len()].copy_from_slice(b"a.bin");
+                renamed += 1;
+                i += needle.len();
+            } else {
+                i += 1;
+            }
+        }
+        // Local header + central directory record.
+        assert_eq!(renamed, 2, "expected to rename both name records");
+        assert_eq!(
+            duplicated.len(),
+            artifact.len(),
+            "rename must not move any offset"
+        );
+
+        let err = stored_data_spans(&duplicated).expect_err("duplicate must be refused");
+        assert!(
+            err.to_string().contains("duplicate part name a.bin"),
+            "unexpected error: {err}"
+        );
     }
 
     /// Determinism is what makes re-ingest reproduce the same commitment.

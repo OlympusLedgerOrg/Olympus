@@ -32,25 +32,70 @@ pub struct EmittedObject {
 /// `inner = slice[find("obj")+3 .. rfind("endobj")]` to reconstruct the leaf.
 pub type ObjectSpan = (u32, u64, u64);
 
+/// An input that cannot be written as a valid traditional-xref PDF.
+///
+/// Rejected *before* any bytes are produced, so a caller never receives a
+/// half-formed artifact.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum PdfContainerError {
+    /// Object ids were not strictly ascending. The xref is written as ascending
+    /// contiguous-run subsections, so out-of-order or duplicate ids would emit
+    /// run headers that disagree with the entries beneath them.
+    #[error("objects must be in strictly ascending id order: {previous} is followed by {current}")]
+    NotAscending {
+        /// The id that came first.
+        previous: u32,
+        /// The id that followed it, which was not greater.
+        current: u32,
+    },
+    /// Object `0` is the free-list head, already emitted as its own `f` entry;
+    /// writing it again as in-use would contradict that entry.
+    #[error(
+        "object id 0 is the reserved free-list head and cannot be written as an in-use object"
+    )]
+    ReservedObjectId,
+    /// Generation `65535` marks a *free* entry, so it cannot label an in-use one.
+    #[error(
+        "generation 65535 is the reserved free-entry marker and cannot label in-use object {id}"
+    )]
+    ReservedGeneration {
+        /// The offending object's id.
+        id: u32,
+    },
+}
+
 /// Write a traditional-xref PDF around `objects`.
 ///
 /// `root_ref` is the raw `/Root` indirect reference (e.g. `b"1 0 R"`); when
 /// `None` the trailer omits `/Root` entirely. Returns the artifact and one
 /// [`ObjectSpan`] per object, in the order supplied.
 ///
-/// Objects MUST be supplied in ascending `id` order — the xref table is written
-/// as ascending contiguous-run subsections and does not sort on the caller's
-/// behalf. Debug builds assert this; in release an unsorted call would emit an
-/// xref whose subsection headers disagree with the entries that follow.
-#[must_use]
+/// Objects MUST be in strictly ascending `id` order, and must not use the
+/// reserved id `0` or generation `65535`. All three are checked before any byte
+/// is written — see [`PdfContainerError`].
 pub fn write_traditional_xref(
     objects: &[EmittedObject],
     root_ref: Option<&[u8]>,
-) -> (Vec<u8>, Vec<ObjectSpan>) {
-    debug_assert!(
-        objects.windows(2).all(|w| w[0].id < w[1].id),
-        "objects must be supplied in strictly ascending id order"
-    );
+) -> Result<(Vec<u8>, Vec<ObjectSpan>), PdfContainerError> {
+    // Validate up front: this writer produces the bytes a signed span addresses,
+    // so a malformed xref would be a defect the *recipient* discovers when their
+    // verifier rejects the artifact. Fail here instead, before any byte exists.
+    for pair in objects.windows(2) {
+        if pair[0].id >= pair[1].id {
+            return Err(PdfContainerError::NotAscending {
+                previous: pair[0].id,
+                current: pair[1].id,
+            });
+        }
+    }
+    for obj in objects {
+        if obj.id == 0 {
+            return Err(PdfContainerError::ReservedObjectId);
+        }
+        if obj.generation == u16::MAX {
+            return Err(PdfContainerError::ReservedGeneration { id: obj.id });
+        }
+    }
 
     let mut out: Vec<u8> = Vec::new();
     out.extend_from_slice(b"%PDF-1.7\n");
@@ -106,7 +151,7 @@ pub fn write_traditional_xref(
     out.extend_from_slice(xref_off.to_string().as_bytes());
     out.extend_from_slice(b"\n%%EOF\n");
 
-    (out, spans)
+    Ok((out, spans))
 }
 
 /// Frame a body as a PDF indirect object: `N G obj\n<body>\nendobj`.
@@ -141,7 +186,8 @@ mod tests {
     #[test]
     fn reported_spans_slice_back_to_the_emitted_objects() {
         let objects = vec![obj(1, 0, b"<< /Type /Catalog >>"), obj(2, 0, b"(hello)")];
-        let (artifact, spans) = write_traditional_xref(&objects, Some(b"1 0 R"));
+        let (artifact, spans) =
+            write_traditional_xref(&objects, Some(b"1 0 R")).expect("valid fixture");
 
         assert_eq!(spans.len(), 2);
         for (span, source) in spans.iter().zip(&objects) {
@@ -161,7 +207,8 @@ mod tests {
     #[test]
     fn xref_offsets_point_at_their_objects() {
         let objects = vec![obj(1, 0, b"<< /Type /Catalog >>"), obj(4, 3, b"(gap)")];
-        let (artifact, _) = write_traditional_xref(&objects, Some(b"1 0 R"));
+        let (artifact, _) =
+            write_traditional_xref(&objects, Some(b"1 0 R")).expect("valid fixture");
 
         let text = String::from_utf8_lossy(&artifact).into_owned();
         let xref_at = text.find("xref\n").expect("xref table");
@@ -190,7 +237,8 @@ mod tests {
     #[test]
     fn size_is_one_past_the_largest_id_not_the_count() {
         let objects = vec![obj(1, 0, b"<< /Type /Catalog >>"), obj(9, 0, b"(sparse)")];
-        let (artifact, _) = write_traditional_xref(&objects, Some(b"1 0 R"));
+        let (artifact, _) =
+            write_traditional_xref(&objects, Some(b"1 0 R")).expect("valid fixture");
         let text = String::from_utf8_lossy(&artifact).into_owned();
         assert!(text.contains("/Size 10"), "expected /Size 10 in:\n{text}");
     }
@@ -200,7 +248,7 @@ mod tests {
     #[test]
     fn startxref_points_at_the_xref_keyword() {
         let objects = vec![obj(1, 0, b"<< /Type /Catalog >>")];
-        let (artifact, _) = write_traditional_xref(&objects, None);
+        let (artifact, _) = write_traditional_xref(&objects, None).expect("valid fixture");
         let text = String::from_utf8_lossy(&artifact).into_owned();
         let declared: usize = text
             .rsplit("startxref\n")
@@ -211,11 +259,72 @@ mod tests {
         assert_eq!(&artifact[declared..declared + 5], b"xref\n");
     }
 
+    /// Out-of-order ids would emit run headers that disagree with the entries
+    /// beneath them, so they are refused rather than written.
+    #[test]
+    fn descending_ids_are_rejected() {
+        let objects = vec![
+            obj(4, 0, b"<< /Type /Catalog >>"),
+            obj(2, 0, b"(out of order)"),
+        ];
+        assert_eq!(
+            write_traditional_xref(&objects, Some(b"4 0 R")),
+            Err(PdfContainerError::NotAscending {
+                previous: 4,
+                current: 2
+            })
+        );
+    }
+
+    /// Duplicate ids are the degenerate non-ascending case: two entries would
+    /// claim one xref slot.
+    #[test]
+    fn duplicate_ids_are_rejected() {
+        let objects = vec![obj(2, 0, b"<< /Type /Catalog >>"), obj(2, 0, b"(dup)")];
+        assert_eq!(
+            write_traditional_xref(&objects, Some(b"2 0 R")),
+            Err(PdfContainerError::NotAscending {
+                previous: 2,
+                current: 2
+            })
+        );
+    }
+
+    /// Object 0 is already emitted as the free-list head; writing it as in-use
+    /// would contradict that entry.
+    #[test]
+    fn reserved_object_id_zero_is_rejected() {
+        let objects = vec![obj(0, 0, b"(reserved)")];
+        assert_eq!(
+            write_traditional_xref(&objects, None),
+            Err(PdfContainerError::ReservedObjectId)
+        );
+    }
+
+    /// Generation 65535 is the free-entry marker, so it cannot label an in-use
+    /// object.
+    #[test]
+    fn reserved_generation_is_rejected() {
+        let objects = vec![obj(1, u16::MAX, b"(reserved gen)")];
+        assert_eq!(
+            write_traditional_xref(&objects, None),
+            Err(PdfContainerError::ReservedGeneration { id: 1 })
+        );
+    }
+
+    /// Validation happens before any byte is produced — a rejected input must not
+    /// yield a partial artifact.
+    #[test]
+    fn invalid_input_produces_no_bytes() {
+        let objects = vec![obj(2, 0, b"(a)"), obj(1, 0, b"(b)")];
+        assert!(write_traditional_xref(&objects, None).is_err());
+    }
+
     /// `None` omits `/Root` rather than emitting an empty or dangling reference.
     #[test]
     fn absent_root_ref_omits_the_key() {
         let objects = vec![obj(1, 0, b"(no catalog)")];
-        let (artifact, _) = write_traditional_xref(&objects, None);
+        let (artifact, _) = write_traditional_xref(&objects, None).expect("valid fixture");
         let text = String::from_utf8_lossy(&artifact).into_owned();
         assert!(!text.contains("/Root"), "unexpected /Root in:\n{text}");
         assert!(text.contains("<< /Size 2 >>"), "trailer shape: {text}");
@@ -225,7 +334,8 @@ mod tests {
     #[test]
     fn generations_are_written_into_xref_entries() {
         let objects = vec![obj(1, 0, b"<< /Type /Catalog >>"), obj(2, 7, b"(gen 7)")];
-        let (artifact, _) = write_traditional_xref(&objects, Some(b"1 0 R"));
+        let (artifact, _) =
+            write_traditional_xref(&objects, Some(b"1 0 R")).expect("valid fixture");
         let text = String::from_utf8_lossy(&artifact).into_owned();
         assert!(text.contains(" 00007 n "), "generation 7 entry: {text}");
     }

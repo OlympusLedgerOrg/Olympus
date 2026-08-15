@@ -43,11 +43,17 @@ jobs:
     permissions:
       contents: read
     # Mutation testing builds + tests every mutation in series; for the
-    # current ~350-mutant surface (lib.rs + poseidon.rs + canonical.rs +
-    # smt.rs + ledger_snapshot.rs + trust_list.rs) on a `ubuntu-latest`
-    # runner this fits in 120 minutes. Bump if the crate grows.
+    # current mutant surface (lib.rs + poseidon.rs + canonical.rs +
+    # smt.rs + ledger_snapshot.rs + trust_list.rs + container/{mod,pdf,
+    # ooxml}.rs) on a `ubuntu-latest` runner this fits in 120 minutes.
+    # Bump if the crate grows.
     # (Was 90 for the ~220-mutant surface before ADR-0041's trust_list.rs
-    # added ~132 mutants.)
+    # added ~132 mutants. The container modules add ~56 more — measured from
+    # this PR's `--in-diff` run, which mutated them in full as new files —
+    # so the nightly/manual full pass is now ~406. That is still inside the
+    # 120-minute budget on the observed per-mutant cost, but it is the
+    # closest this has run to the cap; the next surface addition should come
+    # with a measured full-pass duration rather than another estimate.)
     timeout-minutes: 120
 
     steps:
