@@ -1,17 +1,40 @@
 #!/usr/bin/env bash
-# pre-push hook — mirrors the full per-PR CI gate locally.
+# pre-push hook — change-scoped local CI gate.
 # Activate by running:  bash scripts/install-hooks.sh
 #
-# Runs the same checks GitHub Actions runs on every PR:
-#   - cargo fmt --check     (workspace)
-#   - cargo clippy          (workspace, -D warnings)
-#   - cargo nextest         (workspace, excluding embedded-Postgres binaries)
-#   - cargo test            (embedded-Postgres binaries, shared-process mode)
-#   - cargo test --doc      (workspace doctests)
-#   - frontend tsc --noEmit + eslint
-#   - frontend build
+# Maps the outgoing diff (origin/main...HEAD) onto the workspace dependency
+# graph and runs only the gates that diff can affect:
 #
-# Set OLYMPUS_SKIP_PREPUSH=1 to bypass (emergency only — CI will still gate the PR).
+#   light-poseidon <- babyjubjub-permissive <- olympus-crypto <- olympus-desktop
+#                                              olympus-crypto <- olympus-manifest <- clients/cli
+#   pg-embed-local <- olympus-desktop
+#
+# A change is gated in its own crate plus every dependent (downstream) crate;
+# crates nothing depends on it are skipped. Any path the map does not
+# recognise as Rust falls back to the FULL workspace gate — unknown scopes
+# fail safe, they are never silently skipped. A failed diff (no merge base,
+# shallow clone) also falls back to FULL rather than skipping.
+#
+# Assumption: this hook gates origin/main...HEAD, i.e. it assumes you are
+# pushing the currently checked-out branch (the overwhelmingly common case
+# here). Pushing a ref other than HEAD gates HEAD's diff, not that ref's.
+#
+# What this hook deliberately does NOT cover locally (CI gates all of these):
+#   - feature-gated configurations (quorum-circuit, federation, zkvm-prover),
+#     the lean --no-default-features desktop build, and --all-features
+#     workspace library tests (except olympus-crypto, gated below)
+#   - the Python client SDK (clients/python) and JS verifier npm deps
+#   - cross-language golden-vector regeneration diffs (CI's tauri-unit job)
+#     and the frontend vitest suite
+#   - proofs/zkvm/* (pinned toolchain; built by its own script)
+#   - fuzz workspaces (nightly cargo-fuzz)
+#
+# Modes:
+#   OLYMPUS_SKIP_PREPUSH=1   bypass entirely (emergency only — CI still gates)
+#   OLYMPUS_PREPUSH_PLAN=1   print the computed scope + commands, run nothing
+#
+# Testing hook (used by the hook's own tests): OLYMPUS_PREPUSH_TEST_PATHS
+# substitutes the changed-file list, one path per line.
 
 set -euo pipefail
 
@@ -29,87 +52,285 @@ YELLOW='\033[1;33m'
 BOLD='\033[1m'
 RESET='\033[0m'
 
-pass() { echo -e "  ${GREEN}✓${RESET} $1"; }
-fail() { echo -e "  ${RED}✗${RESET} $1"; }
+pass() { echo -e "  ${GREEN}✓${RESET} $1 (${2}s)"; }
+fail() { echo -e "  ${RED}✗${RESET} $1 (${2}s)"; }
+note() { echo -e "  ${YELLOW}∙${RESET} $1"; }
 step() { echo -e "\n${BOLD}▸ $1${RESET}"; }
 
-echo -e "\n${BOLD}Olympus pre-push CI gate${RESET}"
+echo -e "\n${BOLD}Olympus pre-push CI gate (change-scoped)${RESET}"
 echo "────────────────────────────────────"
 
 FAILED=()
 
-if git rev-parse --verify origin/main >/dev/null 2>&1; then
-    CHANGED_ALL="$(git diff --name-only --diff-filter=ACMR origin/main...HEAD || true)"
-else
-    CHANGED_ALL="$(git diff --name-only --diff-filter=ACMR HEAD~1..HEAD || true)"
-fi
-
-CHANGED_RS="$(echo "$CHANGED_ALL" | grep -E '(^|/)Cargo\.(toml|lock)$|\.rs$' || true)"
-CHANGED_FE="$(echo "$CHANGED_ALL" | grep -E '^app/public-ui/.*\.(ts|tsx|js|jsx|css|html)$|^pnpm-lock\.yaml$|^app/public-ui/package\.json$' || true)"
-
-if [ -z "$CHANGED_RS" ] && [ -z "$CHANGED_FE" ]; then
-    echo "No Rust or frontend changes relative to origin/main — skipping local CI gate."
-    exit 0
-fi
-
 run_check() {
     local name="$1"
     shift
+    local t0=$SECONDS
     step "$name"
     if "$@"; then
-        pass "$name"
+        pass "$name" "$((SECONDS - t0))"
     else
-        fail "$name"
+        fail "$name" "$((SECONDS - t0))"
         FAILED+=("$name")
     fi
 }
 
-if [ -n "$CHANGED_RS" ]; then
-    # No workspace-wide `cargo fmt --check` here. GitHub CI has no fmt gate, the
-    # repo has no workspace rustfmt.toml (rustfmt defaults), and a
-    # whole-workspace check fails spuriously whenever the local rustfmt version
-    # differs from the one main was last formatted with. Formatting of changed
-    # code is handled per-staged-file by .githooks/pre-commit, so a redundant
-    # push-time reformat check is omitted.
+# Refresh origin/main so the scope reflects the actual PR diff, not a stale
+# merge-base. Offline pushes still work — scoping just uses the cached ref.
+git fetch origin main --quiet 2>/dev/null || true
 
-    run_check "cargo clippy --workspace -- -D warnings" \
-        cargo clippy --workspace --all-targets --quiet -- -D warnings
+# quotepath=off: C-quoted non-ASCII paths would match no case pattern and
+# silently ungate. --no-renames: a rename lists only its new path, hiding the
+# deletion side from the scope map. A diff *failure* (no merge base, shallow
+# clone) must widen to FULL, not read as "nothing changed".
+FULL_FALLBACK=0
+if [ -n "${OLYMPUS_PREPUSH_TEST_PATHS:-}" ]; then
+    CHANGED_ALL="$OLYMPUS_PREPUSH_TEST_PATHS"
+elif git rev-parse --verify origin/main >/dev/null 2>&1; then
+    # ACMRD: deletions are gated too — deleting a module breaks a build just
+    # as surely as editing one (the old ACMR filter skipped deletion-only
+    # pushes entirely).
+    if ! CHANGED_ALL="$(git -c core.quotepath=off diff --no-renames --name-only --diff-filter=ACMRD origin/main...HEAD)"; then
+        note "diff against origin/main failed — widening to the FULL workspace gate"
+        CHANGED_ALL=""
+        FULL_FALLBACK=1
+    fi
+else
+    if ! CHANGED_ALL="$(git -c core.quotepath=off diff --no-renames --name-only --diff-filter=ACMRD HEAD~1..HEAD)"; then
+        note "diff against HEAD~1 failed — widening to the FULL workspace gate"
+        CHANGED_ALL=""
+        FULL_FALLBACK=1
+    fi
+fi
+
+# ── Map changed paths onto gates ─────────────────────────────────────────────
+# Booleans instead of associative arrays: macOS ships bash 3.2.
+IN_LP=0 IN_BJJ=0 IN_CRYPTO=0 IN_MANIFEST=0 IN_DESKTOP=0   # main-workspace members
+FULL=$FULL_FALLBACK                           # unknown Rust → whole workspace
+GATE_PGE=0 GATE_VER_RUST=0 GATE_CLI=0 GATE_PROOFS=0
+NOTE_VER_JS=0 NOTE_PY=0 NOTE_ZKVM=0 NOTE_FUZZ=0
+FE_CHANGED=0
+
+while IFS= read -r f; do
+    f="${f%$'\r'}"   # harden the TEST_PATHS input against CRLF
+    [ -z "$f" ] && continue
+    case "$f" in
+        # Standalone scopes first — they must not fall through to the main
+        # workspace (verifiers/rust is NOT a workspace member; gating the main
+        # workspace for it tests the wrong code).
+        verifiers/rust/fuzz/*)          NOTE_FUZZ=1 ;;
+        fuzz/*)                         NOTE_FUZZ=1 ;;
+        verifiers/rust/*)               GATE_VER_RUST=1 ;;
+        verifiers/javascript/*)         NOTE_VER_JS=1 ;;
+        verifiers/test_vectors/*)       GATE_VER_RUST=1; NOTE_VER_JS=1 ;;
+        clients/cli/*)                  GATE_CLI=1 ;;
+        clients/python/*)               NOTE_PY=1 ;;
+        proofs/zkvm/*)                  NOTE_ZKVM=1 ;;
+        # proofs/keys feeds src-tauri/build.rs (vkey/manifest blake3
+        # assertion) — a hand-touched vkey must fail a desktop build locally,
+        # not sail through to CI.
+        proofs/keys/*)                  GATE_PROOFS=1; IN_DESKTOP=1 ;;
+        proofs/*)                       GATE_PROOFS=1 ;;
+        # pg-embed-local is a path dep of olympus-desktop: gate both.
+        pg-embed-local/*)               GATE_PGE=1; IN_DESKTOP=1 ;;
+        # Semgrep rule fixtures are never compiled; the semgrep CI job owns them.
+        .semgrep/*)                     : ;;
+        # Main workspace, with the dependent-closure applied at map time.
+        # olympus-manifest sits downstream of the crypto family, and
+        # clients/cli path-depends on manifest + crypto, so those changes
+        # gate it too.
+        crates/light-poseidon/*)        IN_LP=1; IN_BJJ=1; IN_CRYPTO=1; IN_MANIFEST=1; IN_DESKTOP=1; GATE_CLI=1 ;;
+        crates/babyjubjub-permissive/*) IN_BJJ=1; IN_CRYPTO=1; IN_MANIFEST=1; IN_DESKTOP=1; GATE_CLI=1 ;;
+        crates/olympus-crypto/*)        IN_CRYPTO=1; IN_MANIFEST=1; IN_DESKTOP=1; GATE_CLI=1 ;;
+        crates/olympus-manifest/*)      IN_MANIFEST=1; GATE_CLI=1 ;;
+        src-tauri/*)                    IN_DESKTOP=1 ;;
+        migrations/*)                   IN_DESKTOP=1 ;;
+        # Root manifest / lockfile: dependency set moved — gate everything.
+        Cargo.toml|Cargo.lock)          FULL=1 ;;
+        # Frontend: anything under the app dir. Over-gating on a README edit
+        # costs ~2 min; missing tsconfig.json (which configures tsc -b) or a
+        # tracked vectors .json costs a CI round-trip.
+        app/public-ui/*|pnpm-lock.yaml) FE_CHANGED=1 ;;
+        # Unknown Rust location — fail safe with the full workspace gate.
+        *.rs|*/Cargo.toml|*/Cargo.lock) FULL=1 ;;
+        # Docs, CI config, hooks, fixtures outside the scopes above: no gate.
+        *)                              : ;;
+    esac
+done <<< "$CHANGED_ALL"
+
+# Assemble the main-workspace scope.
+SCOPE_ARGS=()
+SCOPE_DESC=""
+if [ "$FULL" = "1" ]; then
+    SCOPE_ARGS=(--workspace)
+    SCOPE_DESC="full workspace"
+    IN_DESKTOP=1
+else
+    [ "$IN_LP" = "1" ]       && SCOPE_ARGS+=(-p light-poseidon)
+    [ "$IN_BJJ" = "1" ]      && SCOPE_ARGS+=(-p babyjubjub-permissive)
+    [ "$IN_CRYPTO" = "1" ]   && SCOPE_ARGS+=(-p olympus-crypto)
+    [ "$IN_MANIFEST" = "1" ] && SCOPE_ARGS+=(-p olympus-manifest)
+    [ "$IN_DESKTOP" = "1" ]  && SCOPE_ARGS+=(-p olympus-desktop)
+    SCOPE_DESC="${SCOPE_ARGS[*]+"${SCOPE_ARGS[*]}"}"
+fi
+
+RUST_GATED=0
+[ "${#SCOPE_ARGS[@]}" -gt 0 ] && RUST_GATED=1
+
+# Un-gated scopes: say so instead of silently skipping — BEFORE the early
+# exit, or a push touching only these would swallow the notes.
+[ "$NOTE_VER_JS" = "1" ] && note "verifiers/javascript changed — not gated locally (npm ci cost); CI runs it"
+[ "$NOTE_PY" = "1" ]     && note "clients/python changed — not gated locally; run: python -m pytest -q clients/python/tests"
+[ "$NOTE_ZKVM" = "1" ]   && note "proofs/zkvm changed — pinned toolchain, built by its own script; CI covers it"
+[ "$NOTE_FUZZ" = "1" ]   && note "fuzz workspace changed — nightly cargo-fuzz; CI covers it"
+
+if [ "$RUST_GATED" = "0" ] && [ "$FE_CHANGED" = "0" ] && \
+   [ "$GATE_PGE$GATE_VER_RUST$GATE_CLI$GATE_PROOFS" = "0000" ]; then
+    echo "No gated scopes changed relative to origin/main — skipping local CI gate."
+    exit 0
+fi
+
+echo "scope: rust=[${SCOPE_DESC:-none}] frontend=$FE_CHANGED" \
+     "pg-embed=$GATE_PGE verifiers-rust=$GATE_VER_RUST cli=$GATE_CLI proofs=$GATE_PROOFS"
+
+if [ "${OLYMPUS_PREPUSH_PLAN:-0}" = "1" ]; then
+    echo "[plan] would run:"
+    if [ "$RUST_GATED" = "1" ]; then
+        # SCOPE_ARGS (not SCOPE_DESC): the printed commands must be runnable
+        # as-is, and the FULL description "full workspace" is not an argument.
+        echo "  cargo clippy ${SCOPE_ARGS[*]} --all-targets --quiet -- -D warnings"
+        echo "  cargo nextest run ${SCOPE_ARGS[*]} -E <non-DB filter>"
+        [ "$IN_CRYPTO" = "1" ] && echo "  cargo nextest run -p olympus-crypto --all-features"
+        [ "$IN_DESKTOP" = "1" ] && echo "  cargo test -p olympus-desktop <embedded-Postgres binaries> -- --test-threads=1"
+        echo "  cargo test --doc ${SCOPE_ARGS[*]} --quiet"
+    fi
+    [ "$GATE_VER_RUST" = "1" ] && echo "  cargo test --manifest-path verifiers/rust/Cargo.toml --quiet"
+    [ "$GATE_PGE" = "1" ] && echo "  cargo test --locked --manifest-path pg-embed-local/Cargo.toml --lib --no-default-features --features rt_tokio --quiet"
+    [ "$GATE_CLI" = "1" ] && echo "  cargo nextest run --locked --manifest-path clients/cli/Cargo.toml --all-features"
+    [ "$GATE_PROOFS" = "1" ] && echo "  node --test proofs/test/"
+    [ "$FE_CHANGED" = "1" ] && echo "  (parallel) frontend tsc -b / eslint / vite build"
+    exit 0
+fi
+
+# ── Frontend gates run in the background: pnpm and cargo do not contend ──────
+FE_PID=""
+FE_LOG=""
+FE_FAILFILE=""
+if [ "$FE_CHANGED" = "1" ]; then
+    FE_LOG="$(mktemp)"
+    FE_FAILFILE="$(mktemp)"
+    # An abort between here and the join (set -e on a bare command) must not
+    # leak the temp files.
+    trap 'rm -f "$FE_LOG" "$FE_FAILFILE"' EXIT
+    (
+        fe_check() {
+            local name="$1"
+            shift
+            local t0=$SECONDS
+            step "$name"
+            if "$@"; then
+                pass "$name" "$((SECONDS - t0))"
+            else
+                fail "$name" "$((SECONDS - t0))"
+                echo "$name" >>"$FE_FAILFILE"
+            fi
+        }
+        # `tsc -b` matches what CI's `pnpm build` runs (`tsc -b && vite build`);
+        # `--noEmit` is looser and lets type narrowing slip past.
+        fe_check "frontend tsc -b" \
+            bash -c 'cd app/public-ui && pnpm exec tsc -b'
+        fe_check "frontend eslint" \
+            bash -c 'cd app/public-ui && pnpm lint'
+        fe_check "frontend build (vite)" \
+            bash -c 'pnpm --filter public-ui build'
+    ) >"$FE_LOG" 2>&1 &
+    FE_PID=$!
+    note "frontend gates running in background (log follows the Rust gates)"
+fi
+
+# ── Main-workspace Rust gates ────────────────────────────────────────────────
+if [ "$RUST_GATED" = "1" ]; then
+    # No workspace `cargo fmt --check` here: formatting of changed code is
+    # handled per-staged-file by .githooks/pre-commit, and a push-time
+    # whole-workspace check fails spuriously across rustfmt versions.
+
+    run_check "cargo clippy ${SCOPE_DESC} -- -D warnings" \
+        cargo clippy "${SCOPE_ARGS[@]}" --all-targets --quiet -- -D warnings
 
     # CI sources this same file; keep the pg_embed binary policy centralized.
     source "$ROOT/scripts/embedded-postgres-tests.sh"
 
-    run_check "cargo nextest run --workspace (non-DB)" \
-        cargo nextest run --workspace -E "$EMBEDDED_POSTGRES_NEXTEST_FILTER"
+    run_check "cargo nextest run ${SCOPE_DESC} (non-DB)" \
+        cargo nextest run "${SCOPE_ARGS[@]}" -E "$EMBEDDED_POSTGRES_NEXTEST_FILTER"
+
+    # A bare `-p olympus-crypto` run silently skips the canonical/smt/poseidon
+    # test modules (feature-gated; a green default-features run proves little).
+    # CI's workspace --all-features job covers this; mirror it for the one
+    # crate where it bites. olympus-crypto has no Windows-unlinkable features,
+    # unlike the desktop crate — do not "generalise" this to --workspace.
+    if [ "$IN_CRYPTO" = "1" ]; then
+        run_check "cargo nextest run -p olympus-crypto --all-features" \
+            cargo nextest run -p olympus-crypto --all-features
+    fi
 
     # The shared pg_embed harness is one-server-per-test-binary. Nextest runs
     # one process per test, which leaks a Postgres cluster at every process
     # exit; cargo test keeps each binary in one process as the harness expects.
-    run_check "cargo test embedded-Postgres binaries" \
-        cargo test -p olympus-desktop --no-default-features \
-        "${EMBEDDED_POSTGRES_CARGO_TEST_ARGS[@]}" -- --test-threads=1
+    # Only reachable changes run it: every path here maps through
+    # olympus-desktop, whose integration tests these are.
+    if [ "$IN_DESKTOP" = "1" ]; then
+        run_check "cargo test embedded-Postgres binaries" \
+            cargo test -p olympus-desktop --no-default-features \
+            "${EMBEDDED_POSTGRES_CARGO_TEST_ARGS[@]}" -- --test-threads=1
+    fi
 
-    run_check "cargo test --doc --workspace" \
-        cargo test --doc --workspace --quiet
+    run_check "cargo test --doc ${SCOPE_DESC}" \
+        cargo test --doc "${SCOPE_ARGS[@]}" --quiet
 fi
 
-if [ -n "$CHANGED_FE" ]; then
-    # `tsc -b` matches what CI's `pnpm build` runs (`tsc -b && vite build`).
-    # `--noEmit` is looser and lets type narrowing slip past; keep symmetry
-    # with .githooks/pre-commit, which had the same drift.
-    run_check "frontend tsc -b" \
-        bash -c 'cd app/public-ui && pnpm exec tsc -b'
+# ── Standalone-workspace gates (only when touched) ───────────────────────────
+if [ "$GATE_VER_RUST" = "1" ]; then
+    run_check "verifiers/rust tests" \
+        cargo test --manifest-path verifiers/rust/Cargo.toml --quiet
+fi
 
-    run_check "frontend eslint" \
-        bash -c 'cd app/public-ui && pnpm lint'
+if [ "$GATE_PGE" = "1" ]; then
+    # Lib tests only, shared-process, per CLAUDE.md — the crate's own
+    # Postgres-spawning test targets flake on Windows and are CI's job.
+    run_check "pg-embed-local lib tests" \
+        cargo test --locked --manifest-path pg-embed-local/Cargo.toml \
+        --lib --no-default-features --features rt_tokio --quiet
+fi
 
-    run_check "frontend build (vite)" \
-        bash -c 'pnpm --filter public-ui build'
+if [ "$GATE_CLI" = "1" ]; then
+    run_check "clients/cli tests" \
+        cargo nextest run --locked --manifest-path clients/cli/Cargo.toml --all-features
+fi
+
+if [ "$GATE_PROOFS" = "1" ]; then
+    # Fast (~15s): helper tests plus the federation_quorum witness harness,
+    # which self-skips politely when the compiled circuit is absent.
+    # Bare `node --test` (auto-discovers ./test) — an explicit `test/` dir arg
+    # is treated as a module path by node 24 on Windows and MODULE_NOT_FOUNDs.
+    run_check "proofs JS tests (node --test)" \
+        bash -c 'cd proofs && node --test'
+fi
+
+# ── Join the frontend gates ──────────────────────────────────────────────────
+if [ -n "$FE_PID" ]; then
+    wait "$FE_PID" || true
+    echo -e "\n${BOLD}── frontend gate log ──${RESET}"
+    cat "$FE_LOG"
+    while IFS= read -r fe_name; do
+        [ -n "$fe_name" ] && FAILED+=("$fe_name")
+    done <"$FE_FAILFILE"
+    rm -f "$FE_LOG" "$FE_FAILFILE"
 fi
 
 echo ""
 echo "────────────────────────────────────"
 
-if [ ${#FAILED[@]} -gt 0 ]; then
+if [ "${#FAILED[@]}" -gt 0 ]; then
     echo -e "${RED}${BOLD}Pre-push gate failed:${RESET}"
     for f in "${FAILED[@]}"; do
         echo -e "  ${RED}✗${RESET} $f"
