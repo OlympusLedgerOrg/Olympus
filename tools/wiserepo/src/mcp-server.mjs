@@ -23,12 +23,6 @@ const TOTAL_CONTEXT_BUDGET_CHARS = 300_000;
 // work regardless of what the budget ends up doing.
 const MAX_FILES_PER_REQUEST = 40;
 
-const BACKEND_PROPERTY = {
-  type: "string",
-  enum: ["claude", "openai"],
-  description: "Which API key/model to use. Defaults to $WISEREPO_BACKEND or claude.",
-};
-
 const TOOLS = [
   {
     name: "repo_qa",
@@ -49,7 +43,6 @@ const TOOLS = [
           type: "string",
           description: "Optional git-grep pattern to search first and include as context.",
         },
-        backend: BACKEND_PROPERTY,
       },
       required: ["question"],
     },
@@ -68,7 +61,6 @@ const TOOLS = [
           description:
             'Extra args passed to `git diff`, e.g. ["main...HEAD"]. Defaults to ["HEAD"].',
         },
-        backend: BACKEND_PROPERTY,
       },
     },
   },
@@ -85,7 +77,6 @@ const TOOLS = [
           type: "string",
           description: "e.g. 'changelog entry', 'PR description', 'one paragraph'",
         },
-        backend: BACKEND_PROPERTY,
       },
     },
   },
@@ -159,7 +150,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     if (name === "repo_qa") {
       const context = await gatherContext({ files: args.files, grep: args.grep });
       const prompt = `${context ? context + "\n\n" : ""}Question: ${args.question}`;
-      const answer = await callModel({ system: SYSTEM_PROMPT, prompt, backend: args.backend });
+      const answer = await callModel({ system: SYSTEM_PROMPT, prompt });
       return { content: [{ type: "text", text: answer }] };
     }
 
@@ -185,7 +176,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const review = await callModel({
         system: SYSTEM_PROMPT,
         prompt,
-        backend: args.backend,
         maxTokens: 8192,
       });
       return { content: [{ type: "text", text: review }] };
@@ -195,7 +185,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const context = await gatherContext({ files: args.files, diffArgs: args.diffArgs });
       const style = args.style || "one paragraph";
       const prompt = `Summarize the following as a ${style}.\n\n${context || "(no context provided)"}`;
-      const summary = await callModel({ system: SYSTEM_PROMPT, prompt, backend: args.backend });
+      const summary = await callModel({ system: SYSTEM_PROMPT, prompt });
       return { content: [{ type: "text", text: summary }] };
     }
 
