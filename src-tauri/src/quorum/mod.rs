@@ -58,6 +58,11 @@ pub use db::{load_quorum_signatures, store_quorum_signatures_tx};
 /// ledger `root` under the `OLY:CHECKPOINT:QUORUM:V2` domain (ADR-0033).
 pub mod checkpoint;
 
+/// Trust-list transition approvals (ADR-0041 §5/§7/§8): the same M-of-N
+/// primitive applied to rotation (`OLY:TRUST:ROTATE:V1`), recovery
+/// (`OLY:TRUST:RECOVER:V1`), and genesis (`OLY:TRUST:GENESIS:V1`) messages.
+pub mod trust;
+
 /// Domain tag for quorum co-signatures. See module docs. Bumped to `V2` when
 /// the message gained the `threshold` + canonical signer-set binding (audit
 /// R3-01); a `V1` signature can never be replayed against a `V2` message.
@@ -137,6 +142,75 @@ impl QuorumMessage {
     ) -> Self {
         Self(checkpoint::checkpoint_quorum_message(
             chain_id, epoch, root, threshold, signers,
+        ))
+    }
+
+    // The three ADR-0041 trust domains below differ from the SBT/checkpoint
+    // constructors in where the BLAKE3 digest is computed: `olympus-crypto`
+    // owns the domain-prefixed byte layouts (so offline verifiers can
+    // reproduce them without this crate) and returns the raw 32-byte digest,
+    // which is reduced into `Fr` here via `from_le_bytes_mod_order` — the
+    // **same** reduction `quorum_cosign_message` / `checkpoint_quorum_message`
+    // apply to their own digests, so all five domains present identical
+    // digest→field-element semantics to `verify_generic_quorum` and to
+    // signers. Domain separation is carried entirely by the BLAKE3 prefixes;
+    // no trust-domain digest can collide with an SBT/checkpoint digest
+    // without a BLAKE3 prefix collision.
+
+    /// The routine trust-rotation domain (`OLY:TRUST:ROTATE:V1`, ADR-0041 §5).
+    pub(crate) fn trust_rotation(
+        previous_snapshot_digest: &[u8; 32],
+        next_snapshot_digest: &[u8; 32],
+        previous_sequence: u64,
+        next_sequence: u64,
+        activation_at: i64,
+    ) -> Self {
+        Self(Fr::from_le_bytes_mod_order(
+            &olympus_crypto::trust_list::trust_rotation_message(
+                previous_snapshot_digest,
+                next_snapshot_digest,
+                previous_sequence,
+                next_sequence,
+                activation_at,
+            ),
+        ))
+    }
+
+    /// The offline role-scoped recovery domain (`OLY:TRUST:RECOVER:V1`,
+    /// ADR-0041 §5/§7).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn trust_recovery(
+        role: olympus_crypto::trust_list::TrustRole,
+        previous_snapshot_digest: &[u8; 32],
+        recovery_snapshot_digest: &[u8; 32],
+        previous_sequence: u64,
+        next_sequence: u64,
+        reason: olympus_crypto::trust_list::RecoveryReason,
+        activation_at: i64,
+    ) -> Self {
+        Self(Fr::from_le_bytes_mod_order(
+            &olympus_crypto::trust_list::trust_recovery_message(
+                role,
+                previous_snapshot_digest,
+                recovery_snapshot_digest,
+                previous_sequence,
+                next_sequence,
+                reason,
+                activation_at,
+            ),
+        ))
+    }
+
+    /// The genesis approval domain (`OLY:TRUST:GENESIS:V1`, ADR-0041 §8).
+    /// The digest binds the full canonical snapshot body **and** the approval
+    /// policy, recomputed here from the structures themselves — a caller can
+    /// never hand this constructor a digest for a different payload.
+    pub(crate) fn trust_genesis(
+        snapshot: &olympus_crypto::trust_list::TrustListSnapshotV1,
+        approval_policy: &olympus_crypto::trust_list::GenesisApprovalPolicy,
+    ) -> Self {
+        Self(Fr::from_le_bytes_mod_order(
+            &olympus_crypto::trust_list::genesis_approval_message(snapshot, approval_policy),
         ))
     }
 }
