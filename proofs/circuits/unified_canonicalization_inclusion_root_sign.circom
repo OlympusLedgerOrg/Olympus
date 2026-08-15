@@ -1,19 +1,37 @@
 pragma circom 2.0.0;
 
 /*
- * Unified Proof: Canonicalization + Inclusion + Root Verification
+ * Unified Proof: Section Commitment + Merkle Inclusion + Ledger Root Commitment
  *
- * This circuit provides a single proof that verifies three critical properties:
- *   1) Document canonicalization - the document sections are properly canonicalized
- *      with structured metadata (sectionCount, sectionLength, sectionHash)
- *   2) Merkle inclusion - the document is included in the ledger Merkle tree
+ * Naming note: the `_sign` filename stem is historical — this circuit verifies
+ * NO signature. The live API exposes this R1CS's statement under the honest
+ * identifier `unified_section_commitment_inclusion_root`
+ * (src-tauri/src/api/zk/mod.rs); the historical API identifier
+ * `unified_canonicalization_inclusion_root_sign` returns 410 Gone.
+ *
+ * This circuit proves three properties:
+ *   1) Section commitment - canonicalHash is the domain-separated Poseidon
+ *      chain over (sectionCount, sectionLengths[i], sectionHashes[i]), with
+ *      each sectionHashes[i] bound in-circuit to Poseidon(documentSections[i])
+ *      (audit H-1). This is NOT a canonicalization proof: documentSections are
+ *      opaque field elements, and no constraint relates them to the canonical
+ *      (JCS) bytes of any document — see the "in-circuit canonicalization is
+ *      vacuous" fragility item in docs/audits/2026-06-22-red-team-mythos.md
+ *      §4. No consumer may treat canonicalHash alone as proof of
+ *      canonicalization. Canonicalization is proved outside this circuit: the
+ *      public `unified_canonicalization_inclusion_root` protocol composes this
+ *      Groth16 proof with a verified fixed-image RISC Zero canonicalization
+ *      receipt whose derived commitment must equal public signal 0
+ *      (src-tauri/src/zk/canonicalization.rs::verify_receipt_binding).
+ *   2) Merkle inclusion - the section commitment (canonicalHash) is a leaf of
+ *      the ledger Merkle tree
  *   3) Ledger root commitment - the Merkle root is committed in an SMT
  *
  * Security hardening:
  *   - Domain-separated Poseidon hashing with domain tags
  *   - Num2Bits range checks on all index/count signals
  *   - Index bounds: leafIndex < treeSize (when treeSize > 0)
- *   - Structured canonicalization binding sectionCount + sectionLengths + sectionHashes
+ *   - Structured section-commitment binding sectionCount + sectionLengths + sectionHashes
  *   - All Poseidon calls use domain separation tags to prevent cross-context collisions
  *
  * Domain tags (canonical table = olympus_crypto::poseidon; audit F-1):
@@ -31,7 +49,9 @@ pragma circom 2.0.0;
  *   - ledgerKeyHash: Poseidon(key_lo, key_hi) commitment binding the SMT lookup key
  *
  * Private inputs:
- *   - documentSections[maxSections]: Canonicalized document sections
+ *   - documentSections[maxSections]: Document sections as opaque field
+ *     elements (their canonicalization is proved by the composed RISC Zero
+ *     receipt, not in-circuit)
  *   - sectionCount: Number of actual sections (rest are padding)
  *   - sectionLengths[maxSections]: Byte length of each canonical section
  *   - sectionHashes[maxSections]: Poseidon(documentSections[i]) per section
@@ -43,10 +63,15 @@ pragma circom 2.0.0;
  *   - ledgerKey[32]: SMT lookup key preimage bytes; path indices are derived in-circuit
  *
  * Note on checkpoint verification:
- *   Checkpoint integrity (including federation signatures) is verified at the Python
- *   layer, not in-circuit. Python checkpoints are BLAKE3-hashed, federation-signed
- *   structs that cannot be efficiently verified in BN128. The circuit proves the
- *   ledger root commitment; the Python layer proves the checkpoint quorum certificate.
+ *   Checkpoint integrity (including federation signatures) is verified at the
+ *   Rust host layer, not in-circuit: verify_checkpoint_signature
+ *   (src-tauri/src/federation/verify.rs, feature `federation`) checks the
+ *   BJJ-EdDSA signature on peer checkpoints, and checkpoint-root quorum
+ *   co-signatures are verified under the OLY:CHECKPOINT:QUORUM:V2 domain
+ *   (ADR-0033; src-tauri/src/quorum/checkpoint.rs and
+ *   src-tauri/src/federation/checkpoint_cosign.rs). Checkpoints are
+ *   BLAKE3-hashed, signed structs that cannot be efficiently verified in
+ *   BN128; the circuit proves only the ledger root commitment.
  */
 
 include "./lib/merkleProof.circom";
