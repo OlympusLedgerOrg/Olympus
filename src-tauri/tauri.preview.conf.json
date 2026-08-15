@@ -1,0 +1,17 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Olympus Ledger Preview",
+  "identifier": "io.olympus.ledger.preview",
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Olympus Ledger Preview — NOT FOR PRODUCTION",
+        "width": 1280,
+        "height": 800,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ]
+  }
+}

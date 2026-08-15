@@ -211,3 +211,47 @@ export async function apiFetch<T>(url: string, options?: RequestInit): Promise<T
   }
   return JSON.parse(text) as T;
 }
+
+/** Build-time release metadata served in the `release` block of `/health`. */
+export interface ReleaseInfo {
+  stage: string;
+  production_trust_ready: boolean;
+  data_durability: string;
+  notice: string;
+  /** `"stable"` or `"preview"` — stamped into the binary by `src-tauri/build.rs`. */
+  channel: string;
+  /** e.g. `"preview-v0.10.0-rc.1"`; `null` on stable and unlabelled previews. */
+  preview_tag: string | null;
+}
+
+/**
+ * Read the build-time release metadata from `/health`.
+ *
+ * Deliberately not routed through `apiFetch`: `/health` answers `503` when the
+ * database failed to start, and `apiFetch` throws on any non-2xx. The release
+ * block is a build-time constant present in all three response shapes (`ok`,
+ * `degraded`, `error`), and the channel banner must be visible precisely when
+ * things are going wrong — so this reads the body regardless of status and only
+ * fails if it cannot be parsed.
+ */
+export async function getReleaseInfo(): Promise<ReleaseInfo> {
+  const base = await resolveApiBase();
+  const res = await fetch(`${base}/health`, { cache: "no-store" });
+  const text = await res.text().catch(() => "");
+  if (!text.trimStart().startsWith("{")) {
+    throw new Error("Server not ready — /health did not return JSON");
+  }
+  const body = JSON.parse(text) as { release?: Partial<ReleaseInfo> };
+  const release = body.release;
+  if (!release || typeof release.channel !== "string") {
+    throw new Error("/health did not report a release channel");
+  }
+  return {
+    stage: release.stage ?? "unknown",
+    production_trust_ready: release.production_trust_ready ?? false,
+    data_durability: release.data_durability ?? "unknown",
+    notice: release.notice ?? "",
+    channel: release.channel,
+    preview_tag: release.preview_tag ?? null,
+  };
+}

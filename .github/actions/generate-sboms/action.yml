@@ -1,0 +1,46 @@
+name: Generate release SBOMs
+description: |
+  Produce the two CycloneDX SBOMs every Olympus release asset set carries:
+  `sbom/olympus-desktop.cdx.json` (Rust) and `sbom/public-ui.cdx.json`
+  (frontend). Lifted verbatim from `tauri-release.yml`'s provenance job so the
+  release and preview workflows attest the same shapes.
+
+  Assumes Rust, pnpm, and Node are already installed (see
+  `.github/actions/setup-build-toolchain`) and that `pnpm install
+  --frozen-lockfile` has run.
+
+inputs:
+  cyclonedx-version:
+    description: Pinned cargo-cyclonedx version.
+    default: "0.5.9"
+  output-dir:
+    description: Directory to write the SBOMs into.
+    default: sbom
+
+runs:
+  using: composite
+  steps:
+    - name: Install cargo-cyclonedx
+      shell: bash
+      run: cargo install cargo-cyclonedx --locked --version "${{ inputs.cyclonedx-version }}"
+
+    - name: Generate release SBOMs
+      shell: bash
+      env:
+        SBOM_DIR: ${{ inputs.output-dir }}
+      run: |
+        set -euo pipefail
+        mkdir -p "$SBOM_DIR"
+
+        cargo cyclonedx --format json --manifest-path src-tauri/Cargo.toml
+        mv src-tauri/olympus-desktop.cdx.json "$SBOM_DIR/olympus-desktop.cdx.json"
+
+        pnpm --dir app/public-ui sbom --sbom-format cyclonedx --lockfile-only \
+          > "$SBOM_DIR/public-ui.cdx.json"
+        test -s "$SBOM_DIR/public-ui.cdx.json"
+        jq -e '
+          .bomFormat == "CycloneDX" and
+          .metadata.component.name == "public-ui" and
+          any(.metadata.tools.components[]?; .name == "pnpm") and
+          (.components | length > 0)
+        ' "$SBOM_DIR/public-ui.cdx.json" >/dev/null

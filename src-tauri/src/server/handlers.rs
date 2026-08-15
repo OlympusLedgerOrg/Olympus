@@ -11,12 +11,31 @@ const RELEASE_STAGE: &str = "pre-v1";
 const DATA_DURABILITY: &str = "development-disposable";
 const RELEASE_NOTICE: &str = "Pre-v1 development databases are disposable; durable reliance begins with v1 production ceremony artifacts, documented migrations, and verifier-compatible proof bundles.";
 
+/// Build-time release metadata.
+///
+/// `channel` and `preview_tag` come from the `build.rs` stamp
+/// (docs/plans/preview-release-channel.md §D2) and are the authoritative
+/// answer to "what am I running": the frontend header chip reads them from
+/// here rather than from a Vite define, so there is exactly one source and it
+/// is the one bound to the binary that carries the ceremony artifacts.
+///
+/// Safe on the Tor-facing router. The handler below is careful never to echo
+/// the raw DB error, but that restriction is about internal failure detail;
+/// this block is public build metadata of exactly the same kind as the
+/// `stage`/`notice` fields already served here.
 fn release_metadata() -> serde_json::Value {
+    let preview_tag = crate::env::PREVIEW_TAG;
     json!({
         "stage": RELEASE_STAGE,
         "production_trust_ready": false,
         "data_durability": DATA_DURABILITY,
         "notice": RELEASE_NOTICE,
+        "channel": crate::env::release_channel().as_str(),
+        "preview_tag": if preview_tag.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::Value::String(preview_tag.to_owned())
+        },
     })
 }
 

@@ -15,9 +15,11 @@
     "release-actions:check": "node scripts/check-privileged-action-pins.mjs",
     "release-actions:test": "node --test scripts/check-privileged-action-pins.test.mjs",
     "release-assets:test": "node --test scripts/release-assets.test.mjs",
+    "preview-channel:check": "node scripts/check-preview-channel.mjs",
+    "preview-channel:test": "node --test scripts/check-preview-channel.test.mjs",
     "hooks:test": "node --test scripts/pre-commit-hook.test.mjs",
     "pr-scope:test": "node --test scripts/check-pr-scope.test.mjs",
-    "tooling:check": "pnpm format:check && pnpm license:headers && pnpm license:headers:test && pnpm release-actions:check && pnpm release-actions:test && pnpm release-assets:test && pnpm hooks:test && pnpm pr-scope:test"
+    "tooling:check": "pnpm format:check && pnpm license:headers && pnpm license:headers:test && pnpm release-actions:check && pnpm release-actions:test && pnpm release-assets:test && pnpm preview-channel:check && pnpm preview-channel:test && pnpm hooks:test && pnpm pr-scope:test"
   },
   "devDependencies": {
     "@taplo/cli": "^0.7.0",
