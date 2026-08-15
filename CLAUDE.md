@@ -382,6 +382,7 @@ CodeRabbit's dashboard or docs when one of them is load-bearing for a decision.
     returns. Re-triggering before then simply does nothing, so ask
     `@coderabbitai rate limit` for remaining capacity rather than guessing.
   - The escape hatch is the usage-based add-on (Billing → Subscription,
-    org-admin only, $0.25 per reviewed file). Enabled with credits available,
+    org-admin only; priced per reviewed file, read the current rate there
+    rather than from here). Enabled with credits available,
     over-limit reviews proceed; disabled, or enabled but out of credits, they
     stop until an admin enables it or tops up.
