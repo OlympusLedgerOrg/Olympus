@@ -151,9 +151,9 @@ const InitialSecretsModal: React.FC = () => {
             saving a key they cannot get back. The instruction below is the
             one thing true in both modes, so say only that.
           */}
-          These secrets are shown once. The API key is stored server-side only as a BLAKE3 hash,
-          so it cannot be read back from the database. <strong>Copy both now</strong> and keep
-          them somewhere safe — treat this dialog as the only copy you will get.
+          These secrets are shown once. The API key is stored server-side only as a BLAKE3 hash, so
+          it cannot be read back from the database. <strong>Copy both now</strong> and keep them
+          somewhere safe — treat this dialog as the only copy you will get.
         </p>
 
         {secrets.system_api_key && (
