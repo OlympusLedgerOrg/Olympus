@@ -181,7 +181,8 @@ Status is as of **`ba4bf32`**, current `main`.
 |----|----------|-----------|---------|--------|
 | **M-01** | **Medium** | zk/pdf_objects | *(pass 2)* Unbounded self-recursion in the PDF **trailer-dictionary** parser → stack-overflow `abort()` from a single `POST /ingest/files` | **Open** |
 | L-01 | Low | zk/segment | Unbounded mutual recursion in the PDF structural-object guard → stack-overflow `abort()` on a crafted object body | **Open** — re-confirmed at `segment.rs:327` |
-| I-01 | Informational | verifiers, CI | The producer→verifier round-trip gate still does not exist; conformance vectors remain hand-built | **Open** (root cause of A1-01) |
+| I-01 | ~~Informational~~ | verifiers, CI | The producer→verifier round-trip gate still does not exist; conformance vectors remain hand-built | ✅ **Resolved** — *both* routes taken: the gate by #1645, and the canonical container writers relocated into `olympus_crypto::container` so the generator no longer hand-builds containers |
+| **I-02** | **Medium** | zk/segment/ooxml, verifiers | *(found closing I-01)* OOXML redaction artifacts stamped wall-clock time → rejected by both offline verifiers, non-reproducible, redaction-time leak | ✅ **Resolved** — canonical writer pins a fixed epoch |
 | A1-01 | ~~Medium~~ | verifiers/{rust,javascript} | Offline redaction verifiers reject every genuine bundle for `pdf-object` / `pdf-xref-stream` / `ooxml-part` | ✅ **Resolved** by `baafdc29` (#1401) — all 7 divergences closed in both verifiers |
 | L-02 | ~~Low~~ | anchoring/{rfc3161,ots} | Non-2xx anchor responses bypass the 10 MiB response cap via uncapped `resp.text()` | ✅ **Resolved** — all three error paths now capped |
 
@@ -580,6 +581,23 @@ the extra care documented in that finding.
 
 ### I-01 — Informational — The producer→verifier round-trip gate still does not exist
 
+> ✅ **Resolved.** Both routes named at the end of this write-up were taken. The
+> gate landed in #1645 (`src-tauri/tests/redaction_producer_verifier_round_trip.rs`,
+> dev-depending on `olympus-verifier` by path). The canonical container writers
+> then moved into `olympus_crypto::container`, so `gen_redaction_vectors.rs` and
+> the shipping producer share one implementation instead of two that agree by
+> hand. The write-up below is left as the state at `ba4bf32`.
+>
+> Relocating the writers surfaced a **live defect** in the one format the gate did
+> not yet cover, and it is worth recording as its own finding — see
+> [I-02](#i-02--medium--ooxml-redaction-artifacts-stamped-wall-clock-time-and-were-rejected-by-both-offline-verifiers).
+> In short: the shipping producer stamped the **current wall-clock time** into
+> every `ooxml-part` artifact, which made those artifacts non-reproducible and
+> made both offline verifiers reject them — `A1-01`'s exact failure mode, still
+> live for this one format, with the whole suite green. The hand-built vectors
+> could not have caught it, because the generator's build resolved the same call
+> to a *different* value.
+
 **Component:** `verifiers/{rust,javascript}`, `crates/olympus-crypto/examples/gen_redaction_vectors.rs`, CI
 
 `A1-01`'s remediation list opened with "**The missing gate (do this first)** … Everything below is
@@ -611,6 +629,56 @@ a test that dev-depends on `olympus-verifier` by path (`src-tauri` already pins 
 `ark-*` 0.6 and `risc0-zkvm` 3.0.6 versions the verifier uses, and
 `tests/snapshot_cross_crate_parity.rs` is the precedent for this shape); or relocate the canonical
 container writers into `olympus-crypto` so the producer and the generator share one implementation.
+
+### I-02 — Medium — OOXML redaction artifacts stamped wall-clock time and were rejected by both offline verifiers
+
+**Component:** `zk::segment::ooxml`, `verifiers/{rust,javascript}`
+
+*Found while implementing `I-01`'s second route; not part of the original pass.*
+
+`build_canonical_zip` configured its entries with `zip::DateTime::default_for_write()`
+and documented the result as "fixed write-default metadata. Deterministic output."
+That call is **feature-dependent**:
+
+```rust
+#[cfg(feature = "time")]      fn default_for_write() -> Self { /* current wall-clock time */ }
+#[cfg(not(feature = "time"))] fn default_for_write() -> Self { DateTime::default() /* 1980-01-01 */ }
+```
+
+The workspace graph enables `zip/time`, so the shipping producer wrote the current
+timestamp into every local header. Three consequences, all confirmed against the
+real producer:
+
+1. **Both offline verifiers rejected every genuine `ooxml-part` bundle.** They
+   require `mtime == 0` and `mdate ∈ {0, 33}`; a wall-clock stamp fails that as
+   `non-canonical ooxml zip entry`. This is `A1-01`'s failure mode, still live for
+   this one format after #1401 closed the other two.
+2. **Artifacts were not reproducible** — the same redaction of the same document
+   produced different bytes on each run, contradicting the function's own doc
+   comment. (Commitments were unaffected: leaves bind `lp(name) || payload`, never
+   header bytes, so roots and re-ingest idempotence were always stable. Only the
+   artifact bytes moved.)
+3. **The redaction time leaked into the artifact** — a metadata disclosure in the
+   feature whose purpose is removing information.
+
+**Why the existing tests all passed.** The conformance vectors are generated by
+`olympus-crypto`'s own build, which resolves `zip` **without** `time`; there the
+same call returns 1980-01-01, so the fixtures were canonical and both verifiers
+accepted them. `re_ingesting_the_same_bytes_is_idempotent` asserts `extract`
+idempotence over *input* bytes and never inspected the produced artifact. Nothing
+fed real producer output to a verifier for this format — precisely the gap `I-01`
+describes.
+
+**Resolved.** The canonical writer now pins `zip::DateTime::default()` explicitly,
+which is feature-independent. `ooxml_part_bundle_from_real_producer_is_accepted_by_offline_verifier`
+and `ooxml_artifact_is_byte_reproducible` in the round-trip gate pin both
+properties in the workspace's real feature graph — the configuration that ships.
+The `olympus-crypto` unit test alone cannot catch a regression here, because that
+crate's build resolves the feature the other way; this is noted in the test.
+
+**Operator note.** `ooxml-part` bundles issued before this fix carry wall-clock
+headers and remain unverifiable offline; they need re-issuing from the source
+document. Their commitments were never wrong, so no root or ledger entry changes.
 
 ### Newly covered subsystems — no findings
 

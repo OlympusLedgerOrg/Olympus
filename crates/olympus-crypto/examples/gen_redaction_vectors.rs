@@ -4,7 +4,7 @@
 //! the in-process producer (`src-tauri/.../api/redaction/bundle_v3.rs`) and the
 //! cross-language offline verifiers (`verifiers/{rust,javascript}`).
 //!
-//! Run: `cargo run -p olympus-crypto --example gen_redaction_vectors --features redaction`
+//! Run: `cargo run -p olympus-crypto --example gen_redaction_vectors --features redaction,container`
 //!
 //! The file MUST regenerate deterministically (run twice, diff — identical): the
 //! Ed25519 signing key is a fixed seed and every scalar derives from the pinned
@@ -29,6 +29,7 @@ use ark_bn254::Fr;
 use ark_ff::{BigInteger, PrimeField, Zero};
 use ed25519_dalek::{Signer, SigningKey};
 use num_bigint::{BigInt, BigUint};
+use olympus_crypto::container::{self, pdf::EmittedObject};
 use olympus_crypto::poseidon::poseidon_hash;
 use olympus_crypto::redaction::{
     content_scalar, derive_blinding, redaction_leaf, redaction_leaf_for_segment,
@@ -175,40 +176,26 @@ struct BuiltSegment {
     bytes: Vec<u8>,
 }
 
+/// Build a traditional-xref PDF fixture around bare object bodies.
+///
+/// A thin adapter over [`container::pdf::write_traditional_xref`] — the same
+/// writer the shipping producer uses (`zk::pdf_objects`, `zk::segment::pdf_xref`).
+/// These vectors are therefore *derived* from production code rather than
+/// hand-matched to it, which is what audit V6 `I-01` asked for; a drift in the
+/// producer's container framing now changes these vectors instead of silently
+/// disagreeing with them.
 fn build_traditional_pdf(objects: &[(u32, &[u8])]) -> (Vec<u8>, Vec<BuiltSegment>) {
-    let mut buf = b"%PDF-1.7\n".to_vec();
-    let mut spans = Vec::new();
-    let mut offsets = Vec::new();
-    for &(id, body) in objects {
-        let start = buf.len();
-        offsets.push((id, start));
-        buf.extend_from_slice(format!("{id} 0 obj\n").as_bytes());
-        buf.extend_from_slice(body);
-        buf.extend_from_slice(b"\nendobj");
-        let end = buf.len();
-        buf.extend_from_slice(b"\n");
-        spans.push(BuiltSegment {
-            segment_id: id,
-            offset: start as u64,
-            length: (end - start) as u64,
-            bytes: buf[start..end].to_vec(),
-        });
-    }
-    let xref_off = buf.len();
-    let max_id = objects.iter().map(|(id, _)| *id).max().unwrap_or(0);
-    buf.extend_from_slice(b"xref\n0 1\n0000000000 65535 f \n");
-    let mut i = 0usize;
-    while i < offsets.len() {
-        let mut j = i;
-        while j + 1 < offsets.len() && offsets[j + 1].0 == offsets[j].0 + 1 {
-            j += 1;
-        }
-        buf.extend_from_slice(format!("{} {}\n", offsets[i].0, j - i + 1).as_bytes());
-        for &(_id, off) in &offsets[i..=j] {
-            buf.extend_from_slice(format!("{off:010} 00000 n \n").as_bytes());
-        }
-        i = j + 1;
-    }
+    let emitted: Vec<EmittedObject> = objects
+        .iter()
+        .map(|&(id, body)| EmittedObject {
+            id,
+            generation: 0,
+            bytes: container::pdf::frame_object(id, 0, body),
+        })
+        .collect();
+
+    // The producer takes `/Root` from the source document; a synthetic fixture has
+    // to name it, so derive it from the single Catalog object.
     let catalogs: Vec<u32> = objects
         .iter()
         .filter_map(|(id, body)| {
@@ -220,84 +207,60 @@ fn build_traditional_pdf(objects: &[(u32, &[u8])]) -> (Vec<u8>, Vec<BuiltSegment
     let [root_id] = catalogs.as_slice() else {
         panic!("traditional PDF fixture must contain exactly one Catalog object");
     };
-    buf.extend_from_slice(
-        format!("trailer\n<< /Size {} /Root {root_id} 0 R >>\n", max_id + 1).as_bytes(),
-    );
-    buf.extend_from_slice(format!("startxref\n{xref_off}\n%%EOF\n").as_bytes());
-    (buf, spans)
+    let root_ref = format!("{root_id} 0 R");
+
+    let (artifact, spans) =
+        container::pdf::write_traditional_xref(&emitted, Some(root_ref.as_bytes()))
+            .expect("fixture objects must form a valid traditional xref");
+    // Slice the committed bytes back out of the artifact rather than reusing the
+    // input: if a span were wrong, the leaf would be computed over the wrong bytes
+    // and the vector would encode the bug instead of hiding it.
+    let built = spans
+        .iter()
+        .map(|&(segment_id, offset, length)| BuiltSegment {
+            segment_id,
+            offset,
+            length,
+            bytes: artifact[offset as usize..(offset + length) as usize].to_vec(),
+        })
+        .collect();
+    (artifact, built)
 }
 
-fn crc32(bytes: &[u8]) -> u32 {
-    let mut crc = 0xffff_ffffu32;
-    for &b in bytes {
-        crc ^= b as u32;
-        for _ in 0..8 {
-            let mask = 0u32.wrapping_sub(crc & 1);
-            crc = (crc >> 1) ^ (0xedb8_8320 & mask);
-        }
-    }
-    !crc
-}
-
+/// Build a canonical Stored-ZIP package fixture.
+///
+/// A thin adapter over [`container::ooxml`] — the same writer and span reader the
+/// shipping producer uses (`zk::segment::ooxml`). `segment_id` is the part's index
+/// in the supplied order, matching the producer's canonical (sorted) order.
 fn build_stored_zip(parts: &[(&str, &[u8])]) -> (Vec<u8>, Vec<BuiltSegment>) {
-    let mut buf = Vec::new();
-    let mut central = Vec::new();
-    let mut spans = Vec::new();
-    for (idx, &(name, payload)) in parts.iter().enumerate() {
-        let header_start = buf.len();
-        let crc = crc32(payload);
-        let size = payload.len() as u32;
-        buf.extend_from_slice(b"PK\x03\x04");
-        buf.extend_from_slice(&20u16.to_le_bytes());
-        buf.extend_from_slice(&0u16.to_le_bytes());
-        buf.extend_from_slice(&0u16.to_le_bytes());
-        buf.extend_from_slice(&0u16.to_le_bytes());
-        buf.extend_from_slice(&0u16.to_le_bytes());
-        buf.extend_from_slice(&crc.to_le_bytes());
-        buf.extend_from_slice(&size.to_le_bytes());
-        buf.extend_from_slice(&size.to_le_bytes());
-        buf.extend_from_slice(&(name.len() as u16).to_le_bytes());
-        buf.extend_from_slice(&0u16.to_le_bytes());
-        buf.extend_from_slice(name.as_bytes());
-        let data_start = buf.len();
-        buf.extend_from_slice(payload);
-        spans.push(BuiltSegment {
-            segment_id: idx as u32,
-            offset: data_start as u64,
-            length: payload.len() as u64,
-            bytes: payload.to_vec(),
-        });
-
-        central.extend_from_slice(b"PK\x01\x02");
-        central.extend_from_slice(&20u16.to_le_bytes());
-        central.extend_from_slice(&20u16.to_le_bytes());
-        central.extend_from_slice(&0u16.to_le_bytes());
-        central.extend_from_slice(&0u16.to_le_bytes());
-        central.extend_from_slice(&0u16.to_le_bytes());
-        central.extend_from_slice(&0u16.to_le_bytes());
-        central.extend_from_slice(&crc.to_le_bytes());
-        central.extend_from_slice(&size.to_le_bytes());
-        central.extend_from_slice(&size.to_le_bytes());
-        central.extend_from_slice(&(name.len() as u16).to_le_bytes());
-        central.extend_from_slice(&0u16.to_le_bytes());
-        central.extend_from_slice(&0u16.to_le_bytes());
-        central.extend_from_slice(&0u16.to_le_bytes());
-        central.extend_from_slice(&0u16.to_le_bytes());
-        central.extend_from_slice(&0u32.to_le_bytes());
-        central.extend_from_slice(&(header_start as u32).to_le_bytes());
-        central.extend_from_slice(name.as_bytes());
-    }
-    let central_start = buf.len();
-    buf.extend_from_slice(&central);
-    buf.extend_from_slice(b"PK\x05\x06");
-    buf.extend_from_slice(&0u16.to_le_bytes());
-    buf.extend_from_slice(&0u16.to_le_bytes());
-    buf.extend_from_slice(&(parts.len() as u16).to_le_bytes());
-    buf.extend_from_slice(&(parts.len() as u16).to_le_bytes());
-    buf.extend_from_slice(&(central.len() as u32).to_le_bytes());
-    buf.extend_from_slice(&(central_start as u32).to_le_bytes());
-    buf.extend_from_slice(&0u16.to_le_bytes());
-    (buf, spans)
+    // `segment_id` is the index, and the shipping producer derives ids from
+    // *sorted* part names. An unsorted fixture would emit ids that disagree with
+    // production while every vector still verified — the exact drift class I-01
+    // exists to close, so assert the precondition rather than trust it.
+    assert!(
+        parts.windows(2).all(|w| w[0].0 < w[1].0),
+        "fixture parts must be in canonical sorted-name order"
+    );
+    let owned: Vec<(String, Vec<u8>)> = parts
+        .iter()
+        .map(|&(name, payload)| (name.to_string(), payload.to_vec()))
+        .collect();
+    let artifact = container::ooxml::write_canonical_stored_zip(&owned).expect("canonical zip");
+    let by_name = container::ooxml::stored_data_spans(&artifact).expect("stored data spans");
+    let built = owned
+        .iter()
+        .enumerate()
+        .map(|(idx, (name, _))| {
+            let &(offset, length) = by_name.get(name).expect("part present in produced package");
+            BuiltSegment {
+                segment_id: idx as u32,
+                offset,
+                length,
+                bytes: artifact[offset as usize..(offset + length) as usize].to_vec(),
+            }
+        })
+        .collect();
+    (artifact, built)
 }
 
 /// Assemble + sign a bundle from its ordered segments. Computes the

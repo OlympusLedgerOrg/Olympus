@@ -18,6 +18,9 @@
 use std::collections::{BTreeMap, HashSet};
 use std::io::Read;
 
+use olympus_crypto::container::pdf as container_pdf;
+use olympus_crypto::container::pdf::EmittedObject;
+
 use olympus_crypto::redaction::redaction_leaf_for_segment;
 #[cfg(test)]
 use olympus_crypto::redaction::{content_scalar, derive_blinding, redaction_leaf};
@@ -984,12 +987,16 @@ pub(crate) fn logical_objects(b: &[u8]) -> Result<BTreeMap<u32, (u16, Vec<u8>)>,
 /// (ADR-0028 §2). The xref is emitted as **sparse subsections** over the in-use
 /// object numbers, so a sparse high obj-id (e.g. one object numbered 4 billion)
 /// costs one subsection, not a multi-GB dense table.
+/// A rebuilt traditional-xref PDF: the artifact bytes, plus one
+/// `(obj_id, artifact_offset, artifact_length)` span per emitted object.
+type RebuiltPdf = (Vec<u8>, Vec<container_pdf::ObjectSpan>);
+
 fn rebuild_traditional(
     bodies: &BTreeMap<u32, (u16, Vec<u8>)>,
     redacted: &HashSet<u32>,
     root_ref: Option<&[u8]>,
-) -> Vec<u8> {
-    rebuild_traditional_with_spans(bodies, redacted, root_ref).0
+) -> Result<Vec<u8>, SegmentError> {
+    Ok(rebuild_traditional_with_spans(bodies, redacted, root_ref)?.0)
 }
 
 /// Like [`rebuild_traditional`] but also returns each emitted object's output span
@@ -1001,72 +1008,30 @@ pub(crate) fn rebuild_traditional_with_spans(
     bodies: &BTreeMap<u32, (u16, Vec<u8>)>,
     redacted: &HashSet<u32>,
     root_ref: Option<&[u8]>,
-) -> (Vec<u8>, Vec<(u32, u64, u64)>) {
-    let mut out: Vec<u8> = Vec::new();
-    out.extend_from_slice(b"%PDF-1.7\n");
+) -> Result<RebuiltPdf, SegmentError> {
+    // `bodies` is a BTreeMap, so this is already ascending by object id — the
+    // order `write_traditional_xref` requires.
+    let objects: Vec<EmittedObject> = bodies
+        .iter()
+        .map(|(&id, (generation, body))| {
+            let body: &[u8] = if redacted.contains(&id) {
+                container_pdf::NULL_BODY
+            } else {
+                body
+            };
+            EmittedObject {
+                id,
+                generation: *generation,
+                bytes: container_pdf::frame_object(id, *generation, body),
+            }
+        })
+        .collect();
 
-    // obj_id -> (byte offset in `out`, generation). Sparse — only in-use objects.
-    let mut offsets: BTreeMap<u32, (u64, u16)> = BTreeMap::new();
-    // Exact object spans exclude the separator newline, matching `pdf-object`
-    // and the offline parser's `N G obj … endobj` contract.
-    let mut object_spans: Vec<(u32, u64, u64)> = Vec::with_capacity(bodies.len());
-    for (&id, (generation, body)) in bodies {
-        let start = out.len() as u64;
-        offsets.insert(id, (start, *generation));
-        out.extend_from_slice(format!("{id} {generation} obj\n").as_bytes());
-        if redacted.contains(&id) {
-            out.extend_from_slice(b"null");
-        } else {
-            out.extend_from_slice(body);
-        }
-        out.extend_from_slice(b"\nendobj");
-        let end = out.len() as u64;
-        object_spans.push((id, start, end - start));
-        out.push(b'\n');
-    }
-
-    // /Size is one past the largest object number (PDF §7.5.4).
-    let size = bodies
-        .keys()
-        .copied()
-        .max()
-        .map(|m| m as u64 + 1)
-        .unwrap_or(1);
-
-    let xref_off = out.len();
-    out.extend_from_slice(b"xref\n");
-    // Object 0 is always the free-list head, emitted as its own subsection. The
-    // in-use objects follow as contiguous-run subsections (gaps are implicitly
-    // free; our parser and standard readers treat unlisted numbers as free).
-    out.extend_from_slice(b"0 1\n0000000000 65535 f \n");
-    let ids: Vec<u32> = offsets.keys().copied().collect(); // sorted, all >= 1
-    let mut i = 0;
-    while i < ids.len() {
-        let run_start = ids[i];
-        let mut j = i;
-        while j + 1 < ids.len() && ids[j + 1] == ids[j] + 1 {
-            j += 1;
-        }
-        let run_len = j - i + 1;
-        out.extend_from_slice(format!("{run_start} {run_len}\n").as_bytes());
-        for &id in &ids[i..=j] {
-            let (off, generation) = offsets[&id];
-            out.extend_from_slice(format!("{off:010} {generation:05} n \n").as_bytes());
-        }
-        i = j + 1;
-    }
-
-    out.extend_from_slice(b"trailer\n<< /Size ");
-    out.extend_from_slice(size.to_string().as_bytes());
-    if let Some(r) = root_ref {
-        out.extend_from_slice(b" /Root ");
-        out.extend_from_slice(r);
-    }
-    out.extend_from_slice(b" >>\nstartxref\n");
-    out.extend_from_slice(xref_off.to_string().as_bytes());
-    out.extend_from_slice(b"\n%%EOF\n");
-
-    (out, object_spans)
+    // `bodies` is a BTreeMap so ids are already ascending and unique; the writer
+    // re-checks (and also rejects the reserved id 0 / generation 65535) so a
+    // malformed xref can never reach an artifact.
+    container_pdf::write_traditional_xref(&objects, root_ref)
+        .map_err(|e| malformed(format!("rebuild traditional xref: {e}")))
 }
 
 /// Best-effort `/Root` indirect reference for the rebuilt trailer — `None` if the
@@ -1182,7 +1147,7 @@ impl Segmenter for ModernPdfSegmenter {
         redacted_ids: &[u32],
     ) -> Result<Vec<u8>, SegmentError> {
         let (bodies, redacted, root_ref) = prepare_rebuild(bytes, manifest, redacted_ids)?;
-        Ok(rebuild_traditional(&bodies, &redacted, root_ref.as_deref()))
+        rebuild_traditional(&bodies, &redacted, root_ref.as_deref())
     }
 
     /// The output spans are the rebuilt traditional-xref PDF's per-object offsets
@@ -1197,7 +1162,7 @@ impl Segmenter for ModernPdfSegmenter {
     ) -> Result<(Vec<u8>, Vec<SegmentSpan>), SegmentError> {
         let (bodies, redacted, root_ref) = prepare_rebuild(bytes, manifest, redacted_ids)?;
         let (artifact, obj_spans) =
-            rebuild_traditional_with_spans(&bodies, &redacted, root_ref.as_deref());
+            rebuild_traditional_with_spans(&bodies, &redacted, root_ref.as_deref())?;
         let span_map: BTreeMap<u32, (u64, u64)> = obj_spans
             .into_iter()
             .map(|(id, off, len)| (id, (off, len)))
@@ -1787,7 +1752,7 @@ mod tests {
         bodies.insert(7, (3, b"<< /Note (keep) >>".to_vec())); // gen 3
         bodies.insert(4_000_000_000, (0, b"<< /Note (huge id) >>".to_vec()));
         let redacted: HashSet<u32> = HashSet::new();
-        let out = rebuild_traditional(&bodies, &redacted, Some(b"1 0 R"));
+        let out = rebuild_traditional(&bodies, &redacted, Some(b"1 0 R")).expect("rebuild");
 
         assert!(
             find(&out, b"7 3 obj").is_some(),

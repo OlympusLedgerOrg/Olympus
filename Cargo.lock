@@ -6175,6 +6175,7 @@ dependencies = [
  "thiserror 2.0.19",
  "unicode-normalization",
  "zeroize",
+ "zip 8.6.0",
 ]
 
 [[package]]
