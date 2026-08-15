@@ -225,7 +225,7 @@ export default function DatasetPage() {
           </p>
           <p
             style={{
-              fontFamily: "'DM Mono', monospace",
+              fontFamily: "var(--font-terminal)",
               fontSize: "0.68rem",
               color: "rgba(0,255,65,0.8)",
               wordBreak: "break-all",
@@ -335,7 +335,7 @@ export default function DatasetPage() {
             >
               <span
                 style={{
-                  fontFamily: "'DM Mono', monospace",
+                  fontFamily: "var(--font-terminal)",
                   color: "rgba(0,255,65,0.7)",
                   overflow: "hidden",
                   textOverflow: "ellipsis",
@@ -346,7 +346,7 @@ export default function DatasetPage() {
               </span>
               <span
                 style={{
-                  fontFamily: "'DM Mono', monospace",
+                  fontFamily: "var(--font-terminal)",
                   color: "rgba(0,255,65,0.4)",
                   textAlign: "right",
                   whiteSpace: "nowrap",
@@ -356,7 +356,7 @@ export default function DatasetPage() {
               </span>
               <span
                 style={{
-                  fontFamily: "'DM Mono', monospace",
+                  fontFamily: "var(--font-terminal)",
                   color: "rgba(0,255,65,0.35)",
                   overflow: "hidden",
                   textOverflow: "ellipsis",
@@ -393,7 +393,7 @@ export default function DatasetPage() {
           <pre
             style={{
               fontSize: "0.65rem",
-              fontFamily: "'DM Mono', monospace",
+              fontFamily: "var(--font-terminal)",
               color: "rgba(0,255,65,0.6)",
               padding: "1rem",
               overflowX: "auto",

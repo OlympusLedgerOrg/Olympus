@@ -137,7 +137,7 @@ export default function DbErrorGate({ children }: { children: React.ReactNode })
           flexDirection: "column",
           alignItems: "center",
           justifyContent: "center",
-          fontFamily: "'DM Mono', 'Share Tech Mono', monospace",
+          fontFamily: "var(--font-terminal)",
           padding: "2rem",
         }}
       >

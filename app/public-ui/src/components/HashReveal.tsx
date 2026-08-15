@@ -11,7 +11,7 @@ const HashReveal: FC<HashRevealProps> = ({ hash, label = "BLAKE3_DIGEST" }) => {
   return (
     <div
       style={{
-        fontFamily: "'DM Mono', monospace",
+        fontFamily: "var(--font-terminal)",
         fontSize: "0.7rem",
         wordBreak: "break-all",
         letterSpacing: "0.06em",

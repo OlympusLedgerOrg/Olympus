@@ -109,7 +109,7 @@ export default function RedactionTab({
     textAlign: "center",
     cursor: busy ? "default" : "pointer",
     transition: "border-color 0.15s, background 0.15s",
-    fontFamily: "'DM Mono', monospace",
+    fontFamily: "var(--font-terminal)",
     fontSize: "0.75rem",
   };
   const slotFilled = (filled: boolean): React.CSSProperties =>
@@ -140,7 +140,7 @@ export default function RedactionTab({
           style={{
             margin: "0 0 0.75rem",
             fontSize: "0.72rem",
-            fontFamily: "'DM Mono', monospace",
+            fontFamily: "var(--font-terminal)",
             color: `${purple}0.7)`,
             textAlign: "center",
             letterSpacing: "0.06em",
@@ -243,7 +243,7 @@ export default function RedactionTab({
               placeholder="64-hex issuer verifying key"
               aria-label="Issuer Ed25519 public key"
               style={{
-                fontFamily: "'DM Mono', monospace",
+                fontFamily: "var(--font-terminal)",
                 fontSize: "0.7rem",
                 color: accent,
                 background: "rgba(0,0,0,0.25)",
@@ -297,7 +297,7 @@ export default function RedactionTab({
           style={{
             marginTop: "0.75rem",
             padding: "0.8rem 1rem",
-            fontFamily: "'DM Mono', monospace",
+            fontFamily: "var(--font-terminal)",
             fontSize: "0.78rem",
             borderColor: verified ? `${purple}0.55)` : "rgba(255,80,80,0.45)",
             background: verified ? `${purple}0.04)` : "rgba(255,80,80,0.04)",

@@ -161,7 +161,7 @@ export default function RedactTab({ hook }: RedactTabProps) {
   }, [hook.descriptions, objects, descById]);
 
   return (
-    <div style={{ fontFamily: "'DM Mono', monospace" }}>
+    <div style={{ fontFamily: "var(--font-terminal)" }}>
       {/* Original file drop zone */}
       <div
         role="region"
@@ -194,7 +194,7 @@ export default function RedactTab({ hook }: RedactTabProps) {
             textAlign: "center",
             cursor: busy ? "default" : "pointer",
             background: hook.fileName ? `${purple}0.04)` : "transparent",
-            fontFamily: "'DM Mono', monospace",
+            fontFamily: "var(--font-terminal)",
             fontSize: "0.75rem",
           }}
         >
@@ -847,7 +847,7 @@ export default function RedactTab({ hook }: RedactTabProps) {
 /** Shared inline style for the recipient text input. */
 function textInput(purple: string, accent: string): React.CSSProperties {
   return {
-    fontFamily: "'DM Mono', monospace",
+    fontFamily: "var(--font-terminal)",
     fontSize: "0.7rem",
     color: accent,
     background: "rgba(0,0,0,0.25)",

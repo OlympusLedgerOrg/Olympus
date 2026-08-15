@@ -74,7 +74,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     <div
       className={skin.classes.page}
       style={{
-        fontFamily: "'DM Mono', monospace",
+        fontFamily: "var(--font-terminal)",
         position: "relative",
         overflowX: "hidden",
       }}

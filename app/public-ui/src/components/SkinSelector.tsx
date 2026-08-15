@@ -26,7 +26,7 @@ export default function SkinSelector() {
               border: `1px solid ${active ? "rgba(0,255,65,0.75)" : "rgba(0,255,65,0.22)"}`,
               background: active ? "rgba(0,255,65,0.12)" : "transparent",
               color: active ? "#00FF41" : "rgba(0,255,65,0.45)",
-              fontFamily: "'DM Mono', monospace",
+              fontFamily: "var(--font-terminal)",
               fontSize: "0.52rem",
               letterSpacing: "0.1em",
               textTransform: "uppercase",

@@ -108,7 +108,7 @@ export default function AuditProofTab({
           padding: "1.25rem 1rem",
           background: dragging ? "rgba(0,255,128,0.05)" : "transparent",
           transition: "border-color 0.15s, background 0.15s",
-          fontFamily: "'DM Mono', monospace",
+          fontFamily: "var(--font-terminal)",
           fontSize: "0.75rem",
         }}
       >
@@ -137,7 +137,7 @@ export default function AuditProofTab({
             padding: "1rem 0.75rem",
             textAlign: "center",
             cursor: isVerifying ? "default" : "pointer",
-            fontFamily: "'DM Mono', monospace",
+            fontFamily: "var(--font-terminal)",
             fontSize: "0.75rem",
             color: bundleName ? "#00ff80" : "rgba(0,255,128,0.35)",
             wordBreak: "break-all",
@@ -175,7 +175,7 @@ export default function AuditProofTab({
         <summary
           style={{
             cursor: "pointer",
-            fontFamily: "'DM Mono', monospace",
+            fontFamily: "var(--font-terminal)",
             fontSize: "0.7rem",
             color: "rgba(0,255,128,0.5)",
             letterSpacing: "0.06em",
@@ -190,7 +190,7 @@ export default function AuditProofTab({
           style={{
             marginTop: "0.5rem",
             width: "100%",
-            fontFamily: "'DM Mono', monospace",
+            fontFamily: "var(--font-terminal)",
             fontSize: "0.72rem",
             background: "rgba(0,0,0,0.4)",
             color: "#00ff80",
@@ -213,7 +213,7 @@ export default function AuditProofTab({
           style={{
             marginTop: "0.75rem",
             padding: "0.8rem 1rem",
-            fontFamily: "'DM Mono', monospace",
+            fontFamily: "var(--font-terminal)",
             fontSize: "0.78rem",
             borderColor: result.valid ? "rgba(0,255,128,0.55)" : "rgba(255,80,80,0.45)",
             background: result.valid ? "rgba(0,255,128,0.04)" : "rgba(255,80,80,0.04)",

@@ -95,7 +95,7 @@ export default function RecentVerifications({ onSelect }: RecentVerificationsPro
             <span
               style={{
                 color: "rgba(0,255,65,0.68)",
-                fontFamily: "'DM Mono', monospace",
+                fontFamily: "var(--font-terminal)",
                 overflow: "hidden",
                 textOverflow: "ellipsis",
                 whiteSpace: "nowrap",

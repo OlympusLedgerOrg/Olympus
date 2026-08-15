@@ -17,7 +17,7 @@ export function CopyButton({ value }: { value: string }) {
         background: copied ? "rgba(0,255,65,0.25)" : "rgba(0,255,65,0.08)",
         border: "1px solid rgba(0,255,65,0.5)",
         color: "#00ff41",
-        fontFamily: "'DM Mono', monospace",
+        fontFamily: "var(--font-terminal)",
         fontSize: "0.6rem",
         letterSpacing: "0.1em",
         padding: "0.45rem 0.85rem",

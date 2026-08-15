@@ -82,7 +82,7 @@ const ScopeBanner: React.FC = () => {
         background: "rgba(0,0,0,0.92)",
         border: `1px solid ${active.status === 401 ? "rgba(255,0,85,0.55)" : "rgba(255,200,120,0.5)"}`,
         color: active.status === 401 ? "#ff4477" : "rgba(255,200,120,0.95)",
-        fontFamily: "'DM Mono', monospace",
+        fontFamily: "var(--font-terminal)",
         padding: "0.8rem 1rem",
         boxShadow: "0 0 24px rgba(0,0,0,0.6)",
       }}

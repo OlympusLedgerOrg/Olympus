@@ -99,7 +99,7 @@ export default function VerdictCard({ verdict, details = [], localVerdict }: Ver
             border: `1px solid ${localVerdict ? "rgba(0,255,65,0.3)" : "rgba(255,0,85,0.3)"}`,
             borderRadius: 2,
             marginBottom: "0.75rem",
-            fontFamily: "'DM Mono', monospace",
+            fontFamily: "var(--font-terminal)",
           }}
         >
           {localVerdict ? "✓" : "✗"} CLIENT_MERKLE_VERIFY: {localVerdict ? "PASS" : "FAIL"}
@@ -152,7 +152,7 @@ export default function VerdictCard({ verdict, details = [], localVerdict }: Ver
               </span>
               <span
                 style={{
-                  fontFamily: "'DM Mono', monospace",
+                  fontFamily: "var(--font-terminal)",
                   color: "rgba(0,255,65,0.85)",
                   wordBreak: "break-all",
                   textAlign: "right",

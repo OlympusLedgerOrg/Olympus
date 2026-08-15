@@ -108,7 +108,7 @@ export default function HomePage() {
               fontSize: "clamp(1.8rem, 5vw, 3rem)",
               margin: "0 0 0.75rem",
               textShadow: skin.effects?.showGlow ? "0 0 12px currentColor" : "none",
-              fontFamily: "'DM Mono', monospace",
+              fontFamily: "var(--font-terminal)",
             }}
           >
             VERIFY_TRUTH
