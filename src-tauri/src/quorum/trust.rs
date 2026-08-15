@@ -51,7 +51,10 @@ use olympus_crypto::trust_list::{
     TrustRole,
 };
 
-use super::{verify_generic_quorum, CollectedSignature, QuorumMessage, QuorumSigner, QuorumStatus};
+use super::{
+    verify_generic_quorum_with_identities, CollectedSignature, QuorumMessage, QuorumSigner,
+    QuorumStatus,
+};
 use crate::zk::proof::fr_to_decimal;
 use crate::zk::witness::baby_jubjub::{self, BabyJubJubError};
 
@@ -122,6 +125,29 @@ pub fn verify_trust_rotation_approval(
     activation_at: i64,
     sigs: &[CollectedSignature],
 ) -> Result<QuorumStatus, TrustQuorumError> {
+    Ok(verify_trust_rotation_approval_with_identities(
+        prior_policy,
+        previous_snapshot_digest,
+        next_snapshot_digest,
+        previous_sequence,
+        next_sequence,
+        activation_at,
+        sigs,
+    )?
+    .0)
+}
+
+/// [`verify_trust_rotation_approval`], additionally returning the normalized
+/// identities of the signers whose signature counted (ADR-0041 §6).
+pub fn verify_trust_rotation_approval_with_identities(
+    prior_policy: &RotationPolicy,
+    previous_snapshot_digest: &[u8; 32],
+    next_snapshot_digest: &[u8; 32],
+    previous_sequence: u64,
+    next_sequence: u64,
+    activation_at: i64,
+    sigs: &[CollectedSignature],
+) -> Result<(QuorumStatus, Vec<(String, String)>), TrustQuorumError> {
     prior_policy.validate()?;
     let signers = quorum_signers_from_trust_pubkeys(&prior_policy.signers)?;
     let message = QuorumMessage::trust_rotation(
@@ -131,7 +157,7 @@ pub fn verify_trust_rotation_approval(
         next_sequence,
         activation_at,
     );
-    Ok(verify_generic_quorum(
+    Ok(verify_generic_quorum_with_identities(
         &message,
         &signers,
         usize::from(prior_policy.threshold),
@@ -157,6 +183,36 @@ pub fn verify_trust_recovery_approval(
     activation_at: i64,
     sigs: &[CollectedSignature],
 ) -> Result<QuorumStatus, TrustQuorumError> {
+    Ok(verify_trust_recovery_approval_with_identities(
+        pinned_recovery_key,
+        role,
+        previous_snapshot_digest,
+        recovery_snapshot_digest,
+        previous_sequence,
+        next_sequence,
+        reason,
+        activation_at,
+        sigs,
+    )?
+    .0)
+}
+
+/// [`verify_trust_recovery_approval`], additionally returning the normalized
+/// identity of the pinned recovery key if (and only if) its signature counted
+/// (ADR-0041 §6) — either empty (no valid signature) or exactly one entry,
+/// since recovery is intrinsically 1-of-1.
+#[allow(clippy::too_many_arguments)]
+pub fn verify_trust_recovery_approval_with_identities(
+    pinned_recovery_key: &TrustPubKey,
+    role: TrustRole,
+    previous_snapshot_digest: &[u8; 32],
+    recovery_snapshot_digest: &[u8; 32],
+    previous_sequence: u64,
+    next_sequence: u64,
+    reason: RecoveryReason,
+    activation_at: i64,
+    sigs: &[CollectedSignature],
+) -> Result<(QuorumStatus, Vec<(String, String)>), TrustQuorumError> {
     let signer = quorum_signer_from_trust_pubkey(pinned_recovery_key)?;
     let message = QuorumMessage::trust_recovery(
         role,
@@ -167,7 +223,12 @@ pub fn verify_trust_recovery_approval(
         reason,
         activation_at,
     );
-    Ok(verify_generic_quorum(&message, &[signer], 1, sigs))
+    Ok(verify_generic_quorum_with_identities(
+        &message,
+        &[signer],
+        1,
+        sigs,
+    ))
 }
 
 /// Verify a genesis approval set against the explicit
@@ -185,10 +246,20 @@ pub fn verify_trust_genesis_approval(
     snapshot: &TrustListSnapshotV1,
     sigs: &[CollectedSignature],
 ) -> Result<QuorumStatus, TrustQuorumError> {
+    Ok(verify_trust_genesis_approval_with_identities(approval_policy, snapshot, sigs)?.0)
+}
+
+/// [`verify_trust_genesis_approval`], additionally returning the normalized
+/// identities of the signers whose signature counted (ADR-0041 §6).
+pub fn verify_trust_genesis_approval_with_identities(
+    approval_policy: &GenesisApprovalPolicy,
+    snapshot: &TrustListSnapshotV1,
+    sigs: &[CollectedSignature],
+) -> Result<(QuorumStatus, Vec<(String, String)>), TrustQuorumError> {
     approval_policy.validate()?;
     let signers = quorum_signers_from_trust_pubkeys(&approval_policy.signers)?;
     let message = QuorumMessage::trust_genesis(snapshot, approval_policy);
-    Ok(verify_generic_quorum(
+    Ok(verify_generic_quorum_with_identities(
         &message,
         &signers,
         usize::from(approval_policy.threshold),
@@ -552,19 +623,25 @@ mod tests {
         let replayed = verify_trust_genesis_approval(&policy, &snap, &other).expect("verify");
         assert_eq!(replayed.valid_signatures, 0);
 
-        // ...and approvals over the same snapshot under a different policy
-        // (lowered threshold) also count zero — the policy is bound.
-        let lowered = genesis_policy(&[k1, k2], 2);
-        let mut policy_with_extra = lowered.clone();
+        // ...and approvals over the same snapshot under a different signer
+        // set count zero — the signer set is bound.
+        let mut policy_with_extra = policy.clone();
         policy_with_extra.signers = sorted(vec![
             trust_key_for(&k1),
             trust_key_for(&k2),
             trust_key_for(&[22u8; 32]),
         ]);
-        policy_with_extra.threshold = 2;
         let cross_policy =
             verify_trust_genesis_approval(&policy_with_extra, &snap, &sigs).expect("verify");
         assert_eq!(cross_policy.valid_signatures, 0);
+
+        // ...and the threshold alone is bound too: same signers, threshold 3.
+        let mut policy_with_higher_threshold = genesis_policy(&[k1, k2, [22u8; 32]], 3);
+        policy_with_higher_threshold.signers = policy_with_extra.signers.clone();
+        let cross_threshold =
+            verify_trust_genesis_approval(&policy_with_higher_threshold, &snap, &sigs)
+                .expect("verify");
+        assert_eq!(cross_threshold.valid_signatures, 0);
     }
 
     /// ADR-0041 §5 regression: all five quorum domains routed through the

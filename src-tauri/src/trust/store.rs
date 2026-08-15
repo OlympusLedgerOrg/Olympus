@@ -74,7 +74,9 @@ use uuid::Uuid;
 
 use super::config::{snapshot_freshness_violation, FreshnessViolation, TrustFreshnessConfig};
 use crate::quorum::trust::{
-    verify_trust_genesis_approval, verify_trust_recovery_approval, verify_trust_rotation_approval,
+    verify_trust_genesis_approval, verify_trust_genesis_approval_with_identities,
+    verify_trust_recovery_approval, verify_trust_recovery_approval_with_identities,
+    verify_trust_rotation_approval, verify_trust_rotation_approval_with_identities,
     TrustQuorumError,
 };
 use crate::quorum::{CollectedSignature, QuorumSigner};
@@ -302,6 +304,23 @@ impl AcceptedChain {
     }
 }
 
+/// ADR-0041 §2: the wire tag of the first *active* role governed by a
+/// `local_only` rotation policy in `snapshot`, if any. Production refuses to
+/// operate under such a role — a locally-verified policy has no quorum peers
+/// to catch a compromised or careless single operator. Shared by every
+/// checkpoint that must enforce this in production: candidate validation
+/// ([`validate_transition`]), activation ([`activate_transition`]), and
+/// startup reconciliation's final judgment of an already-Active snapshot
+/// ([`super::reconcile::reconcile_at_startup`]) — the three checkpoints
+/// together cover a role that starts, stays, or is discovered LocalOnly,
+/// since none of them re-runs another's work.
+pub(crate) fn local_only_active_role(snapshot: &TrustListSnapshotV1) -> Option<&'static str> {
+    snapshot.rotation_policies.iter().find_map(|(role, policy)| {
+        (snapshot.active_roles.contains(role) && policy.profile == RotationPolicyProfile::LocalOnly)
+            .then(|| role.wire_tag())
+    })
+}
+
 fn hex_digest(digest: &[u8; 32]) -> String {
     hex::encode(digest)
 }
@@ -443,14 +462,8 @@ fn validate_transition(
         // local_only policy. (The separately named local-only deployment
         // mode does not exist yet; when the genesis CLI lands it will thread
         // an explicit override here rather than weakening this default.)
-        for (role, policy) in &snapshot.rotation_policies {
-            if snapshot.active_roles.contains(role)
-                && policy.profile == RotationPolicyProfile::LocalOnly
-            {
-                return Err(TrustTransitionError::LocalOnlyPolicyInProduction {
-                    role: role.wire_tag(),
-                });
-            }
+        if let Some(role) = local_only_active_role(snapshot) {
+            return Err(TrustTransitionError::LocalOnlyPolicyInProduction { role });
         }
     }
 
@@ -476,7 +489,8 @@ fn validate_transition(
             if is_prod && policy.profile == RotationPolicyProfile::LocalOnly {
                 return Err(TrustTransitionError::LocalOnlyGenesisPolicyInProduction);
             }
-            let status = verify_trust_genesis_approval(policy, snapshot, &collected)?;
+            let (status, valid_signer_ids) =
+                verify_trust_genesis_approval_with_identities(policy, snapshot, &collected)?;
             if !status.satisfied {
                 return Err(TrustTransitionError::InsufficientGenesisApprovals {
                     valid: status.valid_signatures,
@@ -488,7 +502,13 @@ fn validate_transition(
                 authorization_json: serde_json::json!({
                     "genesis_approval_policy": ThresholdPolicyWire::from_genesis_policy(policy),
                 }),
-                verification_json: serde_json::json!({ "genesis": status }),
+                // ADR-0041 §6: the candidate record must name the submitted
+                // signatures AND the valid signer identities, not merely a
+                // count — `valid_signer_ids` is the exact `(x, y)` set
+                // `verify_trust_genesis_approval_with_identities` counted.
+                verification_json: serde_json::json!({
+                    "genesis": { "status": status, "valid_signer_ids": valid_signer_ids },
+                }),
             })
         }
         TrustTransitionKind::Rotation => {
@@ -497,7 +517,7 @@ fn validate_transition(
             let required = required_rotation_policies(&tip.snapshot, snapshot)?;
             let mut statuses = Vec::with_capacity(required.len());
             for (role, policy) in &required {
-                let status = verify_trust_rotation_approval(
+                let (status, valid_signer_ids) = verify_trust_rotation_approval_with_identities(
                     policy,
                     &tip.digest,
                     &digest,
@@ -516,6 +536,7 @@ fn validate_transition(
                 statuses.push(serde_json::json!({
                     "role": role.wire_tag(),
                     "status": status,
+                    "valid_signer_ids": valid_signer_ids,
                 }));
             }
             Ok(ValidatedTransition {
@@ -558,7 +579,7 @@ fn validate_transition(
                     role: role.wire_tag(),
                 },
             )?;
-            let status = verify_trust_recovery_approval(
+            let (status, valid_signer_ids) = verify_trust_recovery_approval_with_identities(
                 pinned,
                 role,
                 &tip.digest,
@@ -583,7 +604,9 @@ fn validate_transition(
                     "recovery_reason": reason.wire_tag(),
                     "recovery_key": olympus_crypto::trust_wire::TrustPubKeyWire::from_key(pinned),
                 }),
-                verification_json: serde_json::json!({ "recovery": status }),
+                verification_json: serde_json::json!({
+                    "recovery": { "status": status, "valid_signer_ids": valid_signer_ids },
+                }),
             })
         }
     }
@@ -647,6 +670,19 @@ impl CandidateRow {
                 candidate_id: self.candidate_id,
                 stored: self.next_snapshot_digest.clone(),
                 recomputed: hex_digest(&digest),
+            });
+        }
+        // No unsigned column may override a signed value (ADR-0041 §3) — the
+        // same rule `load_accepted_chain_conn` applies to accepted rows.
+        // `accept_candidate` probes the successor slot with this unsigned
+        // `next_sequence` column but inserts the signed `snapshot.sequence`;
+        // if they disagreed, the slot probe would read the wrong slot and
+        // surface as an untyped DB unique-constraint error instead of this
+        // typed one.
+        if u64::try_from(self.next_sequence).ok() != Some(snapshot.sequence) {
+            return Err(TrustTransitionError::ChainRowDisagreesWithSignedSnapshot {
+                sequence: snapshot.sequence,
+                field: "next_sequence",
             });
         }
 
@@ -1182,14 +1218,9 @@ pub async fn activate_transition(
     }
     link.snapshot.validate(config.max_lifetime.seconds())?;
     if is_prod {
-        for (role, policy) in &link.snapshot.rotation_policies {
-            if link.snapshot.active_roles.contains(role)
-                && policy.profile == RotationPolicyProfile::LocalOnly
-            {
-                let role = role.wire_tag();
-                tx.rollback().await?;
-                return Err(TrustTransitionError::LocalOnlyPolicyInProduction { role });
-            }
+        if let Some(role) = local_only_active_role(&link.snapshot) {
+            tx.rollback().await?;
+            return Err(TrustTransitionError::LocalOnlyPolicyInProduction { role });
         }
     }
 
@@ -1201,7 +1232,7 @@ pub async fn activate_transition(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::quorum::trust::{approve_trust_genesis, approve_trust_rotation};
+    use crate::quorum::trust::{approve_trust_genesis, approve_trust_recovery, approve_trust_rotation};
     use crate::trust::config::FreshnessLimit;
     use olympus_crypto::trust_list::{GenesisApprovalPolicy, RecoveryReason, TrustedIssuerEntry};
     use std::collections::BTreeSet;
@@ -1335,6 +1366,50 @@ mod tests {
             snapshot,
             approvals,
             recovery: None,
+            genesis_approval_policy: None,
+        }
+    }
+
+    /// Build a role-scoped recovery transition file on `tip`, signed by
+    /// `signer` under the recovery domain (`OLY:TRUST:RECOVER:V1`). Only the
+    /// recovering role's rotation policy is changed (fresh signers), so the
+    /// ADR-0041 §7 scope check on every other role's projection passes
+    /// trivially — `base_snapshot` has exactly one active role.
+    fn recovery_file_on(
+        tip: &AcceptedLink,
+        role: TrustRole,
+        reason: RecoveryReason,
+        signer: &[u8; 32],
+    ) -> TrustTransitionFile {
+        let mut snapshot = tip.snapshot.clone();
+        snapshot.sequence = tip.sequence + 1;
+        snapshot.previous_snapshot_digest = Some(tip.digest);
+        snapshot.activation_at = tip.activation_at + 100;
+        snapshot.rotation_policies.insert(
+            role,
+            RotationPolicy {
+                profile: RotationPolicyProfile::Production,
+                signers: sorted_keys(&[[50u8; 32], [51u8; 32]]),
+                threshold: 2,
+            },
+        );
+        let digest = snapshot_digest(&snapshot);
+        let approval = approve_trust_recovery(
+            signer,
+            role,
+            &tip.digest,
+            &digest,
+            tip.sequence,
+            snapshot.sequence,
+            reason,
+            snapshot.activation_at,
+        )
+        .expect("sign");
+        TrustTransitionFile {
+            kind: TrustTransitionKind::Recovery,
+            snapshot,
+            approvals: vec![approval_wire(approval)],
+            recovery: Some((role, reason)),
             genesis_approval_policy: None,
         }
     }
@@ -1638,6 +1713,106 @@ mod tests {
                 modified: "checkpoint_authority"
             })
         ));
+    }
+
+    // ── tsc-2: the pinned-recovery-key signature gate must be provably
+    // enforced in both directions — a regression that inverts or deletes it
+    // (store.rs's `!status.satisfied` check in the Recovery arm) would leave
+    // every OTHER trust test green, since none of them exercises this path.
+
+    #[test]
+    fn recovery_signed_by_the_pinned_key_is_accepted() {
+        let tip = genesis_link();
+        let file = recovery_file_on(
+            &tip,
+            TrustRole::CredentialAuthority,
+            RecoveryReason::QuorumCompromise,
+            &RECOVERY,
+        );
+        let validated = validate_transition(Some(&tip), &file, NOW, &dev_config(), false)
+            .expect("pinned-key recovery must be accepted");
+        assert_eq!(
+            hex::encode(validated.digest),
+            hex::encode(snapshot_digest(&file.snapshot))
+        );
+        assert_eq!(
+            validated.authorization_json["recovery_role"],
+            "credential_authority"
+        );
+    }
+
+    #[test]
+    fn recovery_signed_by_the_routine_rotation_quorum_is_rejected() {
+        // ROT1/ROT2 are the role's ordinary 2-of-2 rotation signers, not the
+        // pinned recovery key. Security invariant 12 (ADR-0041 §7): a quorum
+        // of routine signers must never substitute for offline recovery.
+        let tip = genesis_link();
+        let mut file = recovery_file_on(
+            &tip,
+            TrustRole::CredentialAuthority,
+            RecoveryReason::QuorumCompromise,
+            &RECOVERY,
+        );
+        file.approvals = [ROT1, ROT2]
+            .iter()
+            .map(|key| {
+                approval_wire(
+                    approve_trust_recovery(
+                        key,
+                        TrustRole::CredentialAuthority,
+                        &tip.digest,
+                        &snapshot_digest(&file.snapshot),
+                        tip.sequence,
+                        file.snapshot.sequence,
+                        RecoveryReason::QuorumCompromise,
+                        file.snapshot.activation_at,
+                    )
+                    .expect("sign"),
+                )
+            })
+            .collect();
+        assert!(matches!(
+            validate_transition(Some(&tip), &file, NOW, &dev_config(), false),
+            Err(TrustTransitionError::InsufficientRecoveryApproval {
+                role: "credential_authority"
+            })
+        ));
+    }
+
+    #[test]
+    fn recovery_for_a_role_with_no_pinned_recovery_key_is_rejected() {
+        // `TrustListSnapshotV1::validate` unconditionally requires every
+        // *active* role to carry a recovery key (crypto's
+        // `RoleMissingRecoveryKey`), so a role that could reach this store-level
+        // `RecoveryKeyNotPinned` check must be one that was never configured on
+        // the tip snapshot at all — not merely stripped of its key. `base_snapshot`
+        // only defines `CredentialAuthority`; recovering the never-configured
+        // `CheckpointAuthority` hits `tip.snapshot.recovery_keys.get(&role) ==
+        // None` the moment it's consulted, before any signature is checked.
+        let tip = genesis_link();
+        let role = TrustRole::CheckpointAuthority;
+        let mut snapshot = tip.snapshot.clone();
+        snapshot.sequence = tip.sequence + 1;
+        snapshot.previous_snapshot_digest = Some(tip.digest);
+        snapshot.activation_at = tip.activation_at + 100;
+        let file = TrustTransitionFile {
+            kind: TrustTransitionKind::Recovery,
+            snapshot,
+            approvals: Vec::new(),
+            recovery: Some((role, RecoveryReason::QuorumCompromise)),
+            genesis_approval_policy: None,
+        };
+        let result = validate_transition(Some(&tip), &file, NOW, &dev_config(), false);
+        let debug = result.as_ref().map(|_| ()).map_err(ToString::to_string);
+        assert!(
+            matches!(
+                result,
+                Err(TrustTransitionError::RecoveryKeyNotPinned {
+                    role: "checkpoint_authority"
+                })
+            ),
+            "{debug:?}"
+        );
     }
 
     #[test]

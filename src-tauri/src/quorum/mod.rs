@@ -237,6 +237,22 @@ pub(crate) fn verify_generic_quorum(
     threshold: usize,
     sigs: &[CollectedSignature],
 ) -> QuorumStatus {
+    verify_generic_quorum_with_identities(message, signers, threshold, sigs).0
+}
+
+/// [`verify_generic_quorum`], additionally returning the normalized
+/// (decimal `x`, decimal `y`) identity of every signer whose signature
+/// actually counted toward `valid_signatures` — the set `verify_generic_quorum`
+/// itself computes and discards. Trust-domain callers persist this set
+/// (ADR-0041 §6 requires candidate records to name "submitted signatures and
+/// valid signer identities", not merely a count); SBT/checkpoint callers keep
+/// using the count-only wrapper above, so their response shape is unchanged.
+pub(crate) fn verify_generic_quorum_with_identities(
+    message: &QuorumMessage,
+    signers: &[QuorumSigner],
+    threshold: usize,
+    sigs: &[CollectedSignature],
+) -> (QuorumStatus, Vec<(String, String)>) {
     use std::collections::BTreeSet;
 
     let allowed: BTreeSet<(String, String)> = signers.iter().filter_map(normalize_signer).collect();
@@ -264,12 +280,13 @@ pub(crate) fn verify_generic_quorum(
     }
 
     let valid_signatures = counted.len();
-    QuorumStatus {
+    let status = QuorumStatus {
         threshold,
         total_signers: allowed.len(),
         valid_signatures,
         satisfied: threshold >= 1 && valid_signatures >= threshold,
-    }
+    };
+    (status, counted.into_iter().collect())
 }
 
 /// Derive the quorum co-sign message (a BN254 `Fr`) every signer signs.

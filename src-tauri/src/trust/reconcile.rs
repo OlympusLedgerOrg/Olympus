@@ -31,7 +31,9 @@ use sqlx::PgPool;
 
 use super::config::{snapshot_freshness_violation, TrustFreshnessConfig};
 use super::resolver::SnapshotTrustResolver;
-use super::store::{activate_transition, load_accepted_chain, TrustTransitionError};
+use super::store::{
+    activate_transition, load_accepted_chain, local_only_active_role, TrustTransitionError,
+};
 
 /// Outcome of a successful startup reconciliation.
 #[derive(Debug)]
@@ -142,12 +144,33 @@ pub async fn reconcile_at_startup(
         };
         match activate_transition(pool, link.candidate_id, now, config, is_prod).await {
             Ok(()) => activated_now += 1,
-            // Not yet eligible (or no longer activatable): stop walking.
-            // Whether the resulting state is acceptable is judged below on
-            // the final Active snapshot, not here — a stale *successor* must
-            // not take the already-Active predecessor down with it.
+            // Not yet eligible, or eligible but disqualified in a way that is
+            // specific to THIS successor rather than to the chain itself:
+            // stop walking, but do not fail the node. `trust_accepted_transitions`
+            // is append-only with `UNIQUE(next_sequence)` (migration 0063), so
+            // an already-accepted successor can never be re-slotted — treating
+            // any of these as a hard error would permanently brick every future
+            // boot on a predecessor that is otherwise fine, which is strictly
+            // worse than just not advancing:
+            //   - `ActivationTimeNotReached` / `SnapshotNotFresh` — the
+            //     successor just hasn't come due, or has aged out; both can
+            //     still resolve on a later boot as wall-clock advances.
+            //   - `LocalOnlyPolicyInProduction` — the successor was accepted
+            //     under a laxer environment (e.g. staged in dev) and is
+            //     disqualified only now that this boot is production; it says
+            //     nothing about the predecessor already Active.
+            //   - `SnapshotInvalid` (`TrustListError::LifetimeTooLong`, the
+            //     only variant reachable here — every other `validate()` check
+            //     already passed at accept time and cannot un-pass against
+            //     immutable stored bytes) — an operator tightened
+            //     `OLYMPUS_TRUST_LIST_MAX_LIFETIME_SECS` after this successor
+            //     was accepted; again a fact about this row, not the chain.
+            // Whether the resulting Active snapshot itself is acceptable is
+            // judged below, independently of why the walk stopped.
             Err(TrustTransitionError::ActivationTimeNotReached { .. })
-            | Err(TrustTransitionError::SnapshotNotFresh(_)) => break,
+            | Err(TrustTransitionError::SnapshotNotFresh(_))
+            | Err(TrustTransitionError::LocalOnlyPolicyInProduction { .. })
+            | Err(TrustTransitionError::SnapshotInvalid(_)) => break,
             Err(other) => return Err(other),
         }
     }
@@ -161,6 +184,20 @@ pub async fn reconcile_at_startup(
         Some(active) => {
             if let Some(violation) = snapshot_freshness_violation(&active.snapshot, now, config) {
                 return Err(violation.into());
+            }
+            // ADR-0041 §2/§11: production refuses to serve an Active snapshot
+            // governed by a local_only policy, independent of how it became
+            // Active. `validate_transition`/`activate_transition` enforce
+            // this at the moment of acceptance/activation, but neither runs
+            // again for a link that was already Active before this boot (the
+            // walk above only ever calls `activate_transition` on the first
+            // non-activated link) — so a chain built under a laxer
+            // environment (e.g. dev) and later booted as production must be
+            // re-judged here, on the snapshot this boot is about to serve.
+            if is_prod {
+                if let Some(role) = local_only_active_role(&active.snapshot) {
+                    return Err(TrustTransitionError::LocalOnlyPolicyInProduction { role });
+                }
             }
             Ok(TrustReconcileOutcome::ChainActive {
                 resolver: SnapshotTrustResolver::new(
