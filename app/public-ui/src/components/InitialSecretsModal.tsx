@@ -44,15 +44,18 @@ const InitialSecretsModal: React.FC = () => {
         if (cancelled) return;
         if (result && (result.system_api_key || result.bjj_authority_key_hex)) {
           setSecrets(result);
-          // Pre-fill the admin-key field that the existing AdminPage /
-          // IngestPage components read out of localStorage. The operator
-          // can change/delete it any time.
+          // Pre-fill the two in-memory slots that AdminPage / IngestPage
+          // read from. These are module-scoped variables in storage.ts,
+          // NOT localStorage — see the SECURITY MODEL comment there. The
+          // operator can change or clear the value any time, and it does
+          // not survive a reload, which is what the note in the modal body
+          // tells them.
           //
           // The system bootstrap key plays double duty: it's the operator-
           // tier admin secret (x-admin-key) AND a regular admin-scope API
-          // key. Store under both keys so the IngestPage's API-key field
-          // auto-fills too — otherwise the modal's "Already saved…" note
-          // is a lie and the operator has to manually paste it.
+          // key. Populate both slots so the IngestPage's API-key field
+          // auto-fills too, otherwise the operator has to paste it by hand
+          // into a surface the modal says is already wired up.
           if (result.system_api_key) {
             setStoredAdminKey(result.system_api_key);
             setStoredApiKey(result.system_api_key);
@@ -112,7 +115,7 @@ const InitialSecretsModal: React.FC = () => {
           background: "#000",
           border: "2px solid rgba(0,255,65,0.55)",
           padding: "1.8rem 2rem",
-          fontFamily: "'DM Mono', monospace",
+          fontFamily: "var(--font-terminal)",
           color: "#00ff41",
         }}
       >
@@ -175,7 +178,7 @@ const InitialSecretsModal: React.FC = () => {
                 background: apiCopied ? "rgba(0,255,65,0.22)" : "rgba(0,255,65,0.08)",
                 border: "1px solid rgba(0,255,65,0.5)",
                 color: "#00ff41",
-                fontFamily: "'DM Mono', monospace",
+                fontFamily: "var(--font-terminal)",
                 fontSize: "0.62rem",
                 letterSpacing: "0.08em",
                 padding: "0.42rem 0.9rem",
@@ -192,8 +195,9 @@ const InitialSecretsModal: React.FC = () => {
                 lineHeight: 1.4,
               }}
             >
-              Already saved to your browser's localStorage so the IngestPage / KEYS pages pick it up
-              automatically. Keep an external copy too — clearing browser storage loses it.
+              Loaded into this session, so the IngestPage / KEYS pages pick it up automatically. It
+              is held in memory only — never written to disk or browser storage — so reloading or
+              restarting the app clears it. Save an external copy now.
             </p>
           </section>
         )}
@@ -231,7 +235,7 @@ const InitialSecretsModal: React.FC = () => {
                 background: bjjCopied ? "rgba(0,255,65,0.22)" : "rgba(0,255,65,0.08)",
                 border: "1px solid rgba(0,255,65,0.5)",
                 color: "#00ff41",
-                fontFamily: "'DM Mono', monospace",
+                fontFamily: "var(--font-terminal)",
                 fontSize: "0.62rem",
                 letterSpacing: "0.08em",
                 padding: "0.42rem 0.9rem",
@@ -326,7 +330,7 @@ const InitialSecretsModal: React.FC = () => {
                       : blockedByCopy
                         ? "rgba(255,68,119,0.5)"
                         : "#ff4477",
-                    fontFamily: "'DM Mono', monospace",
+                    fontFamily: "var(--font-terminal)",
                     fontSize: "0.7rem",
                     letterSpacing: "0.1em",
                     padding: "0.6rem 1.4rem",

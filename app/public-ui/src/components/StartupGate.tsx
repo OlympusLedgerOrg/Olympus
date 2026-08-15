@@ -9,7 +9,7 @@ const inp: React.CSSProperties = {
   background: "rgba(0,0,0,0.7)",
   border: "1px solid rgba(0,255,65,0.25)",
   color: "#00ff41",
-  fontFamily: "'DM Mono', monospace",
+  fontFamily: "var(--font-terminal)",
   fontSize: "0.82rem",
   padding: "0.65rem 0.85rem",
   outline: "none",
@@ -161,8 +161,9 @@ export default function StartupGate({ children }: { children: React.ReactNode })
                   marginBottom: "1.25rem",
                 }}
               >
-                This key is stored in your browser and pre-filled in the LEDGER tab. Also save a
-                copy somewhere safe — it will not be shown again.
+                This key is held in memory for this session and pre-filled in the LEDGER tab. It is
+                not written to disk or browser storage, so reloading or restarting the app clears
+                it. Save a copy somewhere safe — it will not be shown again.
               </div>
               <button
                 type="button"
@@ -173,7 +174,7 @@ export default function StartupGate({ children }: { children: React.ReactNode })
                   background: "rgba(0,255,65,0.14)",
                   border: "1px solid rgba(0,255,65,0.6)",
                   color: "#00ff41",
-                  fontFamily: "'DM Mono', monospace",
+                  fontFamily: "var(--font-terminal)",
                   fontSize: "0.72rem",
                   letterSpacing: "0.14em",
                   cursor: "pointer",
@@ -240,7 +241,7 @@ export default function StartupGate({ children }: { children: React.ReactNode })
                   background: busy ? "rgba(0,255,65,0.06)" : "rgba(0,255,65,0.14)",
                   border: "1px solid rgba(0,255,65,0.6)",
                   color: "#00ff41",
-                  fontFamily: "'DM Mono', monospace",
+                  fontFamily: "var(--font-terminal)",
                   fontSize: "0.72rem",
                   letterSpacing: "0.14em",
                   cursor: busy ? "not-allowed" : "pointer",
@@ -263,7 +264,7 @@ export default function StartupGate({ children }: { children: React.ReactNode })
                   fontSize: "0.58rem",
                   letterSpacing: "0.08em",
                   cursor: "pointer",
-                  fontFamily: "'DM Mono', monospace",
+                  fontFamily: "var(--font-terminal)",
                 }}
               >
                 ALREADY HAVE AN ACCOUNT? SIGN IN
@@ -305,7 +306,7 @@ export default function StartupGate({ children }: { children: React.ReactNode })
                   background: busy ? "rgba(0,255,65,0.06)" : "rgba(0,255,65,0.14)",
                   border: "1px solid rgba(0,255,65,0.6)",
                   color: "#00ff41",
-                  fontFamily: "'DM Mono', monospace",
+                  fontFamily: "var(--font-terminal)",
                   fontSize: "0.72rem",
                   letterSpacing: "0.14em",
                   cursor: busy ? "not-allowed" : "pointer",
@@ -334,7 +335,7 @@ export default function StartupGate({ children }: { children: React.ReactNode })
                     fontSize: "0.58rem",
                     letterSpacing: "0.08em",
                     cursor: "pointer",
-                    fontFamily: "'DM Mono', monospace",
+                    fontFamily: "var(--font-terminal)",
                   }}
                 >
                   CREATE NEW ACCOUNT
@@ -350,7 +351,7 @@ export default function StartupGate({ children }: { children: React.ReactNode })
                     fontSize: "0.58rem",
                     letterSpacing: "0.08em",
                     cursor: "pointer",
-                    fontFamily: "'DM Mono', monospace",
+                    fontFamily: "var(--font-terminal)",
                   }}
                 >
                   RESET LOCAL DATA
@@ -393,7 +394,7 @@ export default function StartupGate({ children }: { children: React.ReactNode })
                   background: busy ? "rgba(0,255,65,0.06)" : "rgba(0,255,65,0.14)",
                   border: "1px solid rgba(0,255,65,0.6)",
                   color: "#00ff41",
-                  fontFamily: "'DM Mono', monospace",
+                  fontFamily: "var(--font-terminal)",
                   fontSize: "0.72rem",
                   letterSpacing: "0.14em",
                   cursor: busy ? "not-allowed" : "pointer",
@@ -424,7 +425,7 @@ export default function StartupGate({ children }: { children: React.ReactNode })
                     fontSize: "0.58rem",
                     letterSpacing: "0.08em",
                     cursor: "pointer",
-                    fontFamily: "'DM Mono', monospace",
+                    fontFamily: "var(--font-terminal)",
                   }}
                 >
                   SIGN IN AGAIN
@@ -440,7 +441,7 @@ export default function StartupGate({ children }: { children: React.ReactNode })
                     fontSize: "0.58rem",
                     letterSpacing: "0.08em",
                     cursor: "pointer",
-                    fontFamily: "'DM Mono', monospace",
+                    fontFamily: "var(--font-terminal)",
                   }}
                 >
                   RESET / NEW ACCOUNT
