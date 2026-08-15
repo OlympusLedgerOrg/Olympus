@@ -284,6 +284,23 @@
         filter: brightness(1.08);
       }
 
+      /* A CTA whose caveat must travel with the button. The pre-v1 status of a
+         download has to be legible at the download itself, not only in the
+         README a visitor may never open. */
+      .cta__group {
+        display: flex;
+        flex-direction: column;
+        gap: 0.4rem;
+      }
+
+      .cta__note {
+        font-family: var(--mono);
+        font-size: 0.7rem;
+        letter-spacing: 0.03em;
+        color: var(--ink-2);
+        max-width: 24ch;
+      }
+
       /* ---------------- the exhibit (hero document) ---------------- */
 
       .exhibit {
@@ -708,7 +725,11 @@
               operate.
             </p>
             <div class="cta">
-              <a class="btn btn--primary" href="https://github.com/OlympusLedgerOrg/Olympus/blob/main/docs/court-evidence.md">Evidence workflow</a>
+              <div class="cta__group">
+                <a class="btn btn--primary" href="https://github.com/OlympusLedgerOrg/Olympus/releases">Download preview</a>
+                <span class="cta__note">Pre-v1 · unsigned · not for production</span>
+              </div>
+              <a class="btn" href="https://github.com/OlympusLedgerOrg/Olympus/blob/main/docs/court-evidence.md">Evidence workflow</a>
               <a class="btn" href="https://github.com/OlympusLedgerOrg/Olympus/blob/main/docs/quickstart.md">Build from source</a>
               <a class="btn" href="https://github.com/OlympusLedgerOrg/Olympus">Read the code</a>
             </div>
@@ -989,6 +1010,16 @@
             <a href="https://github.com/OlympusLedgerOrg/Olympus/blob/main/docs/threat-model.md"
               >Threat model &amp; audits →</a
             >
+          </div>
+          <div class="route">
+            <h3>Just want to try it</h3>
+            <p>
+              You want to install it and put a document through the workflow. Preview builds are
+              unsigned and built from a development trusted setup, so their proofs are not
+              production-grade — the release page says so and tells you how to get past the
+              Gatekeeper and SmartScreen warnings.
+            </p>
+            <a href="https://github.com/OlympusLedgerOrg/Olympus/releases">Download a preview →</a>
           </div>
           <div class="route">
             <h3>Developer or contributor</h3>

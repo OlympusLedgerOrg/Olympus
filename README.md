@@ -68,11 +68,31 @@ You don't have to trust us. You can be us.
 
 Olympus is in active development at `v0.10`.
 
-- The desktop app is live.
+- The desktop app is live, and downloadable as a **preview build** (see [Download](#download) below).
 - The core ledger and cryptographic proof system are live.
-- The remaining pre-launch milestone is a trusted-setup ceremony — a one-time step carried out by several independent parties so that no single one of them, including us, keeps the ability to forge proofs.
+- The remaining pre-launch milestone is a trusted-setup ceremony — a one-time step carried out by several independent parties so that no single one of them, including us, keeps the ability to forge proofs. Production builds are gated on it.
 
 This repository is intentionally **pre-v1**. In practice, that means development and review are active, but the system is still gated until the ceremony work is complete. See [`ROADMAP.md`](docs/ROADMAP.md).
+
+---
+
+## Download
+
+Preview builds are available for Windows, macOS, and Linux:
+
+**[Download the latest preview →](https://github.com/OlympusLedgerOrg/Olympus/releases)**
+
+> **Preview builds are not production software.** They are built from a
+> single-contributor development trusted setup, so proofs from them carry no
+> soundness guarantee, and they are unsigned — expect a SmartScreen warning on
+> Windows and a Gatekeeper block on macOS. The release page has the exact
+> commands. Records committed with a preview build are disposable.
+
+A preview installs as **Olympus Ledger Preview**, with its own data directory,
+so it will not collide with a production build you install later. Production
+builds ship after the multi-party trusted-setup ceremony described above.
+
+Prefer to build it yourself? See [`docs/quickstart.md`](docs/quickstart.md).
 
 ---
 
