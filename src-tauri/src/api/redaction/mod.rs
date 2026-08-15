@@ -20,7 +20,11 @@
 //! bundle's binding rests on the Ed25519-signed segment table + the fold to the
 //! on-ledger root.
 
-mod bundle_v3;
+/// `pub` (not just crate-visible) so the producer→verifier round-trip gate
+/// (`tests/redaction_producer_verifier_round_trip.rs`) can name `V3Bundle` /
+/// `V3Segment` when translating a freshly produced bundle into the offline
+/// verifier's own structs. Same reason as `issuer_key` below.
+pub mod bundle_v3;
 mod describe;
 // ADR-0037: object-based redaction selection, staging, and commit flow
 // (`get_page_objects` / `stage_redaction` / `commit_redaction`).
@@ -34,7 +38,10 @@ mod describe;
 /// unit tests already use.
 pub mod issuer_key;
 mod manifest;
-mod redact;
+/// `pub` so the producer→verifier round-trip gate can call `produce_bundle` —
+/// the shipping producer path with the secrets passed in — instead of standing
+/// up an `AppState` or re-implementing the assembly loop it is checking.
+pub mod redact;
 mod selection;
 pub(crate) mod staging;
 mod types;

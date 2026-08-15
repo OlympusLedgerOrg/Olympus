@@ -407,6 +407,23 @@ wiremock = "0.6"
 proptest = "1"
 tempfile = "3"
 
+# The offline recipient verifier, pulled in BY PATH for the producer→verifier
+# round-trip gate (`tests/redaction_producer_verifier_round_trip.rs`). This is
+# the control the V6 audit carried as `I-01`: until now nothing fed real
+# producer output into `olympus_verifier::redaction::verify_bundle`, so the two
+# sides could drift with every test green — which is exactly what `A1-01` was.
+#
+# `verifiers/rust` is deliberately its own workspace root (separate build and
+# coverage scope), and stays that way; a path dev-dependency does not make it a
+# member. Dev-only, so it never enters the shipped runtime graph. The version
+# pins line up because both crates already fix `ark-*` at `=0.6.0`.
+#
+# `default-features = false` drops the verifier's `cli` feature: the gate needs
+# the library (`redaction::verify_bundle`, `pedersen::Curve`), never the
+# argument parser its CLI binary uses. With defaults on, clap + its ANSI stack
+# landed here as 13 crates `cargo vet` demanded attestations for.
+olympus-verifier = { path = "../verifiers/rust", default-features = false }
+
 # The #1011 diagnostic test uses the `CircomProvingKey::from_proving_key_for_tests`
 # and `proving_key_for_tests` escape hatches to compare two zkey-load paths.
 # Those methods are gated behind `zk-test-utils` so the audit-M-5 newtype seal
