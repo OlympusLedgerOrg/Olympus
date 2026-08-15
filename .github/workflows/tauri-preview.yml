@@ -1,0 +1,562 @@
+# Preview release channel — docs/plans/preview-release-channel.md
+#
+# Produces publicly downloadable, unmistakably non-production installers from a
+# single-contributor development ceremony.
+#
+# WHY THIS IS A SEPARATE FILE AND NOT A CHANNEL INSIDE tauri-release.yml:
+# `tauri-release.yml` expresses "this is a production release" as
+# `startsWith(github.ref, 'refs/tags/')` in nine places, and a `preview-v*` tag
+# satisfies that predicate. Teaching it a channel would mean rewriting all nine
+# security-relevant guards — nine chances to weaken the production path. Its
+# tag filter is `v*`, which is anchored, and `preview-v…` does not start with
+# `v`, so this workflow's tags never trigger it and its guards are never even
+# evaluated here. `tauri-release.yml` is unchanged by the preview channel.
+name: Tauri Preview Release
+
+on:
+  push:
+    tags:
+      - "preview-v*"
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish a public prerelease (otherwise artifacts only)"
+        required: true
+        default: false
+        type: boolean
+      preview_tag:
+        description: "Prerelease tag to publish under (dispatch only, e.g. preview-v0.10.0-rc.1)"
+        required: false
+        default: ""
+        type: string
+
+concurrency:
+  group: tauri-preview-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # Consumed by src-tauri/build.rs (docs/plans/preview-release-channel.md §D2).
+  # This workflow is the ONLY place in the repository that may set it —
+  # `scripts/check-preview-channel.mjs`, run by `pnpm tooling:check`, fails CI
+  # if anything else mentions it.
+  OLYMPUS_RELEASE_CHANNEL: preview
+
+jobs:
+  # ── Guard ────────────────────────────────────────────────────────────────
+  # Cheap, fast, and blocks everything else. Two invariants:
+  #   1. A production `v*` tag can never be built by the preview path.
+  #   2. The committed ceremony is still a development ceremony — the
+  #      retirement tripwire from §10 of the plan.
+  guard:
+    name: preview channel guards
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      preview_tag: ${{ steps.resolve.outputs.preview_tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Refuse production tags
+        shell: bash
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          # `v*` is the production tag filter in tauri-release.yml. If a ref
+          # like refs/tags/v1.0.0 ever reaches this workflow, the trigger has
+          # been misedited and a production tag is about to be built unsigned,
+          # from a dev ceremony, and published as a prerelease. Stop.
+          if [[ "$REF" == refs/tags/v* ]]; then
+            echo "::error::${REF} is a production tag. The preview channel must never build one."
+            exit 1
+          fi
+          if [[ "$REF" == refs/tags/* && "$REF" != refs/tags/preview-v* ]]; then
+            echo "::error::${REF} is not a preview-v* tag."
+            exit 1
+          fi
+
+      - name: Resolve the preview tag
+        id: resolve
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_TAG: ${{ inputs.preview_tag }}
+          PUBLISH: ${{ inputs.publish }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT" == "push" ]]; then
+            tag="$REF_NAME"
+          else
+            tag="$INPUT_TAG"
+            if [[ -z "$tag" && "$PUBLISH" == "true" ]]; then
+              echo "::error::preview_tag is required when publishing from a dispatch"
+              exit 1
+            fi
+            # An unpublished dispatch still needs a manifest tag; use the ref.
+            [[ -n "$tag" ]] || tag="preview-${REF_NAME}"
+          fi
+          # Mirrors build-week-demo.yml's tag validation, and additionally the
+          # [A-Za-z0-9._-] set that src-tauri/build.rs accepts for the stamp.
+          if [[ ! "$tag" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]]; then
+            echo "::error::preview tag contains unsupported characters: $tag"
+            exit 2
+          fi
+          echo "preview_tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Preview tag: $tag"
+
+      # ── Retirement tripwire (plan §10) ──────────────────────────────────
+      # Reads the GIT-TRACKED manifests, deliberately BEFORE the ceremony
+      # action runs. That action regenerates (or restores from cache) a dev
+      # ceremony into the workspace, so checking after it would keep passing
+      # forever and the preview channel would silently outlive its purpose.
+      - name: Refuse to build a preview from a real ceremony
+        shell: bash
+        run: |
+          set -euo pipefail
+          for circuit in document_existence non_existence \
+                         unified_canonicalization_inclusion_root_sign; do
+            manifest="proofs/keys/manifests/${circuit}_manifest.json"
+            if [ ! -s "$manifest" ]; then
+              echo "::error::Missing committed ceremony manifest: $manifest"
+              exit 1
+            fi
+            # A placeholder stub is fine — the ceremony action fills it in.
+            if head -c 256 "$manifest" | grep -Eaq 'PLACEHOLDER|"placeholder"'; then
+              continue
+            fi
+            ceremony_id="$(jq -er '.ceremony_id' "$manifest")"
+            if [[ "$ceremony_id" != olympus-dev-* ]]; then
+              echo "::error::Committed ceremony is no longer a development ceremony"
+              echo "::error::(${circuit}: ${ceremony_id}). The preview channel is obsolete —"
+              echo "::error::cut a v* tag and delete .github/workflows/tauri-preview.yml."
+              echo "::error::See docs/plans/preview-release-channel.md section 10."
+              exit 1
+            fi
+          done
+          echo "Committed ceremony is still a development ceremony; preview channel is live."
+
+  # ── Preflight ────────────────────────────────────────────────────────────
+  # Deliberately NOT a copy of tauri-release.yml's preflight. That job runs the
+  # full workspace/nextest/doctest battery; ci.yml already gates this same
+  # commit, and duplicating ~150 lines of test invocations into a second
+  # workflow is the most drift-prone thing this channel could do. This job runs
+  # only what packaging depends on. Coverage given up: preview bundles are not
+  # backed by the release-grade native-host test legs. See plan §D1.
+  preflight:
+    name: preview preflight (dev ceremony + frontend)
+    needs: guard
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup build toolchain
+        uses: ./.github/actions/setup-build-toolchain
+        with:
+          cache-key: preview-preflight
+
+      - name: Install JavaScript dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Frontend unit tests + production build
+        run: |
+          pnpm --filter public-ui test:run
+          pnpm --filter public-ui build
+
+      - name: Release asset contract tests
+        run: node --test scripts/release-assets.test.mjs
+
+      # The dev ceremony this channel exists to ship. `setup_circuits.sh`
+      # defaults CEREMONY_ID to `olympus-dev-$(date -u +%F)`, so this action
+      # produces exactly the artifacts the A-4 startup gate refuses in
+      # production — with no argument needed. See plan §5.
+      - name: Generate development ZK ceremony artifacts
+        uses: ./.github/actions/zk-ceremony-artifacts
+
+      # The mirror image of tauri-release.yml's `olympus-dev-*` REJECTION.
+      # Requiring the marker is what makes this channel structurally incapable
+      # of shipping a build that looks production.
+      - name: Require a development ceremony
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "${OLYMPUS_CEREMONY_ID:-}" ]; then
+            echo "::error::OLYMPUS_CEREMONY_ID is set; it would override the olympus-dev-* default"
+            exit 1
+          fi
+          for circuit in document_existence non_existence \
+                         unified_canonicalization_inclusion_root_sign; do
+            manifest="proofs/keys/manifests/${circuit}_manifest.json"
+            ceremony_id="$(jq -er '.ceremony_id' "$manifest")"
+            if [[ "$ceremony_id" != olympus-dev-* ]]; then
+              echo "::error::${circuit} ceremony_id=${ceremony_id} is not a development ceremony."
+              echo "::error::The preview channel may only ship olympus-dev-* artifacts."
+              exit 1
+            fi
+            echo "${circuit}: ${ceremony_id}"
+          done
+
+      - name: Invalidate binaries with embedded ceremony data
+        # include_str! inputs are outside Cargo's normal source graph; a cache
+        # restore can otherwise reuse a binary embedding an older manifest.
+        run: cargo clean -p olympus-desktop
+
+      # No --minimum-authenticated-contributors: that flag is the production
+      # policy, and a single-contributor dev ceremony cannot satisfy it by
+      # construction. The bundle's structural checks still run.
+      - name: Verify manifest chains and artifact hashes
+        run: |
+          set -euo pipefail
+          for circuit in document_existence non_existence \
+                         unified_canonicalization_inclusion_root_sign; do
+            cargo run --locked -p olympus-desktop --no-default-features \
+              --bin verify_ceremony_bundle -- \
+              --circuit "$circuit" --keys-dir proofs/keys
+          done
+
+      # T4 (plan §9): prove that a binary carrying THESE manifests refuses to
+      # run in production. Without it the channel's core safety claim would be
+      # an assumption.
+      #
+      # Two traps this step is written around:
+      #   * `startup.rs` is declared by `main.rs`, NOT by `lib.rs`, so `--lib`
+      #     contains no startup tests at all. It must be `--bin olympus-desktop`.
+      #   * libtest exits 0 when a filter matches nothing. A `cargo test` that
+      #     silently ran zero tests looks identical to a passing one, so the
+      #     "1 passed" count is asserted explicitly.
+      - name: Prove the dev ceremony is refused in production mode
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked -p olympus-desktop --no-default-features \
+            --bin olympus-desktop -- --exact --nocapture \
+            startup::tests::embedded_ceremony_manifests_are_dev_and_refused_in_production \
+            | tee ceremony-refusal.log
+          grep -qE '^test result: ok\. 1 passed' ceremony-refusal.log || {
+            echo "::error::the ceremony-refusal test did not run (filter matched nothing?)"
+            exit 1
+          }
+
+      # T2/T3: the channel stamp defaults to stable and an explicit
+      # OLYMPUS_ENV=production stays production on the preview channel.
+      - name: Prove the channel stamp does not relax explicit production
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked -p olympus-desktop --no-default-features --lib \
+            -- env::tests --nocapture | tee channel-env.log
+          grep -qE '^test result: ok\. [1-9][0-9]* passed' channel-env.log || {
+            echo "::error::the env channel tests did not run"
+            exit 1
+          }
+
+      - name: Upload tested ZK artifacts for preview builders
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: preview-zk-artifacts
+          path: |
+            proofs/keys/document_existence.wasm
+            proofs/keys/document_existence.r1cs
+            proofs/keys/document_existence.ark.zkey
+            proofs/keys/non_existence.wasm
+            proofs/keys/non_existence.r1cs
+            proofs/keys/non_existence.ark.zkey
+            proofs/keys/unified_canonicalization_inclusion_root_sign.wasm
+            proofs/keys/unified_canonicalization_inclusion_root_sign.r1cs
+            proofs/keys/unified_canonicalization_inclusion_root_sign.ark.zkey
+            proofs/keys/verification_keys/document_existence_vkey.json
+            proofs/keys/verification_keys/non_existence_vkey.json
+            proofs/keys/verification_keys/unified_canonicalization_inclusion_root_sign_vkey.json
+            proofs/keys/manifests/document_existence_manifest.json
+            proofs/keys/manifests/non_existence_manifest.json
+            proofs/keys/manifests/unified_canonicalization_inclusion_root_sign_manifest.json
+          if-no-files-found: error
+          retention-days: 7
+
+  # ── Build ────────────────────────────────────────────────────────────────
+  # All four targets (decision D2). Note what is ABSENT versus
+  # tauri-release.yml's build job, and absent by design rather than by
+  # condition: no Windows Authenticode import, no signature verification, no
+  # signing-material cleanup, no `--config tauri.windows-signing.conf.json`.
+  # A step that does not exist cannot throw when its secret is missing.
+  build:
+    name: build ${{ matrix.target }} (unsigned)
+    needs: [guard, preflight]
+    timeout-minutes: 120
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+          - os: macos-15
+            target: aarch64-apple-darwin
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+
+    runs-on: ${{ matrix.os }}
+
+    env:
+      OLYMPUS_PREVIEW_TAG: ${{ needs.guard.outputs.preview_tag }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download preflight-tested ZK artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: preview-zk-artifacts
+          path: proofs/keys
+
+      - name: Setup build toolchain
+        uses: ./.github/actions/setup-build-toolchain
+        with:
+          rust-targets: ${{ matrix.target }}
+
+      - name: Invalidate binaries with embedded ceremony data
+        # The downloaded vkeys/manifests must be re-embedded even when the
+        # target cache contains a build from an earlier ceremony. This also
+        # picks up the OLYMPUS_RELEASE_CHANNEL/OLYMPUS_PREVIEW_TAG stamp.
+        run: cargo clean -p olympus-desktop
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --version 2.11.4 --locked
+
+      - name: Generate icons from source SVG
+        run: cargo tauri icon src-tauri/icons/source.svg
+
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
+        env:
+          # Empty, always. tauri-action attempts `security import` whenever
+          # APPLE_CERTIFICATE is non-empty and fails (exit 1) on an
+          # unconfigured placeholder; empty makes it skip signing and emit an
+          # UNSIGNED bundle, which is what the preview channel ships. The
+          # Gatekeeper workaround is documented in the release body.
+          APPLE_ID: ""
+          APPLE_PASSWORD: ""
+          APPLE_TEAM_ID: ""
+          APPLE_CERTIFICATE: ""
+          APPLE_CERTIFICATE_PASSWORD: ""
+        with:
+          target: ${{ matrix.target }}
+          # The preview overlay renames the product to "Olympus Ledger Preview"
+          # and changes the bundle identifier, so the channel is visible in the
+          # installer filename, the installed app name, and the window title —
+          # and preview data lands in its own directory (plan §D3).
+          args: >-
+            --target ${{ matrix.target }}
+            --config src-tauri/tauri.preview.conf.json
+
+      - name: Confirm the bundle is self-identifying and unsigned
+        shell: bash
+        run: |
+          set -euo pipefail
+          bundle="target/${{ matrix.target }}/release/bundle"
+          # Every produced installer must carry the preview product name. If the
+          # overlay silently failed to apply, the filenames are the first place
+          # it shows, and shipping an installer named like a production build is
+          # exactly the outcome constraint 4 exists to prevent.
+          found=0
+          while IFS= read -r installer; do
+            found=$((found + 1))
+            # Tauri derives installer names from productName, but normalises
+            # differently per bundler ("Olympus Ledger Preview_0.10.0_x64.msi"
+            # vs "olympus-ledger-preview_0.10.0_amd64.deb"). Compare on a
+            # case-folded, separator-stripped basename so the check tracks the
+            # product name rather than any one bundler's spelling of it.
+            normalised="$(basename "$installer" | tr '[:upper:]' '[:lower:]' | tr -d ' _-')"
+            case "$normalised" in
+              *olympusledgerpreview*) ;;
+              *)
+                echo "::error::Installer is not marked as a preview build: $installer"
+                echo "::error::The tauri.preview.conf.json overlay did not apply."
+                exit 1
+                ;;
+            esac
+          done < <(find "$bundle" -maxdepth 2 -type f \
+            \( -name '*.msi' -o -name '*.exe' -o -name '*.dmg' \
+               -o -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' \) | sort)
+          if [ "$found" -eq 0 ]; then
+            echo "::error::No installers were produced for ${{ matrix.target }}"
+            exit 1
+          fi
+          echo "Verified $found preview-marked installer(s)."
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: olympus-${{ matrix.target }}
+          path: |
+            target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+            target/${{ matrix.target }}/release/bundle/macos/*.app.tar.gz
+            target/${{ matrix.target }}/release/bundle/msi/*.msi
+            target/${{ matrix.target }}/release/bundle/nsis/*.exe
+            target/${{ matrix.target }}/release/bundle/deb/*.deb
+            target/${{ matrix.target }}/release/bundle/appimage/*.AppImage
+            target/${{ matrix.target }}/release/bundle/rpm/*.rpm
+          if-no-files-found: error
+
+  # ── Provenance + publish ─────────────────────────────────────────────────
+  # SBOMs and all three attestations run unconditionally: a provenance project
+  # shipping unattested binaries is not acceptable, and the preview channel is
+  # the cheapest place to prove the attestation path works before it matters.
+  provenance:
+    name: preview checksums + attestations
+    needs: [guard, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download preview artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: olympus-*
+          path: release-assets
+
+      - name: Setup build toolchain
+        uses: ./.github/actions/setup-build-toolchain
+        with:
+          install-linux-deps: "false"
+          cache-key: preview-provenance
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate release SBOMs
+        uses: ./.github/actions/generate-sboms
+
+      # Unmodified: the asset contract treats the tag as opaque data and is
+      # keyed on target triples, not on channel or signing state (plan §4).
+      # `release-assets.test.mjs` asserts this with a preview-tag case.
+      - name: Stage and validate the complete release asset set
+        env:
+          PREVIEW_TAG: ${{ needs.guard.outputs.preview_tag }}
+        run: |
+          set -euo pipefail
+          source_commit="$(git rev-parse 'HEAD^{commit}')"
+          node scripts/release-assets.mjs stage \
+            --input release-assets \
+            --sbom sbom \
+            --output release-publish \
+            --tag "$PREVIEW_TAG" \
+            --commit "$source_commit" \
+            --installer-checksums INSTALLER_SHA256SUMS
+          cat release-publish/SHA256SUMS
+
+      - name: Upload complete preview asset set
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: olympus-preview-assets
+          path: release-publish/
+          if-no-files-found: error
+
+      - name: Attest preview asset provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-checksums: release-publish/SHA256SUMS
+
+      - name: Attest Rust SBOM for preview artifacts
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-checksums: INSTALLER_SHA256SUMS
+          sbom-path: sbom/olympus-desktop.cdx.json
+
+      - name: Attest frontend SBOM for preview artifacts
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-checksums: INSTALLER_SHA256SUMS
+          sbom-path: sbom/public-ui.cdx.json
+
+      - name: Render the preview release body
+        if: ${{ startsWith(github.ref, 'refs/tags/preview-v') || inputs.publish }}
+        env:
+          PREVIEW_TAG: ${{ needs.guard.outputs.preview_tag }}
+        run: |
+          set -euo pipefail
+          ceremony_id="$(jq -er '.ceremony_id' \
+            proofs/keys/manifests/document_existence_manifest.json 2>/dev/null || echo 'olympus-dev-*')"
+          sed \
+            -e "s|__TAG__|${PREVIEW_TAG}|g" \
+            -e "s|__SHA__|${GITHUB_SHA}|g" \
+            -e "s|__CEREMONY_ID__|${ceremony_id}|g" \
+            .github/preview-release-body.md > preview-release-body.rendered.md
+          cat preview-release-body.rendered.md
+
+      # `--prerelease` is load-bearing beyond cosmetics: GitHub never promotes a
+      # prerelease to "Latest release", so /releases/latest keeps pointing past
+      # every preview to the eventual production release.
+      - name: Publish or refresh the public prerelease
+        if: ${{ startsWith(github.ref, 'refs/tags/preview-v') || inputs.publish }}
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          PREVIEW_TAG: ${{ needs.guard.outputs.preview_tag }}
+        run: |
+          set -euo pipefail
+          mapfile -t assets < <(find release-publish -maxdepth 1 -type f | sort)
+          if [ "${#assets[@]}" -eq 0 ]; then
+            echo "::error::No staged assets to publish"
+            exit 1
+          fi
+          if gh release view "$PREVIEW_TAG" >/dev/null 2>&1; then
+            # Same refusal as build-week-demo.yml: never refresh a release that
+            # was cut from a different commit, or the attached attestations stop
+            # describing the attached bytes.
+            release_target="$(gh release view "$PREVIEW_TAG" --json targetCommitish --jq '.targetCommitish')"
+            if [[ "$release_target" != "$GITHUB_SHA" ]]; then
+              echo "::error::refusing to refresh $PREVIEW_TAG: it targets $release_target, not $GITHUB_SHA"
+              exit 1
+            fi
+            gh release edit "$PREVIEW_TAG" \
+              --prerelease \
+              --notes-file preview-release-body.rendered.md
+            gh release upload "$PREVIEW_TAG" "${assets[@]}" --clobber
+          else
+            gh release create "$PREVIEW_TAG" "${assets[@]}" \
+              --target "$GITHUB_SHA" \
+              --prerelease \
+              --title "Olympus Ledger preview ($PREVIEW_TAG) — NOT FOR PRODUCTION" \
+              --notes-file preview-release-body.rendered.md
+          fi
+
+      - name: Verify the published preview asset contract
+        if: ${{ startsWith(github.ref, 'refs/tags/preview-v') || inputs.publish }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREVIEW_TAG: ${{ needs.guard.outputs.preview_tag }}
+        run: |
+          set -euo pipefail
+          mkdir preview-verification
+          gh release download "$PREVIEW_TAG" --dir preview-verification
+          source_commit="$(git rev-parse 'HEAD^{commit}')"
+          node scripts/release-assets.mjs verify \
+            --input preview-verification \
+            --tag "$PREVIEW_TAG" \
+            --commit "$source_commit"

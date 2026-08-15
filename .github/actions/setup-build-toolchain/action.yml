@@ -1,0 +1,103 @@
+name: Setup build toolchain
+description: |
+  Rust + pnpm + Node, plus the per-OS native prerequisites the desktop build
+  needs. Lifted verbatim from `tauri-release.yml` so the release and preview
+  workflows cannot drift apart on toolchain versions or pinned action SHAs.
+
+  Keep the pins here in step with `.github/workflows/tauri-release.yml`.
+  `scripts/check-preview-channel.mjs` (run by `pnpm tooling:check`) fails CI if
+  an action SHA or a toolchain version diverges between the two paths.
+
+  The Rust and Node versions are written as literals rather than inputs on
+  purpose: `scripts/check-privileged-action-pins.mjs` requires every workflow
+  and local composite to select the exact reviewed toolchain versions, and a
+  `${{ inputs.* }}` indirection would defeat that review. They are a security
+  pin, not a knob.
+
+inputs:
+  rust-targets:
+    description: Extra Rust target triples to install (comma-separated, may be empty).
+    default: ""
+  cache-key:
+    description: Extra Swatinem/rust-cache key discriminator.
+    default: ""
+  install-linux-deps:
+    description: Install the webkit2gtk/appindicator/rsvg/patchelf stack on Linux runners.
+    default: "true"
+  configure-windows-openssl:
+    description: Export OPENSSL_* pointing at the runner's static OpenSSL on Windows.
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # stable
+      with:
+        # `toolchain` is required when the action is pinned to a SHA (the
+        # `@stable` tag magic that infers it is lost on a commit pin). Without
+        # this the step fails instantly with "'toolchain' is a required input".
+        toolchain: 1.95.0
+        targets: ${{ inputs.rust-targets }}
+
+    - name: Rust cache
+      uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      with:
+        workspaces: ". -> target"
+        key: ${{ inputs.cache-key }}
+
+    - name: Configure Windows OpenSSL
+      if: runner.os == 'Windows' && inputs.configure-windows-openssl == 'true'
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = "Stop"
+        $root = "C:\Program Files\OpenSSL"
+        $include = Join-Path $root "include"
+        $lib = Join-Path $root "lib\VC\x64\MT"
+        if (-not (Test-Path (Join-Path $include "openssl\ssl.h")) -or
+            -not (Test-Path (Join-Path $lib "libssl.lib")) -or
+            -not (Test-Path (Join-Path $lib "libcrypto.lib"))) {
+          throw "The runner's static OpenSSL development files are unavailable"
+        }
+        "OPENSSL_INCLUDE_DIR=$include" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+        "OPENSSL_LIB_DIR=$lib" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+        "OPENSSL_STATIC=1" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+
+    - name: Install pnpm
+      # No `version:` — the action reads packageManager (pnpm@11.x) from
+      # package.json. Passing an explicit version conflicts and errors with
+      # "Multiple versions of pnpm specified".
+      uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+
+    - name: Set up Node.js
+      uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      with:
+        node-version: "22.14.0"
+        cache: pnpm
+
+    - name: Install Linux system dependencies
+      if: runner.os == 'Linux' && inputs.install-linux-deps == 'true'
+      # See ci.yml for the apt-hardening rationale (step-level timeout +
+      # per-invocation timeout + retry loop).
+      shell: bash
+      env:
+        DEBIAN_FRONTEND: noninteractive
+        APT_LISTCHANGES_FRONTEND: none
+      run: |
+        set -euo pipefail
+        for i in 1 2 3; do
+          if sudo -E timeout 240 apt-get update -o Acquire::Retries=3; then
+            break
+          fi
+          echo "apt-get update attempt $i failed; sleeping 5 s"
+          sleep 5
+          if [ "$i" = "3" ]; then
+            echo "apt-get update failed 3 times — aborting"
+            exit 1
+          fi
+        done
+        sudo -E timeout 900 apt-get install -y \
+          libwebkit2gtk-4.1-dev \
+          libappindicator3-dev \
+          librsvg2-dev \
+          patchelf
