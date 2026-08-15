@@ -159,6 +159,17 @@ entry's payload — and therefore its leaf — is byte-identical. Pure Rust ZIP
 read/write (`zip` crate, permissive); **no Office renderer, no native lib** (avoids
 the RCE/licensing problems that sank ADR-0023/0024).
 
+> **Implementation note (audit I-02).** The "fixed/zeroed ZIP metadata (mtime)"
+> requirement above is normative and was violated in practice for some time: the
+> writer used the `zip` crate's `DateTime::default_for_write()`, which returns the
+> **current wall-clock time** whenever that crate's `time` feature is enabled
+> anywhere in the dependency graph — as it is in this workspace. The artifacts were
+> therefore non-reproducible, leaked the redaction time, and were rejected by both
+> offline verifiers (which enforce `mtime == 0`). The canonical writer now lives in
+> `olympus_crypto::container::ooxml` and pins `zip::DateTime::default()`
+> (1980-01-01) explicitly, which is feature-independent. Commitments were never
+> affected: leaves bind `lp(name) || payload`, never header bytes.
+
 ### 3. Object-level ingest commitment + manifest persistence
 
 > **Greenfield — no active DB, no users.** There are no chunk-sealed records to

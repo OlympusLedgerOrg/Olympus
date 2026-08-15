@@ -30,6 +30,8 @@
 use std::collections::{BTreeMap, HashSet};
 
 use ark_bn254::Fr;
+use olympus_crypto::container::pdf as container_pdf;
+use olympus_crypto::container::pdf::EmittedObject;
 use olympus_crypto::redaction::redaction_leaf_for_segment;
 #[cfg(test)]
 use olympus_crypto::redaction::{content_scalar, derive_blinding, redaction_leaf};
@@ -909,73 +911,38 @@ fn rebuild_redacted(
         }
     }
 
-    let mut out: Vec<u8> = Vec::with_capacity(pdf_bytes.len());
-    out.extend_from_slice(b"%PDF-1.7\n");
-
-    // (obj_id, byte offset in `out`, generation) in ascending obj-id order.
-    let mut offsets: Vec<(u32, u64, u16)> = Vec::with_capacity(manifest.objects.len());
-    let mut spans: Vec<(u32, u64, u64)> = Vec::with_capacity(manifest.objects.len());
-    for obj in &manifest.objects {
-        let start = out.len() as u64;
-        offsets.push((obj.obj_id, start, obj.generation));
-        let length = if redacted.contains(&obj.obj_id) {
-            // Fixed structural null — size depends only on the public obj/gen.
-            let null_obj = format!("{} {} obj\nnull\nendobj", obj.obj_id, obj.generation);
-            out.extend_from_slice(null_obj.as_bytes());
-            null_obj.len() as u64
-        } else {
-            let s = obj.byte_offset as usize;
-            let e = s
-                .checked_add(obj.byte_length as usize)
-                .filter(|&e| e <= pdf_bytes.len())
-                .ok_or(PdfObjectError::ObjectOutOfBounds {
-                    obj_id: obj.obj_id,
-                    offset: obj.byte_offset,
-                })?;
-            out.extend_from_slice(&pdf_bytes[s..e]);
-            obj.byte_length
-        };
-        // The committed span is exactly the emitted object; the `\n` separator is
-        // outside it (objects are located by xref offset, so it is cosmetic).
-        spans.push((obj.obj_id, start, length));
-        out.push(b'\n');
-    }
-
-    // /Size = one past the largest object number (PDF §7.5.4).
-    let size = offsets
+    // Revealed objects are copied **verbatim** from their committed span so their
+    // original bytes survive intact; redacted ones become the fixed structural
+    // null, whose size depends only on the public obj/gen. `manifest.objects` is
+    // in ascending obj-id order, as `write_traditional_xref` requires.
+    let objects: Vec<EmittedObject> = manifest
+        .objects
         .iter()
-        .map(|&(id, _, _)| id as u64)
-        .max()
-        .map(|m| m + 1)
-        .unwrap_or(1);
+        .map(|obj| {
+            let bytes = if redacted.contains(&obj.obj_id) {
+                container_pdf::frame_object(obj.obj_id, obj.generation, container_pdf::NULL_BODY)
+            } else {
+                let s = obj.byte_offset as usize;
+                let e = s
+                    .checked_add(obj.byte_length as usize)
+                    .filter(|&e| e <= pdf_bytes.len())
+                    .ok_or(PdfObjectError::ObjectOutOfBounds {
+                        obj_id: obj.obj_id,
+                        offset: obj.byte_offset,
+                    })?;
+                pdf_bytes[s..e].to_vec()
+            };
+            Ok(EmittedObject {
+                id: obj.obj_id,
+                generation: obj.generation,
+                bytes,
+            })
+        })
+        .collect::<Result<Vec<_>, PdfObjectError>>()?;
 
-    let xref_off = out.len();
-    out.extend_from_slice(b"xref\n");
-    // Object 0 is the free-list head; in-use objects follow as ascending
-    // contiguous-run subsections (unlisted numbers are implicitly free).
-    out.extend_from_slice(b"0 1\n0000000000 65535 f \n");
-    let ids: Vec<u32> = offsets.iter().map(|&(id, _, _)| id).collect(); // ascending
-    let mut i = 0;
-    while i < ids.len() {
-        let run_start = ids[i];
-        let mut j = i;
-        while j + 1 < ids.len() && ids[j + 1] == ids[j] + 1 {
-            j += 1;
-        }
-        out.extend_from_slice(format!("{run_start} {}\n", j - i + 1).as_bytes());
-        for &(_, off, generation) in &offsets[i..=j] {
-            out.extend_from_slice(format!("{off:010} {generation:05} n \n").as_bytes());
-        }
-        i = j + 1;
-    }
-
-    out.extend_from_slice(b"trailer\n<< /Size ");
-    out.extend_from_slice(size.to_string().as_bytes());
-    out.extend_from_slice(b" /Root ");
-    out.extend_from_slice(&root_ref);
-    out.extend_from_slice(b" >>\nstartxref\n");
-    out.extend_from_slice(xref_off.to_string().as_bytes());
-    out.extend_from_slice(b"\n%%EOF\n");
+    // The committed span is exactly the emitted object; the `\n` separator is
+    // outside it (objects are located by xref offset, so it is cosmetic).
+    let (out, spans) = container_pdf::write_traditional_xref(&objects, Some(&root_ref));
 
     Ok((out, spans))
 }

@@ -42,6 +42,10 @@ pub mod request_envelope;
 #[cfg(feature = "trust-list")]
 pub mod trust_list;
 
+/// Canonical container writers shared by the redaction producer and the
+/// conformance-vector generator (audit V6 `I-01`).
+pub mod container;
+
 /// BLAKE3 derive_key context for global SMT leaf keys.
 pub const GLOBAL_SMT_KEY_CONTEXT: &str = "olympus 2025-12 global-smt-leaf-key";
 

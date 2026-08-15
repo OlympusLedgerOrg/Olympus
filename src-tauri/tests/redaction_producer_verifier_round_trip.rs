@@ -260,3 +260,185 @@ fn a_bundle_signed_by_another_key_is_rejected() {
         Err(RejectReason("Ed25519 signature invalid"))
     );
 }
+
+// ── ooxml-part ──────────────────────────────────────────────────────────────
+//
+// This format was the gap this gate originally left open, and it is where the
+// hand-built vectors had actually drifted: the generator's own ZIP writer emitted
+// `version_needed = 20, mdate = 0`, a local-header profile the shipping producer
+// never produces (it emits `10` / `33` via the `zip` crate). Both offline
+// verifiers carried widened allowances — `version ∈ {10, 20}`, `mdate ∈ {0, 33}` —
+// so the fixture stayed acceptable and nothing failed. Feeding real producer
+// output through `verify_bundle` is what pins the profile that actually ships.
+
+/// Root relationship part naming the main document, so the producer can resolve
+/// the package skeleton it refuses to redact.
+const ROOT_RELS: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>"#;
+
+/// A minimal valid OOXML package. Sorted part order gives the segment ids:
+/// 0 `[Content_Types].xml`, 1 `_rels/.rels`, 2 `word/document.xml`,
+/// 3 `word/media/secret.bin` — only 3 is redactable, the rest being structural
+/// or XML.
+fn sample_docx() -> Vec<u8> {
+    let parts = vec![
+        ("[Content_Types].xml".to_string(), b"<Types/>".to_vec()),
+        ("_rels/.rels".to_string(), ROOT_RELS.to_vec()),
+        (
+            "word/document.xml".to_string(),
+            b"<w:document>hello public world</w:document>".to_vec(),
+        ),
+        (
+            "word/media/secret.bin".to_string(),
+            b"patient name Alice".to_vec(),
+        ),
+    ];
+    olympus_crypto::container::ooxml::write_canonical_stored_zip(&parts).expect("build docx")
+}
+
+#[test]
+fn ooxml_part_bundle_from_real_producer_is_accepted_by_offline_verifier() {
+    let docx = sample_docx();
+    let (manifest, artifact, v3) = produce(&docx, &[3]);
+    assert_eq!(manifest.format.as_tag(), "ooxml-part");
+
+    let bundle = to_verifier_bundle(&v3, &artifact);
+    assert_eq!(verify(&bundle), Ok(()));
+}
+
+/// `ooxml-part` redaction is length-hiding: the entry survives with its name
+/// visible but a zero-length payload, so the artifact never discloses the
+/// original size (ADR-0034). A revert to width-preserving fill breaks this.
+#[test]
+fn ooxml_redacted_part_is_emptied_not_filled() {
+    let docx = sample_docx();
+    let (manifest, artifact, _) = produce(&docx, &[3]);
+
+    let secret = manifest
+        .segments
+        .iter()
+        .find(|s| s.label.as_deref() == Some("word/media/secret.bin"))
+        .expect("secret part committed");
+    assert_eq!(secret.segment_id, 3);
+
+    let spans = olympus_crypto::container::ooxml::stored_data_spans(&artifact).expect("spans");
+    let &(_, length) = spans
+        .get("word/media/secret.bin")
+        .expect("entry survives redaction");
+    assert_eq!(length, 0, "redacted part must be emptied, not filled");
+
+    // The plaintext must be gone from the artifact entirely.
+    assert!(
+        !artifact
+            .windows(b"patient name Alice".len())
+            .any(|w| w == b"patient name Alice"),
+        "redacted payload still present in the artifact"
+    );
+}
+
+/// CRC-32 (IEEE, reflected) — the checksum the ZIP local header and central
+/// directory both carry.
+fn crc32(bytes: &[u8]) -> u32 {
+    let mut crc = 0xffff_ffffu32;
+    for &b in bytes {
+        crc ^= b as u32;
+        for _ in 0..8 {
+            let mask = 0u32.wrapping_sub(crc & 1);
+            crc = (crc >> 1) ^ (0xedb8_8320 & mask);
+        }
+    }
+    !crc
+}
+
+/// Overwrite one payload byte of `name` **and repair both CRC copies**, leaving a
+/// structurally canonical package.
+///
+/// The repair is the whole point. A naive byte flip is caught by the verifier's
+/// CRC check (`non-canonical ooxml zip entry`) before the fold is ever computed,
+/// so a test that skipped this would be exercising ZIP container integrity while
+/// claiming to exercise the commitment. Keeping the package well-formed leaves
+/// the Merkle fold as the only thing that can still object.
+fn tamper_ooxml_payload_keeping_crcs_valid(artifact: &mut [u8], name: &str) {
+    let spans = olympus_crypto::container::ooxml::stored_data_spans(artifact).expect("spans");
+    let &(offset, length) = spans.get(name).expect("part present");
+    assert!(length > 0, "need a non-empty part to tamper");
+
+    let data_start = offset as usize;
+    artifact[data_start] ^= 0xff;
+    let new_crc = crc32(&artifact[data_start..data_start + length as usize]);
+
+    // Local header: extra_len is 0 in the canonical profile, so the header starts
+    // 30 + name_len before the data. CRC sits at header_start + 14.
+    let local_header = data_start - 30 - name.len();
+    assert_eq!(&artifact[local_header..local_header + 4], b"PK\x03\x04");
+    artifact[local_header + 14..local_header + 18].copy_from_slice(&new_crc.to_le_bytes());
+
+    // Central directory: find this entry's record by its local-header offset
+    // (at +42) and patch the CRC copy at +16.
+    let mut i = 0usize;
+    let mut patched = false;
+    while i + 46 <= artifact.len() {
+        if &artifact[i..i + 4] == b"PK\x01\x02" {
+            let rel = u32::from_le_bytes(artifact[i + 42..i + 46].try_into().unwrap()) as usize;
+            if rel == local_header {
+                artifact[i + 16..i + 20].copy_from_slice(&new_crc.to_le_bytes());
+                patched = true;
+                break;
+            }
+            let name_len =
+                u16::from_le_bytes(artifact[i + 28..i + 30].try_into().unwrap()) as usize;
+            let extra = u16::from_le_bytes(artifact[i + 30..i + 32].try_into().unwrap()) as usize;
+            let comment = u16::from_le_bytes(artifact[i + 32..i + 34].try_into().unwrap()) as usize;
+            i += 46 + name_len + extra + comment;
+        } else {
+            i += 1;
+        }
+    }
+    assert!(patched, "central directory entry for {name} not found");
+}
+
+/// The same fold binding the other formats get: altering a revealed part's bytes
+/// must break the root, even when the package is left perfectly well-formed.
+#[test]
+fn tampering_a_revealed_ooxml_part_breaks_the_fold() {
+    let docx = sample_docx();
+    let (_, mut artifact, v3) = produce(&docx, &[3]);
+
+    tamper_ooxml_payload_keeping_crcs_valid(&mut artifact, "word/document.xml");
+
+    let bundle = to_verifier_bundle(&v3, &artifact);
+    assert_eq!(verify(&bundle), Err(RejectReason("fold != original_root")));
+}
+
+/// The container-integrity check is a *separate* line of defence from the fold,
+/// and it fires first: a raw byte flip that leaves a stale CRC never reaches the
+/// commitment. Pinning both reasons keeps the two from being confused for each
+/// other.
+#[test]
+fn a_raw_byte_flip_is_caught_as_a_non_canonical_entry() {
+    let docx = sample_docx();
+    let (_, mut artifact, v3) = produce(&docx, &[3]);
+
+    let spans = olympus_crypto::container::ooxml::stored_data_spans(&artifact).expect("spans");
+    let &(offset, _) = spans.get("word/document.xml").expect("revealed part");
+    artifact[offset as usize] ^= 0xff;
+
+    let bundle = to_verifier_bundle(&v3, &artifact);
+    assert_eq!(
+        verify(&bundle),
+        Err(RejectReason("non-canonical ooxml zip entry"))
+    );
+}
+
+#[test]
+fn ooxml_artifact_is_byte_reproducible() {
+    let docx = sample_docx();
+    let (_, first, _) = produce(&docx, &[3]);
+    let (_, second, _) = produce(&docx, &[3]);
+    assert_eq!(
+        first, second,
+        "ooxml redaction artifact is not reproducible"
+    );
+}

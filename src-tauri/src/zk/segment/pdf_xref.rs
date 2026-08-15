@@ -18,6 +18,9 @@
 use std::collections::{BTreeMap, HashSet};
 use std::io::Read;
 
+use olympus_crypto::container::pdf as container_pdf;
+use olympus_crypto::container::pdf::EmittedObject;
+
 use olympus_crypto::redaction::redaction_leaf_for_segment;
 #[cfg(test)]
 use olympus_crypto::redaction::{content_scalar, derive_blinding, redaction_leaf};
@@ -1002,71 +1005,25 @@ pub(crate) fn rebuild_traditional_with_spans(
     redacted: &HashSet<u32>,
     root_ref: Option<&[u8]>,
 ) -> (Vec<u8>, Vec<(u32, u64, u64)>) {
-    let mut out: Vec<u8> = Vec::new();
-    out.extend_from_slice(b"%PDF-1.7\n");
+    // `bodies` is a BTreeMap, so this is already ascending by object id — the
+    // order `write_traditional_xref` requires.
+    let objects: Vec<EmittedObject> = bodies
+        .iter()
+        .map(|(&id, (generation, body))| {
+            let body: &[u8] = if redacted.contains(&id) {
+                container_pdf::NULL_BODY
+            } else {
+                body
+            };
+            EmittedObject {
+                id,
+                generation: *generation,
+                bytes: container_pdf::frame_object(id, *generation, body),
+            }
+        })
+        .collect();
 
-    // obj_id -> (byte offset in `out`, generation). Sparse — only in-use objects.
-    let mut offsets: BTreeMap<u32, (u64, u16)> = BTreeMap::new();
-    // Exact object spans exclude the separator newline, matching `pdf-object`
-    // and the offline parser's `N G obj … endobj` contract.
-    let mut object_spans: Vec<(u32, u64, u64)> = Vec::with_capacity(bodies.len());
-    for (&id, (generation, body)) in bodies {
-        let start = out.len() as u64;
-        offsets.insert(id, (start, *generation));
-        out.extend_from_slice(format!("{id} {generation} obj\n").as_bytes());
-        if redacted.contains(&id) {
-            out.extend_from_slice(b"null");
-        } else {
-            out.extend_from_slice(body);
-        }
-        out.extend_from_slice(b"\nendobj");
-        let end = out.len() as u64;
-        object_spans.push((id, start, end - start));
-        out.push(b'\n');
-    }
-
-    // /Size is one past the largest object number (PDF §7.5.4).
-    let size = bodies
-        .keys()
-        .copied()
-        .max()
-        .map(|m| m as u64 + 1)
-        .unwrap_or(1);
-
-    let xref_off = out.len();
-    out.extend_from_slice(b"xref\n");
-    // Object 0 is always the free-list head, emitted as its own subsection. The
-    // in-use objects follow as contiguous-run subsections (gaps are implicitly
-    // free; our parser and standard readers treat unlisted numbers as free).
-    out.extend_from_slice(b"0 1\n0000000000 65535 f \n");
-    let ids: Vec<u32> = offsets.keys().copied().collect(); // sorted, all >= 1
-    let mut i = 0;
-    while i < ids.len() {
-        let run_start = ids[i];
-        let mut j = i;
-        while j + 1 < ids.len() && ids[j + 1] == ids[j] + 1 {
-            j += 1;
-        }
-        let run_len = j - i + 1;
-        out.extend_from_slice(format!("{run_start} {run_len}\n").as_bytes());
-        for &id in &ids[i..=j] {
-            let (off, generation) = offsets[&id];
-            out.extend_from_slice(format!("{off:010} {generation:05} n \n").as_bytes());
-        }
-        i = j + 1;
-    }
-
-    out.extend_from_slice(b"trailer\n<< /Size ");
-    out.extend_from_slice(size.to_string().as_bytes());
-    if let Some(r) = root_ref {
-        out.extend_from_slice(b" /Root ");
-        out.extend_from_slice(r);
-    }
-    out.extend_from_slice(b" >>\nstartxref\n");
-    out.extend_from_slice(xref_off.to_string().as_bytes());
-    out.extend_from_slice(b"\n%%EOF\n");
-
-    (out, object_spans)
+    container_pdf::write_traditional_xref(&objects, root_ref)
 }
 
 /// Best-effort `/Root` indirect reference for the rebuilt trailer — `None` if the

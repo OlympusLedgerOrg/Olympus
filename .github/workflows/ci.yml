@@ -1778,7 +1778,7 @@ jobs:
             .ssmf_nonexistence_proof == $generated[0].ssmf_nonexistence_proof
           ' verifiers/test_vectors/vectors.json >/dev/null
 
-          cargo run --locked -p olympus-crypto --example gen_redaction_vectors --features redaction
+          cargo run --locked -p olympus-crypto --example gen_redaction_vectors --features redaction,container
           cargo run --locked -p olympus-desktop --no-default-features --example gen_checkpoint_quorum_vectors
           cargo run --locked -p olympus-desktop --no-default-features --example gen_sbt_quorum_vectors
           cargo run --locked -p babyjubjub-permissive --example gen_rust_eddsa_vectors
