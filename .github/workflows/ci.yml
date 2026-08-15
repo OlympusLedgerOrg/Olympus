@@ -1235,10 +1235,16 @@ jobs:
         run: npm ci --ignore-scripts --prefix proofs
 
       - name: Install circom
-        # Same cargo-install posture as circomspect above, pinned to the tag
-        # the constraint counts in docs/federation-quorum-credentials.md were
-        # measured with. Cached by the Rust cache step.
-        run: cargo install --git https://github.com/iden3/circom --tag v2.2.3 --locked circom
+        # Same cargo-install posture as circomspect above, pinned to the
+        # immutable commit behind tag v2.2.3 (tags can move; revs cannot) —
+        # the version the constraint counts in
+        # docs/federation-quorum-credentials.md were measured with.
+        # --version satisfies the privileged-action pin gate and makes cargo
+        # cross-check the crate version at that rev.
+        run: >-
+          cargo install --git https://github.com/iden3/circom
+          --rev ad44e915a12bb047b05745c2884aad9cc8326bc6
+          --version 2.2.3 --locked circom
 
       - name: Compile federation_quorum
         working-directory: proofs
