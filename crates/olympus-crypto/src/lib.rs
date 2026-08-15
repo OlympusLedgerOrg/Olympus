@@ -33,14 +33,24 @@ pub mod request_envelope;
 /// ADR-0041 trust-list types + canonical encoders. Dependency-free (BLAKE3 over
 /// length-prefixed bytes), so offline verifiers can reproduce a trust digest
 /// without a curve/field stack. The desktop runtime consumes [`trust_list::TrustRole`]
-/// for role-scoped trusted-issuer resolution; the snapshot/rotation machinery is
-/// not yet wired into runtime trust decisions.
+/// for role-scoped trusted-issuer resolution and persists/reconciles accepted
+/// snapshot chains (its `trust` module); snapshot state is not yet consulted
+/// by runtime trust decisions — consumer switchover is a later ADR-0041 step.
 ///
 /// Feature-gated to keep it out of the RISC Zero canonicalization guest, whose
 /// ELF/ImageID is a pinned reproducible artifact — see the `trust-list` feature
 /// comment in `Cargo.toml`.
 #[cfg(feature = "trust-list")]
 pub mod trust_list;
+
+/// ADR-0041 serde JSON **storage** representation for trust-list snapshots
+/// and signed transition files. Storage only: the snapshot digest is always
+/// recomputed from `trust_list::canonical_snapshot_body` over the decoded
+/// value, never taken from JSON bytes — see the module docs. Gated on its
+/// own feature so the base `trust-list` feature keeps pulling no
+/// dependencies.
+#[cfg(feature = "trust-list-wire")]
+pub mod trust_wire;
 
 /// BLAKE3 derive_key context for global SMT leaf keys.
 pub const GLOBAL_SMT_KEY_CONTEXT: &str = "olympus 2025-12 global-smt-leaf-key";

@@ -37,6 +37,12 @@ signature-envelope = [ "dep:ed25519-dalek", "dep:serde" ]
 # ADR-0040 unified protocol verifies as a fixed image. Compiling unrelated
 # protocol types into the guest would change that ImageID for no reason.
 trust-list = [  ]
+# ADR-0041 serde JSON *storage* representation for trust-list snapshots and
+# signed transition files (`trust_wire`). Split from `trust-list` so the base
+# feature keeps its no-dependency guarantee (offline verifiers can reproduce a
+# digest with nothing but BLAKE3), and serde stays out of any consumer that
+# only needs the protocol types.
+trust-list-wire = [ "trust-list", "dep:serde" ]
 
 [dependencies]
 blake3 = "1"
