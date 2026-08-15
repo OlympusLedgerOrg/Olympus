@@ -61,7 +61,7 @@ use sqlx::postgres::PgConnection;
 /// against a real PostgreSQL 16 database and running
 /// `regen_semantic_inventory_digest` — see the ignored maintenance test below.
 const EXTERNAL_PG_SEMANTIC_INVENTORY_BLAKE3: &str =
-    "PENDING_REGENERATION";
+    "8bf342fb06f1dfd29270d93b92ba70fa928b237cb93c15406ae9123b6985a668";
 
 #[derive(Clone, Debug, PartialEq, Eq, sqlx::FromRow)]
 pub(super) struct ExternalPgTrustedBoundaryProbe {
