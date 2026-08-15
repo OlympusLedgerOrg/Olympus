@@ -356,6 +356,37 @@ Key `.env` variables:
 
 ## PR review etiquette
 
+Unlike the rest of this file, the specifics below describe a **third-party
+service's** behaviour, observed from outside. Nothing in this tree implements or
+verifies them — the only part of it this repo controls is `.coderabbit.yaml`.
+Read them as accurate-as-observed rather than as invariants, and confirm against
+CodeRabbit's dashboard or docs when one of them is load-bearing for a decision.
+
 - Always reply to CodeRabbit findings by mentioning `@coderabbitai` in the
   response (fix confirmations and declines alike) — replies feed its
   learnings database, so decisions persist across future reviews.
+- **CodeRabbit allows 10 PR reviews per developer per hour** on this plan
+  (Pro Plus), as a rolling window rather than an hourly reset — but read that as
+  a ceiling, not a budget. Its rate-limit notice describes *adaptive* limits for
+  sustained high-volume activity: past roughly the 95th percentile of user
+  activity, further reviews return more gradually as earlier ones age out. On
+  #1657 the limit landed after four pushes in the hour, not ten. What spends the
+  budget is **pushing**, not commenting: an eligible push triggers an automatic
+  review whenever `auto_review.auto_incremental_review` is on and the
+  `auto_pause_after_reviewed_commits` threshold has not yet paused the branch.
+  This repo sets that threshold to `50` (`.coderabbit.yaml`), so the pause
+  effectively never arrives first and every push does cost a review — a run of
+  small fix-up commits exhausts the budget silently.
+  - Batch fixes into fewer pushes when a review round is in flight.
+  - Recognise the failure shape: the bot answers "Review triggered", then
+    *edits* that comment into the rate-limit warning. The acknowledgement is
+    not confirmation a review started; only the absence of that edit is.
+  - Being rate-limited is a no-op, not a penalty: per CodeRabbit's own docs a
+    blocked push consumes no allowance and does not delay when capacity
+    returns. Re-triggering before then simply does nothing, so ask
+    `@coderabbitai rate limit` for remaining capacity rather than guessing.
+  - The escape hatch is the usage-based add-on (Billing → Subscription,
+    org-admin only; priced per reviewed file, read the current rate there
+    rather than from here). Enabled with credits available,
+    over-limit reviews proceed; disabled, or enabled but out of credits, they
+    stop until an admin enables it or tops up.
