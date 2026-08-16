@@ -504,7 +504,7 @@ jobs:
         uses: taiki-e/install-action@37ba67210166984a515120020147f0b4ae3b8667 # nextest
 
       - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        uses: Swatinem/rust-cache@258712b0b7b1ddf8bddc9fc3b0faca682b2736c3 # v2
         with:
           workspaces: verifiers/rust -> target
 
@@ -589,7 +589,7 @@ jobs:
         uses: taiki-e/install-action@37ba67210166984a515120020147f0b4ae3b8667 # nextest
 
       - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        uses: Swatinem/rust-cache@258712b0b7b1ddf8bddc9fc3b0faca682b2736c3 # v2
         with:
           workspaces: clients/cli -> clients/cli/target
 
@@ -702,7 +702,7 @@ jobs:
           components: rustfmt, clippy
 
       - name: Rust cache
-        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        uses: Swatinem/rust-cache@258712b0b7b1ddf8bddc9fc3b0faca682b2736c3 # v2
         with:
           workspaces: ". -> target"
 
@@ -784,7 +784,7 @@ jobs:
         uses: taiki-e/install-action@37ba67210166984a515120020147f0b4ae3b8667 # nextest
 
       - name: Rust cache
-        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        uses: Swatinem/rust-cache@258712b0b7b1ddf8bddc9fc3b0faca682b2736c3 # v2
         with:
           workspaces: ". -> target"
 
@@ -900,7 +900,7 @@ jobs:
           components: clippy, rustfmt
 
       - name: Rust cache
-        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        uses: Swatinem/rust-cache@258712b0b7b1ddf8bddc9fc3b0faca682b2736c3 # v2
         with:
           workspaces: pg-embed-local -> target
 
@@ -1005,7 +1005,7 @@ jobs:
           toolchain: 1.95.0
 
       - name: Rust cache
-        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        uses: Swatinem/rust-cache@258712b0b7b1ddf8bddc9fc3b0faca682b2736c3 # v2
         with:
           workspaces: pg-embed-local -> target
           key: integration
@@ -1077,7 +1077,7 @@ jobs:
       - name: Install cargo-nextest
         uses: taiki-e/install-action@37ba67210166984a515120020147f0b4ae3b8667 # nextest
       - name: Rust cache
-        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        uses: Swatinem/rust-cache@258712b0b7b1ddf8bddc9fc3b0faca682b2736c3 # v2
         with:
           workspaces: ". -> target"
       - name: Verify seed reproduces the committed Poseidon parameters
@@ -1168,7 +1168,7 @@ jobs:
           toolchain: 1.95.0
 
       - name: Rust cache
-        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        uses: Swatinem/rust-cache@258712b0b7b1ddf8bddc9fc3b0faca682b2736c3 # v2
         with:
           workspaces: ". -> target"
           key: circomspect
@@ -1273,7 +1273,7 @@ jobs:
         run: rustup toolchain install nightly-2026-07-20 --no-self-update
 
       - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        uses: Swatinem/rust-cache@258712b0b7b1ddf8bddc9fc3b0faca682b2736c3 # v2
         with:
           workspaces: verifiers/rust -> target
           key: nightly
@@ -1322,7 +1322,7 @@ jobs:
         run: rustup toolchain install nightly-2026-07-20 --no-self-update
 
       - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        uses: Swatinem/rust-cache@258712b0b7b1ddf8bddc9fc3b0faca682b2736c3 # v2
         with:
           workspaces: fuzz -> fuzz/target
           key: nightly-root-fuzz
@@ -1668,7 +1668,7 @@ jobs:
         uses: taiki-e/install-action@37ba67210166984a515120020147f0b4ae3b8667 # nextest
 
       - name: Rust cache
-        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        uses: Swatinem/rust-cache@258712b0b7b1ddf8bddc9fc3b0faca682b2736c3 # v2
         with:
           workspaces: ". -> target"
 
@@ -1875,7 +1875,7 @@ jobs:
         uses: taiki-e/install-action@37ba67210166984a515120020147f0b4ae3b8667 # nextest
 
       - name: Rust cache
-        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        uses: Swatinem/rust-cache@258712b0b7b1ddf8bddc9fc3b0faca682b2736c3 # v2
         with:
           workspaces: ". -> target"
           key: prover
