@@ -3,13 +3,20 @@
 
 //! ADR-0041 role-separated trust-list types + canonical encoders.
 //!
-//! Scope: steps 1–2 of the ADR's implementation plan — the protocol data
-//! model, its machine-checkable invariants, and the normative deterministic
-//! encoders. The desktop runtime consumes [`TrustRole`] for role-scoped
-//! trusted-issuer resolution (`src-tauri`'s `api::trusted_issuers`); the
-//! snapshot machinery is **not** wired into runtime trust decisions yet — the
-//! `TrustResolver` API, persistence, quorum verification, activation
-//! scheduling, and genesis CLI are later steps.
+//! Scope: steps 1–5 of the ADR's implementation plan (partially) — the
+//! protocol data model, its machine-checkable invariants, the normative
+//! deterministic encoders, the [`TrustResolver`] trait (step 5's API surface;
+//! the snapshot-backed implementation lives in `src-tauri`'s `trust` module),
+//! and — via the sibling `trust_wire` module (feature `trust-list-wire`) —
+//! the serde JSON *storage* shape for snapshots and signed transition files.
+//! The desktop runtime consumes [`TrustRole`] for role-scoped trusted-issuer
+//! resolution (`src-tauri`'s `api::trusted_issuers`) and persists/reconciles
+//! accepted transition chains (`src-tauri`'s `trust` module, ADR §3/§4/§6);
+//! trust-domain quorum verification lives in `src-tauri`'s `quorum::trust`.
+//! Snapshot state is **not** yet consulted by runtime trust decisions — the
+//! genesis/recovery CLI, mid-run activation scheduling, `ActiveSigners`, and
+//! consumer switchover (steps 6–7, 9–10, 12–14) are later steps, so until the
+//! genesis CLI lands the legacy env-list path remains the live trust source.
 //!
 //! ## Why the encoders live here
 //!
@@ -876,6 +883,45 @@ pub struct SignerActivationRecord {
     pub trust_snapshot_sequence: u64,
     pub trust_snapshot_digest: [u8; 32],
     pub activated_at: i64,
+}
+
+// ── Runtime trust API (ADR-0041 §9) ───────────────────────────────────────
+
+/// Role-aware runtime trust queries over the current Active snapshot
+/// (ADR-0041 §9). Callers stop scanning a raw issuer `Vec` and instead ask
+/// the resolver a per-role question, so a key trusted for one role can never
+/// implicitly serve another (security invariant 1).
+///
+/// `at` is the **decision-time clock** unless a consumer's artifact format
+/// cryptographically binds its own timestamp; unsigned artifact timestamps
+/// must not be supplied as trust-decision time (ADR-0041 §9).
+///
+/// Implementations MUST fail closed on staleness (security invariant 18):
+/// once the backing Active snapshot exceeds the operator's configured maximum
+/// age — evaluated against the wall clock on **every** call, not once at load
+/// — `issuer_is_active_for` must return `false` and `active_issuers_for` must
+/// return no issuers, even while `expires_at` is still in the future. The
+/// trait lives here, next to the types it quantifies over, so an offline
+/// tool can implement it against a parsed snapshot without the desktop
+/// crate; the snapshot-backed runtime implementation lives in `src-tauri`'s
+/// `trust` module.
+pub trait TrustResolver {
+    /// True iff `pubkey` is granted `role` by the current snapshot and its
+    /// declared validity window covers `at` (`valid_from <= at < valid_until`),
+    /// `role` is in the snapshot's `active_roles`, and the snapshot itself is
+    /// fresh at the decision-time wall clock.
+    fn issuer_is_active_for(&self, pubkey: &TrustPubKey, role: TrustRole, at: i64) -> bool;
+
+    /// Every issuer entry granting `role` whose validity window covers `at`,
+    /// in canonical (entry) order. Empty when `role` is not active or the
+    /// snapshot is stale (fail closed — never a partial answer).
+    fn active_issuers_for(&self, role: TrustRole, at: i64) -> Vec<&TrustedIssuerEntry>;
+
+    /// The current snapshot's protocol sequence.
+    fn snapshot_sequence(&self) -> u64;
+
+    /// The current snapshot's canonical digest ([`snapshot_digest`]).
+    fn snapshot_digest(&self) -> [u8; 32];
 }
 
 #[cfg(test)]

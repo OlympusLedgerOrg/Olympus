@@ -20,6 +20,7 @@ mod routes;
 mod server;
 mod smt;
 mod state;
+mod trust;
 mod zk;
 
 use tauri::Manager;

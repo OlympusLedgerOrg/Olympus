@@ -222,6 +222,38 @@ async fn main() {
     } else {
         eprintln!("[olympus-server] WARNING: bootstrap did not run (no DB pool); auth will 503.");
     }
+
+    // ADR-0041 startup trust-chain reconciliation — mirrors main.rs's
+    // `reconcile_trust_chain_or_exit` (that helper lives in the bin-only
+    // `startup` module, so the match is inlined here over the same lib
+    // function). No accepted genesis (every deployment until the genesis CLI
+    // lands) logs at info and leaves the legacy env-list trust path
+    // untouched. With accepted state present, a reconciliation failure is
+    // fatal under the production classifier (`state::is_production`, which
+    // this binary's literal `OLYMPUS_ENV=production` refusal above does not
+    // fully cover — e.g. `staging` classifies as production) and a
+    // tracing::error! + legacy-path fallback in dev.
+    if let Some(ref pool) = app_state.pool {
+        let is_prod = state::is_production();
+        app_state.trust_resolver =
+            match olympus_tauri_lib::trust::reconcile::startup_trust_resolver(pool, is_prod).await {
+                Ok(resolver) => resolver,
+                Err(reason) => {
+                    if is_prod {
+                        eprintln!(
+                            "[olympus-server] FATAL: accepted ADR-0041 trust state exists but \
+                             no fresh Active trust snapshot could be established — {reason}"
+                        );
+                        std::process::exit(2);
+                    }
+                    tracing::error!(
+                        "trust: reconciliation failed ({reason}); continuing on the legacy \
+                         env-list trust path (dev mode only)"
+                    );
+                    None
+                }
+            };
+    }
     app_state.proofs_dir = proofs_dir;
 
     // ── Anchor crons (mirror main.rs) ────────────────────────────────────────

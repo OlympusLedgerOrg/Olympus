@@ -1361,7 +1361,7 @@ mod tests {
 
     #[test]
     fn release_runtime_privilege_manifest_is_complete_and_least_privilege() {
-        assert_eq!(EXTERNAL_PG_TABLE_GRANTS.len(), 32);
+        assert_eq!(EXTERNAL_PG_TABLE_GRANTS.len(), 35);
         assert_eq!(EXTERNAL_PG_SEQUENCE_GRANTS.len(), 2);
 
         for (index, grant) in EXTERNAL_PG_TABLE_GRANTS.iter().enumerate() {

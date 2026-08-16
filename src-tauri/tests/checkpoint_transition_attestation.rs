@@ -298,7 +298,15 @@ async fn writer_and_validator_agree_on_the_canonical_leaf_set() {
              VALUES ($1, $2, 'file', $1, 1, $3, $4, $5, $6, $7,
                      '2026-01-01 00:00:00'::timestamp)",
         )
-        .bind(format!("proof-{tag}"))
+        // `proof_id` is the PRIMARY KEY on `ingest_records` (migration 0019) —
+        // global, not scoped per shard_id. `checkpoint_transition_attestation_is_signed_and_verifies`
+        // above inserts its own single-tag `proof-b` row in the `files` shard;
+        // a bare `proof-{tag}` here collides with it on tag 'b' whenever both
+        // `#[tokio::test]` functions run concurrently against one shared
+        // `OLYMPUS_TEST_PG_URL` database (23505 on `ingest_records_pkey`).
+        // Embedding `SHARD` makes every proof_id this helper writes unique
+        // across the whole binary, not just within this test.
+        .bind(format!("proof-{SHARD}-{tag}"))
         .bind(SHARD)
         .bind(&content_hash)
         .bind(&ledger_entry_hash)

@@ -649,6 +649,37 @@ pub(crate) fn verify_ceremony_manifests(
     out
 }
 
+/// ADR-0041 startup trust-chain reconciliation with
+/// `verify_ceremony_manifests`' exact fatality split: an error while
+/// accepted trust state exists is fatal under `OLYMPUS_ENV=production`
+/// (`exit(2)` before the server starts serving) and a `tracing::error!` +
+/// legacy-trust-path fallback in dev. The no-accepted-genesis case — every
+/// deployment until the genesis CLI lands — logs at `info` inside
+/// [`crate::trust::reconcile::startup_trust_resolver`] and changes nothing.
+pub(crate) async fn reconcile_trust_chain_or_exit(
+    pool: &sqlx::PgPool,
+    is_prod: bool,
+) -> Option<std::sync::Arc<crate::trust::SnapshotTrustResolver>> {
+    match crate::trust::reconcile::startup_trust_resolver(pool, is_prod).await {
+        Ok(resolver) => resolver,
+        Err(reason) => {
+            if is_prod {
+                eprintln!(
+                    "[olympus-desktop] FATAL: OLYMPUS_ENV=production refuses to start: \
+                     accepted ADR-0041 trust state exists but no fresh Active trust \
+                     snapshot could be established — {reason}"
+                );
+                std::process::exit(2);
+            }
+            tracing::error!(
+                "trust: reconciliation failed ({reason}); continuing on the legacy \
+                 env-list trust path (dev mode only)"
+            );
+            None
+        }
+    }
+}
+
 // ─── main() orchestration phases ───────────────────────────────────────────
 // `fn main()` in `main.rs` extracted its `setup(|app| { ... })` body into the
 // named phases below, so `main()` reads as a short sequence of phase calls
@@ -1009,6 +1040,17 @@ pub(crate) async fn run_server_bringup(
                     .map(zeroize::Zeroizing::new),
             });
         }
+    }
+    // ADR-0041 startup reconciliation (mirrors verify_ceremony_manifests'
+    // fatality split). No accepted trust genesis exists on any deployment
+    // until the genesis CLI lands (a later PR), so the expected path today
+    // is the NoAcceptedGenesis info log with the legacy env-list trust set
+    // untouched. Once accepted state exists, the snapshot chain is
+    // authoritative: a reconciliation failure is exit(2) in production and
+    // tracing::error! + legacy path in dev.
+    if let Some(ref pool) = app_state.pool {
+        app_state.trust_resolver =
+            reconcile_trust_chain_or_exit(pool, crate::env::is_production()).await;
     }
     app_state.proofs_dir = proofs_dir;
 
