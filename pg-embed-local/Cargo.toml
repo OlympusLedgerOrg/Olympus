@@ -167,7 +167,7 @@ features = ["full"]
 optional = true
 
 [dependencies.zip]
-version = "8"
+version = "9"
 
 [target.'cfg(unix)'.dependencies.libc]
 version = "0.2"
