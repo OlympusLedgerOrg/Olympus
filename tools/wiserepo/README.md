@@ -32,21 +32,211 @@ cd tools/wiserepo
 npm install
 ```
 
-Install [Ollama](https://ollama.com), then pull a model:
+Install [Ollama](https://ollama.com) on Windows from PowerShell:
 
 ```bash
-ollama pull qwen3-coder:30b
+irm https://ollama.com/install.ps1 | iex
 ```
 
-That's the default (`WISEREPO_OLLAMA_MODEL` to override) — the strongest
-coding-tier model that fits a 24GB card (e.g. an RTX 3090) at Q4. On a
-smaller card use `qwen2.5-coder:14b`, or `qwen2.5-coder:7b` for 8GB.
-`devstral:24b` is worth trying for agentic multi-file work specifically.
+For a laptop with 16 GB system RAM and Intel Arc integrated graphics, use the
+7B Q4 model. It is about 4.7 GB and is a practical balance of coding quality,
+memory use, and responsiveness:
+
+```powershell
+ollama pull qwen2.5-coder:7b-instruct
+```
+
+Wiserepo's default is `qwen2.5-coder:7b-instruct` (`WISEREPO_OLLAMA_MODEL` can
+override it). If memory pressure or speed is a problem, use the smaller 3B
+model instead:
+
+```powershell
+ollama pull qwen2.5-coder:3b
+$env:WISEREPO_OLLAMA_MODEL = 'qwen2.5-coder:3b'
+```
+
+Avoid the 14B and larger models on this machine: they may fit on disk but leave
+too little RAM for Windows, Tauri, and Wiserepo at the same time.
+
+Note that Ollama drops the Intel Arc iGPU here ("dropping integrated GPU; to
+enable, set OLLAMA_IGPU_ENABLE=1"), so inference is CPU-only unless you opt in.
+With the iGPU still disabled (before the opt-in below), 7B generation on CPU is
+slow: 17.7 s to load the model (`load_duration`), then **5.7 tok/s** on a
+68-token prompt (`num_ctx 16384`, 5.5–5.9 over three runs), falling to **3.0
+tok/s** once the prompt fills 9,440 tokens (2.6 and 3.3 over two runs). So a full
+context costs roughly 1.9× on CPU generation — measurable, but not the dominant
+cost. An earlier revision of this file quoted "~10 tokens/sec" here; that came
+from a 6-token sample (`eval_count` 6 in 0.61 s) and was too short to stand
+behind, so it has been replaced by the two measurements above. A `qa` call over
+`crates/olympus-crypto/src/lib.rs` (34 KB) used to be killed at 300 s by Node
+fetch's default timeout; with that raised (`src/backend.mjs`), the same call now
+**completes and returns a correct answer**, taking somewhere between 10 and 14
+minutes of wall clock. That range is from polling a background run, not a timer —
+`bin/eval.mjs` prints per-question seconds and is the cheap way to get an exact
+number.
+
+A smaller model will be faster, but **no speedup ratio has been measured here** —
+the 4B below was never benchmarked on this box, so treat its advantage as
+qualitative (less compute per token) rather than as a figure. Pull it and drop
+to it if speed matters more than review quality:
+
+```powershell
+ollama pull qwen3.5:4b
+$env:WISEREPO_OLLAMA_MODEL = 'qwen3.5:4b'
+```
+
+### Hardware: iGPU yes, NPU no
+
+This is a Core Ultra (Arc 140V iGPU + NPU) laptop, and Ollama uses neither by
+default.
+
+**Measured A/B (same machine, same prompt, two runs per arm, one cold daemon per
+arm).** A fixed `qa`-shaped prompt — 9,440 tokens from the 34 KB
+`crates/olympus-crypto/src/lib.rs` — sent to a freshly started `ollama serve` on
+its own port, with `num_ctx 16384`, `temperature 0` and `keep_alive 0`, so no run
+inherited a warm prompt cache. The only difference between the arms was
+`OLLAMA_IGPU_ENABLE`:
+
+| | CPU (`=0`) | iGPU (`=1`) | iGPU ÷ CPU |
+| --- | --- | --- | --- |
+| **prefill** | 16.9 tok/s (482 s, 668 s) | 130 tok/s (64 s, 84 s) | ~7.7× |
+| **generation** | 3.0 tok/s | 8.8 tok/s | ~2.9× |
+| model load | 13.5 s | 13–18 s | — |
+| placement (`api/ps`) | `vram=0.00 GB` | `vram=5.64 GB` (100 %) | — |
+
+Reproducing this needs no harness. `POST /api/chat` with `stream: false`,
+`"keep_alive": 0`, `"options": {"num_ctx": 16384, "num_predict": 160,
+"temperature": 0, "seed": 42}`, against a daemon started as `OLLAMA_IGPU_ENABLE=<0|1>
+OLLAMA_HOST=127.0.0.1:<port> ollama serve`. The user message is exactly:
+
+````text
+You are answering a question about a Rust repository.
+
+File: crates/olympus-crypto/src/lib.rs
+```rust
+<entire file contents>
+```
+
+Question: Which constant holds the SMT node hash domain prefix, and what is its value?
+Answer in at most 120 words.
+````
+
+Ollama reports the timings itself, so no timing code is involved: prefill is
+`prompt_eval_count / prompt_eval_duration`, generation is `eval_count /
+eval_duration`, and load is `load_duration`. The context-length control below
+omits the `File:` block (a 68-token prompt) and changes nothing else — same
+`num_ctx`, same `num_predict`, same seed.
+
+Read the table with its error bars, because both arms vary. They are global
+rates over two runs that disagreed noticeably — CPU prefill 14.1 vs 19.6 tok/s
+(39 % apart), iGPU 112 vs 148 (32 %) — so the prefill ratio is ~7.7× on the
+means, but 5.7–10.5× depending on which samples you pair; treat "about 7×, ±3×"
+as the honest statement. Generation stopped at 31 tokens in every run, so that
+ratio rests on ~3 s of timed output per run and is the softest number here. The
+CPU arm ran first, leaving the model file in the OS page cache for the iGPU arm,
+which flatters the iGPU's load time but not its prefill or generation rate.
+Prefill is the rate that decides whether this tool is usable, and the gap on an
+identical 9,440-token prompt is the difference between ~8 minutes of prompt
+processing and ~1.
+
+Two separate facts about the hardware:
+
+- **iGPU is worth turning on.** Ollama drops integrated GPUs unless
+  `OLLAMA_IGPU_ENABLE=1`. **Nothing in this repo sets it** — it is a user
+  environment variable on the machine these figures come from (`setx
+  OLLAMA_IGPU_ENABLE 1`, then restart the daemon), and the daemon proves it took
+  by logging `inference compute … library=Vulkan … type=iGPU` at startup instead
+  of `dropping integrated GPU`. The gain is almost entirely **prefill** (see the
+  table above); generation improves ~2.9×, and published Arc 140V figures
+  (~173 tok/s prefill) are consistent with the 112–148 tok/s measured here.
+- **NPU is not usable.** Ollama has no Intel NPU backend (ollama/ollama #19535
+  confirms there is still no path), so no environment variable reaches it. Even
+  where reachable — llama.cpp's OpenVINO backend supports Intel NPUs — a 7B
+  model at long context is the wrong shape for it: NPU inference needs an INT4
+  OpenVINO IR export, is largely static-shape, and OpenVINO's own docs note that
+  on Core Ultra Series 2 prompts beyond 1024 tokens with a 7B model want more
+  than 16 GB of RAM, which this machine does not have.
+
+To measure the iGPU claim rather than repeat it, run the same question twice
+(before and after the reboot) and compare wall clock:
+
+```bash
+node bin/eval.mjs --limit 1
+```
+
+Two model behaviours the backend has to account for (`src/backend.mjs`):
+
+- **Thinking is off by default.** `qwen3.5` is thinking-capable and Ollama
+  enables reasoning for such models unless told not to; on CPU that is thousands
+  of tokens before the first answer token. The default `qwen2.5-coder` model is
+  not a thinking model and ignores the flag; `WISEREPO_THINK=1` turns reasoning
+  on for a qwen3.5 run (worth it for a hard `review_diff`, and it costs minutes).
+- **`num_ctx` is pinned, not inherited.** Ollama sizes its default window from
+  available VRAM and lands at 4096 here; an oversized prompt is truncated by the
+  daemon *silently*, so the model would answer from a partial view with nothing
+  in the output saying so. Wiserepo sends `WISEREPO_NUM_CTX` (default 16384),
+  clamped to the window the model declares in `/api/show` (32 K for the default
+  tag), and sizes its context budget from that clamped number, so the two cannot
+  disagree.
+
+If generation fails with `llama-server binary not found`, the install is missing
+its runners — `Programs\Ollama\lib\ollama\` should hold `llama-server.exe` and
+the ggml/vulkan libraries. Restore them by reinstalling Ollama, or by extracting
+`lib/ollama` from `ollama-windows-amd64.zip` for the matching release into the
+install directory. The archive's only top-level file is `ollama.exe`; everything
+else, including `llama-server.exe`, lives under `lib/ollama/`. A running daemon
+picks the restored files up on the next model load, with no restart needed.
 
 No API key, no per-token cost, nothing to rotate or leak. Other knobs:
 
 - `WISEREPO_OLLAMA_URL` — daemon origin (default `http://localhost:11434`)
+- `WISEREPO_OLLAMA_MODEL` — model tag (default `qwen2.5-coder:7b-instruct`)
+- `WISEREPO_MODEL_QA` / `WISEREPO_MODEL_REVIEW` / `WISEREPO_MODEL_SUMMARIZE` —
+  per-tool model overrides, so the cheap tools can run a small tag while
+  `review_diff` keeps the strong one. Unset means the default model.
+- `WISEREPO_NUM_CTX` — requested context window (default `16384`; range
+  2048–262144). This is a ceiling, not a guarantee: the value actually sent is
+  clamped to the window the model declares in `/api/show` (32K for the default
+  tag), so configuring 256K on a 32K model cannot be silently truncated.
+- `WISEREPO_KEEP_ALIVE` — how long the daemon keeps the model loaded (default
+  `30m`; Ollama duration syntax or seconds, `-1` to pin). The default matters:
+  Ollama unloads after 5 minutes and reloading this 7B costs ~17 s.
+- `WISEREPO_THINK` — `1` to emit reasoning tokens before the answer, on a
+  thinking-capable model such as `qwen3.5:4b` (default off)
+- `WISEREPO_PROGRESS` — `0` disables the progress dots written to stderr during
+  generation (on by default when stderr is a TTY)
 - `WISEREPO_TEMPERATURE` — default `0`
+
+### Streaming, progress and honesty about what was sent
+
+Requests use `stream: true` and reassemble the NDJSON response, which is what
+makes progress reporting possible at all: a five-minute CPU call that prints
+nothing is indistinguishable from a hang. On a TTY wiserepo writes one `.` per
+~128 characters of answer to stderr (never stdout — that is the MCP channel).
+
+Every answer is also checked for **fabricated citations**. The system prompt asks
+for `path:line` references, and a small local model produces them confidently
+whether or not it saw the file. Any cited path that does not resolve in the
+working tree is named in an appended note (`N of M cited path(s) do not exist in
+the repo — treat as unverified: …`). The answer is still returned — a wrong path
+is not grounds to discard a useful review — but it cannot pass as evidence.
+
+### Eval harness
+
+Every model decision above was originally argued rather than measured. `bin/eval.mjs`
+scores `repo_qa` against `eval/golden-questions.json`: each question names the
+files to ground on and the strings a correct answer must contain.
+
+```bash
+node bin/eval.mjs                     # every question
+node bin/eval.mjs --limit 2           # smoke test
+node bin/eval.mjs --model qwen3.5:4b  # compare tags on the same questions
+```
+
+It prints PASS/FAIL per question, the number of unverified citations, and a
+score. It exits `0` whenever the run completed (it is a benchmark, not a gate)
+and `2` when the backend was unavailable. Runs are slow on CPU — one question is
+one full `repo_qa` call — so `--limit` exists for smoke tests.
 - `WISEREPO_TIMEOUT_MS` — default `300000` (5 min). Much larger than a
   cloud-backed tool would need: local generation on a 30B model is far
   slower per token, and `review_diff` / AGENTS.md regeneration can emit
@@ -55,12 +245,38 @@ No API key, no per-token cost, nothing to rotate or leak. Other knobs:
 
 Low temperature reduces wording churn between runs — it does **not** make
 output byte-reproducible, and re-pulling a model tag can change the weights
-underneath you. Nothing here assumes a _regeneration_ is byte-identical to
-the last one; the byte-exact assertions in this repo are the SSMF/SMT golden vectors, which
+underneath you. Nothing here assumes a second run reproduces the first; the
+only byte-exact assertions in this repo are the SSMF/SMT golden vectors, which
 no model touches.
 
-Already registered as a project MCP server (`wiserepo`) in `.claude.json`
-alongside `repowise` — no extra Claude Code config needed.
+Registered as a project MCP server (`wiserepo`) by `.mcp.json` at the repo
+root, for clients that read project-scoped config. MCP servers are loaded when
+a client starts, so restart the client once after pulling it.
+
+## Registering it and calling it
+
+`.mcp.json` registers the server (`node tools/wiserepo/src/mcp-server.mjs`).
+
+Because MCP registration only takes effect on a client restart, the same six
+tools are also callable directly from the shell. The CLI calls the identical
+`runTool()` the MCP transport uses — one implementation, two entry points:
+
+```bash
+cd tools/wiserepo
+node bin/wiserepo.mjs tools                  # list the tools
+node bin/wiserepo.mjs context                # context.json facts
+node bin/wiserepo.mjs circuits               # artifact readiness
+node bin/wiserepo.mjs invariants --check     # exit 1 if a pinned constant is missing
+node bin/wiserepo.mjs qa "how is the leaf hash built?" -f crates/olympus-crypto/src/lib.rs
+node bin/wiserepo.mjs review --diff-args main...HEAD
+node bin/wiserepo.mjs summarize -f docs/adr/ADR-0044-smt-root-attestation.md --style "one paragraph"
+```
+
+The three structured commands need no model. `qa`, `review` and `summarize`
+need Ollama; when it is not running they exit `2` ("did not run") instead of
+printing an answer. Exit codes: `0` success, `1` usage/request error, `2`
+backend unavailable. `--diff-args` consumes the rest of the argv, so put it
+last.
 
 ## MCP tools
 
@@ -68,10 +284,18 @@ alongside `repowise` — no extra Claude Code config needed.
 - `review_diff` — review a diff against `AGENTS.md`'s engineering standards
 - `summarize` — summarize a diff or set of files (changelog entry, PR description, etc.)
 
-Every file/diff/grep result is truncated per-piece, and the combined context
-for a single call is capped at 300k chars (`TOTAL_CONTEXT_BUDGET_CHARS` in
-`src/mcp-server.mjs`) — truncation is always noted inline in the text handed
-to the model, never silent.
+Every file/diff/grep result is truncated per-piece, and the combined context for
+a single call is capped by `budgetCharsFor()` in `src/mcp-server.mjs`. That cap
+is derived from the **effective** context window (~3 chars per token, minus a
+4096-token reserve for the answer) rather than a fixed number: a budget larger
+than the window the daemon actually has would be truncated at the far end by
+Ollama with no diagnostic, so the model would see less than wiserepo reported
+sending.
+
+When the budget runs out, the files that lost out are **named** in the appended
+note instead of vanishing, and files whose path matches the question are read
+first (`orderFilesForQuestion`) — because budget is spent in list order, so
+otherwise the file named last is the one the model never sees.
 
 **`diffArgs` is allowlisted, not passed through.** `git diff` accepts flags
 that write files (`--output=PATH`) and read arbitrary paths; because
@@ -85,16 +309,24 @@ carries the regression test.
 
 ## AGENTS.md is hand-maintained
 
-There is exactly **one** agent-instructions document in this repo: the root
-`AGENTS.md`. Nothing generates it, and there is no second copy to drift.
-(`CLAUDE.md` is a one-line `@AGENTS.md` import bridge for Claude Code older
-than v2.1.277, not a duplicate.)
+There is exactly **one** agent-instructions file in this repo: the root
+`AGENTS.md`. Codex reads it natively, and the other CLIs do too — so there is no
+second copy to drift. Claude Code reads `AGENTS.md` itself from v2.1.277, but
+only when no `CLAUDE.md` exists; the installed binary here is **2.1.185**, older
+than that, so a one-line `CLAUDE.md` (`@AGENTS.md`) provides the import bridge.
+It is a pointer, not a copy: there is still exactly one document to maintain.
+Upgrading past 2.1.277 does not break it, since the import still resolves.
 
 An earlier design generated `AGENTS.md` from a `CLAUDE.md` source, stamped a
-`sha256` trailer, regenerated from a pre-commit hook and hard-gated drift in CI.
-It was retired because the generated copy was **lossy**: it paraphrased the
-invariants and dropped real content. One hand-maintained file removes both the
-drift and the paraphrase; `review_diff` grounds on `AGENTS.md` directly.
+`sha256` trailer, regenerated from a pre-commit hook and hard-gated drift in a
+`docs-agent-sync` CI job. It was retired because the generated copy was **lossy**:
+it paraphrased the invariants and dropped real content (the Python-SDK copy of
+the leaf layout and its second vector set, the exact quorum co-sign preimage).
+One file, edited directly, removes both the drift and the paraphrase.
+
+Consequence worth knowing: `review_diff` grounds on `AGENTS.md` (see
+`AGENTS_MD` in `src/mcp-server.mjs`). Nothing regenerates or gates that file
+now, so keep it current by hand.
 
 ## Tests
 
@@ -103,7 +335,7 @@ cd tools/wiserepo
 npm test
 ```
 
-70 tests covering the places a bug is silent rather than loud:
+93 tests covering the places a bug is silent rather than loud:
 
 - `resolveInRepo` path-traversal guard, including the sibling-prefix case
   (`Olympus-evil` must not count as inside `Olympus`) — and
@@ -119,11 +351,6 @@ npm test
   that `gitDiff(["--output=…"])` writes no file, and a `gitGrep` globs
   regression (a double `--` silently made every glob after the first match
   nothing).
-- coverage of the request-building and path-guard surfaces.
-
-- `source-trailer`'s hash tracking, including the regression proving a
-  prose-only edit (same Markdown structure, different meaning) changes the
-  hash — the exact case structural parity alone let through.
 - HTTP failure classification (`408`/`5xx` → non-blocking; `400`/`422` →
   blocking; `404` → blocking _and_ naming the `ollama pull` command to run,
   since a bare "API error 404" sends people hunting a network problem that

@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "wiserepo": {
+      "command": "node",
+      "args": ["tools/wiserepo/src/mcp-server.mjs"]
+    }
+  }
+}

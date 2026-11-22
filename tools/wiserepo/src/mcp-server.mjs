@@ -6,14 +6,36 @@ import { pathToFileURL } from "node:url";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
-import { callModel } from "./backend.mjs";
+import { callModel, effectiveNumCtx, modelForTool, DEFAULT_OLLAMA_MODEL } from "./backend.mjs";
+import { verifyCitations, formatMissingCitations } from "./citations.mjs";
 import { readRepoFile, gitDiff, gitGrep, truncateText, wouldTruncate } from "./repo.mjs";
+import { getOlympusContext, getCircuitStatus, checkInvariants } from "./olympus.mjs";
 
 // Total context budget across every file/diff/grep a single tool call pulls
 // in, independent of the per-piece truncation each helper already applies.
 // Without this a request naming 30 files each just under their own limit
 // would still blow well past the model's context window.
-const TOTAL_CONTEXT_BUDGET_CHARS = 300_000;
+//
+// Derived from the model's ACTUAL window rather than a fixed 300k (which only
+// fit a big-token model): Ollama truncates an oversized prompt silently, so a
+// budget larger than num_ctx means the model answers from a partial view while
+// wiserepo's inline truncation notes claim everything was sent. ~3 chars/token
+// is deliberately pessimistic for this codebase (paths, diff markers and dense
+// Rust prose all over-tokenize), and the output reserve keeps room for the
+// answer so the prompt and the completion fit in one window.
+const CHARS_PER_TOKEN_ESTIMATE = 3;
+const OUTPUT_TOKEN_RESERVE = 4_096;
+
+/**
+ * Character budget for one gather, from the window the model will really get.
+ *
+ * Called with the EFFECTIVE num_ctx (configured value clamped to what the model
+ * declares), not the configured value alone: a budget derived from a window the
+ * model does not have is the silent-truncation bug this exists to prevent.
+ */
+export function budgetCharsFor(numCtx) {
+  return Math.max(1_024, numCtx - OUTPUT_TOKEN_RESERVE) * CHARS_PER_TOKEN_ESTIMATE;
+}
 
 // Hard cap on how many files a single request may name. Without this,
 // gatherContext reads and buffers EVERY requested file in full before the
@@ -22,8 +44,36 @@ const TOTAL_CONTEXT_BUDGET_CHARS = 300_000;
 // the budget only trimming the final string. Capping the count bounds that
 // work regardless of what the budget ends up doing.
 const MAX_FILES_PER_REQUEST = 40;
+// The one agent-instructions file this repo keeps. review_diff grounds on it.
+const AGENTS_MD = "AGENTS.md";
 
-const TOOLS = [
+export const TOOLS = [
+  {
+    name: "olympus_context",
+    description:
+      "Return machine-readable project facts from context.json: version, language rules, " +
+      "critical constants (LAZY_DEPTH, CANOPY_RECOMPUTE_CAP, domain prefixes), leaf hash " +
+      "implementations, circuit list, key env vars, and agent file locations. " +
+      "Call this first when orienting to the repo — no model call, instant, works offline.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "circuit_status",
+    description:
+      "Check which ZK circuit artifacts (wasm, r1cs, ark.zkey, vkey.json, manifest) are present " +
+      "and whether any are still build.rs PLACEHOLDER stubs. Reports per-circuit readiness and " +
+      "whether production circuits are ready for cargo tauri build. No model call.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "check_invariants",
+    description:
+      "Grep the repo for ADR-0005/ADR-0022 pinned constants (LAZY_DEPTH, CANOPY_RECOMPUTE_CAP, " +
+      "NODE_PREFIX, EMPTY_LEAF_PREFIX, LEAF_BODY_FIELD_COUNT) across all four leaf-hash " +
+      "implementations (olympus-crypto, verifiers/rust, verifiers/javascript, clients/python). " +
+      "Returns grep hits per invariant — evidence for whether implementations agree. No model call.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  },
   {
     name: "repo_qa",
     description:
@@ -44,6 +94,7 @@ const TOOLS = [
           description: "Optional git-grep pattern to search first and include as context.",
         },
       },
+      additionalProperties: false,
       required: ["question"],
     },
   },
@@ -62,6 +113,7 @@ const TOOLS = [
             'Extra args passed to `git diff`, e.g. ["main...HEAD"]. Defaults to ["HEAD"].',
         },
       },
+      additionalProperties: false,
     },
   },
   {
@@ -78,20 +130,46 @@ const TOOLS = [
           description: "e.g. 'changelog entry', 'PR description', 'one paragraph'",
         },
       },
+      additionalProperties: false,
     },
   },
 ];
 
-export async function gatherContext({ files = [], grep, diffArgs }) {
+/**
+ * Order files by how well their PATH matches the question.
+ *
+ * The budget is spent in list order, so with a small window the files named
+ * last simply vanish — and the caller has no idea which. Scoring on the path is
+ * cheap (no reads, no model) and enough to float the obviously relevant file
+ * above an incidental one. Ties keep the caller's order, so behaviour is
+ * predictable when the question says nothing useful.
+ */
+export function orderFilesForQuestion(files, question) {
+  if (!question) return [...files];
+  const tokens = new Set(question.toLowerCase().match(/[a-z0-9_]{4,}/g) ?? []);
+  if (tokens.size === 0) return [...files];
+  return files
+    .map((file, index) => {
+      const haystack = file.toLowerCase();
+      let score = 0;
+      for (const token of tokens) if (haystack.includes(token)) score++;
+      return { file, index, score };
+    })
+    .sort((a, b) => b.score - a.score || a.index - b.index)
+    .map((entry) => entry.file);
+}
+
+export async function gatherContext({ files = [], grep, diffArgs, question, model } = {}) {
   if (files.length > MAX_FILES_PER_REQUEST) {
     throw new Error(
       `Requested ${files.length} files, wiserepo's per-request cap is ${MAX_FILES_PER_REQUEST} — narrow the list`,
     );
   }
 
+  const budget = budgetCharsFor(await effectiveNumCtx(model ?? DEFAULT_OLLAMA_MODEL));
   const parts = [];
   let runningChars = 0;
-  let filesTruncated = false;
+  const dropped = [];
 
   if (grep) {
     const hits = await gitGrep(grep);
@@ -105,39 +183,133 @@ export async function gatherContext({ files = [], grep, diffArgs }) {
     parts.push(part);
     runningChars += part.length;
   }
-  for (const f of files) {
+  for (const f of orderFilesForQuestion(files, question)) {
     // Stop READING once the budget is already spent, rather than reading
     // every file in full and only truncating the joined string afterward —
     // that pattern still pays the full I/O/memory cost of every requested
-    // file before the budget has any effect.
-    if (runningChars >= TOTAL_CONTEXT_BUDGET_CHARS) {
-      filesTruncated = true;
-      break;
+    // file before the budget has any effect. Keep walking the list (no reads)
+    // so the ones that lost out can be named.
+    if (runningChars >= budget) {
+      dropped.push(f);
+      continue;
     }
-    const content = await readRepoFile(f, { maxBytes: TOTAL_CONTEXT_BUDGET_CHARS - runningChars });
+    const content = await readRepoFile(f, { maxBytes: budget - runningChars });
     const part = `## ${f}\n\`\`\`\n${content}\n\`\`\``;
     parts.push(part);
     runningChars += part.length;
   }
 
   const joined = parts.join("\n\n");
-  const budgeted = truncateText(joined, TOTAL_CONTEXT_BUDGET_CHARS, "combined context");
-  if (filesTruncated || wouldTruncate(joined, TOTAL_CONTEXT_BUDGET_CHARS)) {
-    // Surface this loudly rather than let the model quietly answer from a
-    // partial view without saying so. wouldTruncate (not a length
-    // comparison) is what makes this reliable even when the appended
-    // truncation note pushes `budgeted` longer than `joined`.
-    return (
-      budgeted +
-      `\n\n[wiserepo: total context exceeded ${TOTAL_CONTEXT_BUDGET_CHARS} chars — narrow the file/grep list for full coverage]`
+  const budgeted = truncateText(joined, budget, "combined context");
+  // Surface this loudly rather than let the model quietly answer from a
+  // partial view without saying so. wouldTruncate (not a length comparison)
+  // is what makes this reliable even when the appended truncation note pushes
+  // `budgeted` longer than `joined`.
+  const notes = [];
+  if (wouldTruncate(joined, budget)) {
+    notes.push(
+      `combined context exceeded ${budget} chars — the tail was cut; narrow the file/grep list for full coverage`,
     );
   }
-  return budgeted;
+  if (dropped.length > 0) {
+    notes.push(`dropped ${dropped.length} file(s) that did not fit: ${dropped.join(", ")}`);
+  }
+  return notes.length > 0 ? `${budgeted}\n\n[wiserepo: ${notes.join("; ")}]` : budgeted;
 }
 
 const SYSTEM_PROMPT =
   "You are wiserepo, a self-hosted repo assistant for the Olympus verifiable-ledger codebase. " +
   "Be precise, cite file paths and line numbers when possible, and never invent code you have not been shown.";
+
+/**
+ * Execute one tool by name and return its text result.
+ *
+ * Exported so the CLI (`bin/wiserepo.mjs`) drives exactly the same
+ * implementation the MCP transport exposes. Two entry points, one behaviour:
+ * the CLI cannot drift from the server it wraps, and a tool only has to be
+ * added or fixed in one place.
+ */
+/**
+ * Label citations that do not resolve. The answer is still returned — a wrong
+ * path is not grounds to discard a useful review — but it must not pass as
+ * evidence, which is exactly how a small model's confident hallucination reads.
+ */
+async function withVerifiedCitations(answer) {
+  const { checked, missing } = await verifyCitations(answer);
+  if (checked === 0 || missing.length === 0) return answer;
+  return (
+    `${answer}\n\n[wiserepo: ${missing.length} of ${checked} cited path(s) do not exist in the repo ` +
+    `— treat as unverified: ${formatMissingCitations(missing)}]`
+  );
+}
+
+export async function runTool(name, args = {}) {
+  if (name === "olympus_context") {
+    const ctx = await getOlympusContext();
+    return JSON.stringify(ctx, null, 2);
+  }
+
+  if (name === "circuit_status") {
+    const status = await getCircuitStatus();
+    return JSON.stringify(status, null, 2);
+  }
+
+  if (name === "check_invariants") {
+    const result = await checkInvariants();
+    return JSON.stringify(result, null, 2);
+  }
+
+  if (name === "repo_qa") {
+    const model = modelForTool("qa");
+    const context = await gatherContext({
+      files: args.files,
+      grep: args.grep,
+      question: args.question,
+      model,
+    });
+    const prompt = `${context ? context + "\n\n" : ""}Question: ${args.question}`;
+    return withVerifiedCitations(await callModel({ system: SYSTEM_PROMPT, prompt, model }));
+  }
+
+  if (name === "review_diff") {
+    const diffArgs = args.diffArgs?.length ? args.diffArgs : ["HEAD"];
+    const diff = await gitDiff(diffArgs);
+    let standards = "";
+    try {
+      standards = await readRepoFile(AGENTS_MD);
+    } catch (err) {
+      // Only a genuinely missing file is safe to silently review without
+      // standards. A permission error, a path-type error (e.g. AGENTS.md
+      // is a directory), or any other I/O failure is a real problem the
+      // caller should see — swallowing those would silently produce a
+      // review that looks standards-checked but never actually was.
+      if (err.code !== "ENOENT") throw err;
+    }
+    const prompt =
+      `Review this diff against the project's engineering standards below. ` +
+      `Flag correctness bugs, invariant violations, and missed test coverage. Be concise, most-severe first.\n\n` +
+      (standards ? `## AGENTS.md (standards)\n\`\`\`\n${standards}\n\`\`\`\n\n` : "") +
+      `## Diff\n\`\`\`diff\n${diff || "(empty diff)"}\n\`\`\``;
+    return withVerifiedCitations(
+      await callModel({
+        system: SYSTEM_PROMPT,
+        prompt,
+        maxTokens: 8192,
+        model: modelForTool("review"),
+      }),
+    );
+  }
+
+  if (name === "summarize") {
+    const model = modelForTool("summarize");
+    const context = await gatherContext({ files: args.files, diffArgs: args.diffArgs, model });
+    const style = args.style || "one paragraph";
+    const prompt = `Summarize the following as a ${style}.\n\n${context || "(no context provided)"}`;
+    return withVerifiedCitations(await callModel({ system: SYSTEM_PROMPT, prompt, model }));
+  }
+
+  throw new Error(`Unknown tool "${name}"`);
+}
 
 const server = new Server({ name: "wiserepo", version: "0.1.0" }, { capabilities: { tools: {} } });
 
@@ -147,61 +319,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args = {} } = request.params;
 
   try {
-    if (name === "repo_qa") {
-      const context = await gatherContext({ files: args.files, grep: args.grep });
-      const prompt = `${context ? context + "\n\n" : ""}Question: ${args.question}`;
-      const answer = await callModel({ system: SYSTEM_PROMPT, prompt });
-      return { content: [{ type: "text", text: answer }] };
-    }
-
-    if (name === "review_diff") {
-      const diffArgs = args.diffArgs?.length ? args.diffArgs : ["HEAD"];
-      const diff = await gitDiff(diffArgs);
-      let standards = "";
-      try {
-        standards = await readRepoFile(AGENTS_MD);
-      } catch (err) {
-        // Only a genuinely missing file is safe to silently review without
-        // standards. A permission error, a path-type error (e.g. AGENTS.md
-        // is a directory), or any other I/O failure is a real problem the
-        // caller should see — swallowing those would silently produce a
-        // review that looks standards-checked but never actually was.
-        if (err.code !== "ENOENT") throw err;
-      }
-      const prompt =
-        `Review this diff against the project's engineering standards below. ` +
-        `Flag correctness bugs, invariant violations, and missed test coverage. Be concise, most-severe first.\n\n` +
-        (standards ? `## AGENTS.md (standards)\n\`\`\`\n${standards}\n\`\`\`\n\n` : "") +
-        `## Diff\n\`\`\`diff\n${diff || "(empty diff)"}\n\`\`\``;
-      const review = await callModel({
-        system: SYSTEM_PROMPT,
-        prompt,
-        maxTokens: 8192,
-      });
-      return { content: [{ type: "text", text: review }] };
-    }
-
-    if (name === "summarize") {
-      const context = await gatherContext({ files: args.files, diffArgs: args.diffArgs });
-      const style = args.style || "one paragraph";
-      const prompt = `Summarize the following as a ${style}.\n\n${context || "(no context provided)"}`;
-      const summary = await callModel({ system: SYSTEM_PROMPT, prompt });
-      return { content: [{ type: "text", text: summary }] };
-    }
-
-    throw new Error(`Unknown tool "${name}"`);
+    return { content: [{ type: "text", text: await runTool(name, args) }] };
   } catch (err) {
     return { content: [{ type: "text", text: `wiserepo error: ${err.message}` }], isError: true };
   }
 });
 
 // Guard the stdio bootstrap so this module can be imported by tests (for
-// `gatherContext`, `TOOLS`, etc.) without hanging on a transport that waits
-// forever for input nobody sends. Only actually connect when this file is
-// run directly, e.g. `node src/mcp-server.mjs` (how Claude Code launches it).
-// pathToFileURL (not manual string surgery) is what makes this comparison
-// correct on Windows, where a hand-built `file://${argv[1]}` string is
-// missing the extra leading slash before the drive letter that
+// `gatherContext`, `TOOLS`, `runTool`, etc.) without hanging on a transport
+// that waits forever for input nobody sends. Only actually connect when this
+// file is run directly, e.g. `node src/mcp-server.mjs` (how Claude Code
+// launches it). pathToFileURL (not manual string surgery) is what makes this
+// comparison correct on Windows, where a hand-built `file://${argv[1]}` string
+// is missing the extra leading slash before the drive letter that
 // import.meta.url actually has.
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const transport = new StdioServerTransport();

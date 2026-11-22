@@ -1,0 +1,32 @@
+[
+  {
+    "id": "node-prefix",
+    "question": "Which constant holds the SMT node hash domain prefix, and what is its value?",
+    "files": ["crates/olympus-crypto/src/lib.rs"],
+    "expect": ["NODE_PREFIX"]
+  },
+  {
+    "id": "lazy-depth",
+    "question": "What is LAZY_DEPTH set to, and what does it control in SMT storage?",
+    "files": ["src-tauri/src/smt/tree.rs"],
+    "expect": ["LAZY_DEPTH"]
+  },
+  {
+    "id": "shard-write-gate",
+    "question": "What does authorize_write check before a write to a shard is accepted?",
+    "files": ["src-tauri/src/api/shards.rs"],
+    "expect": ["authorize_write"]
+  },
+  {
+    "id": "backend-default-model",
+    "question": "Which model does the backend use by default, and how is its context window chosen?",
+    "files": ["tools/wiserepo/src/backend.mjs"],
+    "expect": ["qwen2.5-coder:7b-instruct"]
+  },
+  {
+    "id": "ceremony-coordinator-env",
+    "question": "Which environment variable supplies the ceremony coordinator signing key?",
+    "files": ["AGENTS.md"],
+    "expect": ["OLYMPUS_CEREMONY_COORDINATOR_KEY"]
+  }
+]
