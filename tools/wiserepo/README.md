@@ -19,11 +19,10 @@ Two caveats worth stating plainly, since "local" invites over-trust:
   tool from reading files outside the repo (e.g. a symlink to
   `~/.ssh/id_rsa`) — with a local model that's no longer an exfiltration
   risk, but it's still the tool reading things you didn't ask it to.
-- `WISEREPO_OLLAMA_URL` can be pointed at a non-localhost daemon. If you do
-  that, the repo content this tool gathers (file bodies, diffs, grep hits)
-  will be sent to that configured endpoint, reopening the network-trust
-  question this design closes — the guarantee above is about the default, not
-  about every possible config.
+- `WISEREPO_OLLAMA_URL`, when set, is restricted by code to a credential-free
+  HTTP endpoint on `localhost`, `127.0.0.1`, or `::1`. Remote Ollama endpoints,
+  URL credentials, query strings, and fragments are rejected before any model
+  request is made.
 
 ## Setup
 

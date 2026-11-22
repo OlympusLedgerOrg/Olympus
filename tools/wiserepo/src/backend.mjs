@@ -10,6 +10,42 @@
 
 import { Agent } from "undici";
 
+// Declared before the env validation below, not after it. These are `class`
+// declarations, so their bindings are in the temporal dead zone until their
+// definition is evaluated — which is exactly where a `throw new
+// ModelRequestError(...)` inside DEFAULT_OLLAMA_URL used to land, turning a
+// misconfigured URL into `ReferenceError: Cannot access 'ModelRequestError'
+// before initialization` instead of the real message. Hoisting the classes is
+// what lets the validation keep the specific error type its callers switch on.
+/**
+ * The backend could not be reached or could not produce usable output:
+ * daemon not running, network failure, timeout, or a 200 whose body has no
+ * usable text. Callers treat this as "the check did not run", NOT "the check
+ * failed" — it must never block a commit.
+ */
+export class ModelUnavailableError extends Error {
+  constructor(message, { cause } = {}) {
+    super(message);
+    this.name = "ModelUnavailableError";
+    this.cause = cause;
+  }
+}
+
+/**
+ * The request itself was wrong — model not pulled, malformed body, or a
+ * misconfigured environment variable. This is a bug in wiserepo or its
+ * config, and is surfaced as a real failure rather than silently skipped: a
+ * gate that fails OPEN on a typo is worse than no gate, because it reports
+ * "skipping" instead of "misconfigured".
+ */
+export class ModelRequestError extends Error {
+  constructor(message, { cause } = {}) {
+    super(message);
+    this.name = "ModelRequestError";
+    this.cause = cause;
+  }
+}
+
 const DEFAULT_OLLAMA_URL = (() => {
   const raw = process.env.WISEREPO_OLLAMA_URL || "http://localhost:11434";
   let url;
@@ -18,8 +54,16 @@ const DEFAULT_OLLAMA_URL = (() => {
   } catch {
     throw new ModelRequestError(`WISEREPO_OLLAMA_URL is not a valid URL: ${raw}`);
   }
-  const loopback = url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "[::1]";
-  if (!loopback || url.protocol !== "http:" || url.username || url.password || url.search || url.hash) {
+  const loopback =
+    url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "[::1]";
+  if (
+    !loopback ||
+    url.protocol !== "http:" ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash
+  ) {
     throw new ModelRequestError(
       "WISEREPO_OLLAMA_URL must be a credential-free http URL on localhost, 127.0.0.1, or ::1",
     );
@@ -49,35 +93,6 @@ export function modelForTool(tool) {
   const envName = TOOL_MODEL_ENV[tool];
   const override = envName ? process.env[envName] : undefined;
   return (override && override.trim()) || DEFAULT_OLLAMA_MODEL;
-}
-
-/**
- * The backend could not be reached or could not produce usable output:
- * daemon not running, network failure, timeout, or a 200 whose body has no
- * usable text. Callers treat this as "the check did not run", NOT "the check
- * failed" — it must never block a commit.
- */
-export class ModelUnavailableError extends Error {
-  constructor(message, { cause } = {}) {
-    super(message);
-    this.name = "ModelUnavailableError";
-    this.cause = cause;
-  }
-}
-
-/**
- * The request itself was wrong — model not pulled, malformed body, or a
- * misconfigured environment variable. This is a bug in wiserepo or its
- * config, and is surfaced as a real failure rather than silently skipped: a
- * gate that fails OPEN on a typo is worse than no gate, because it reports
- * "skipping" instead of "misconfigured".
- */
-export class ModelRequestError extends Error {
-  constructor(message, { cause } = {}) {
-    super(message);
-    this.name = "ModelRequestError";
-    this.cause = cause;
-  }
 }
 
 // Upper bound for every request deadline. WISEREPO_TIMEOUT_MS is validated

@@ -3,6 +3,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { extractCitations, verifyCitations, formatMissingCitations } from "../src/citations.mjs";
 
 test("extractCitations finds repo paths with and without line numbers", () => {
@@ -12,6 +13,20 @@ test("extractCitations finds repo paths with and without line numbers", () => {
   assert.deepEqual(found, [
     { path: "crates/olympus-crypto/src/lib.rs", line: 42 },
     { path: "src-tauri/src/smt/tree.rs", line: null },
+  ]);
+});
+
+// REGRESSION: alternation order made `js` swallow `json` (and `ts` swallow
+// `tsx`), so a .json citation parsed as a .js path with no line attached and
+// skipped the line check entirely.
+test("extractCitations keeps multi-character extensions and their line numbers", () => {
+  const found = extractCitations(
+    "see tools/wiserepo/package.json:12 and src/ui/App.tsx:34 and a/b/notes.md",
+  );
+  assert.deepEqual(found, [
+    { path: "tools/wiserepo/package.json", line: 12 },
+    { path: "src/ui/App.tsx", line: 34 },
+    { path: "a/b/notes.md", line: null },
   ]);
 });
 
@@ -45,6 +60,48 @@ test("verifyCitations accepts real files and flags invented ones", async () => {
 test("verifyCitations refuses paths that escape the repo without reading them", async () => {
   const { missing } = await verifyCitations("see ../../../../etc/passwd.rs");
   assert.equal(missing.length, 1, "an escaping path must never count as verified");
+});
+
+// `exists` returning true isolates containment from the filesystem: the
+// citation has to be rejected because it left the repo, not because the target
+// happened to be missing. Otherwise this test would still pass if the
+// containment check were deleted.
+test("verifyCitations refuses a traversal citation even when the file exists", async () => {
+  const { missing } = await verifyCitations("see ../../package.json:1", {
+    exists: async () => true,
+  });
+  assert.equal(missing.length, 1, "a traversal citation must never count as verified");
+});
+
+const PKG = "tools/wiserepo/package.json";
+// Counted independently of citations.mjs, so an off-by-one there cannot make
+// this fixture agree with the bug.
+const PKG_LAST_LINE = readFileSync(new URL("../package.json", import.meta.url), "utf8")
+  .replace(/\n$/, "")
+  .split("\n").length;
+
+const alwaysExists = { exists: async () => true };
+
+test("verifyCitations accepts line 1 and the true last line of a real file", async () => {
+  const first = await verifyCitations(`${PKG}:1`, alwaysExists);
+  assert.deepEqual(first.missing, []);
+  const last = await verifyCitations(`${PKG}:${PKG_LAST_LINE}`, alwaysExists);
+  assert.deepEqual(last.missing, []);
+});
+
+// REGRESSION: counting `split("\n").length` makes a trailing newline look like
+// an extra empty line, so every newline-terminated file in the repo accepts a
+// citation one line past its end.
+test("verifyCitations rejects the line just past the end of the file", async () => {
+  const { missing } = await verifyCitations(`${PKG}:${PKG_LAST_LINE + 1}`, alwaysExists);
+  assert.equal(missing.length, 1, "a line past EOF must be reported, not accepted");
+});
+
+test("verifyCitations rejects line 0 and an absurdly large line number", async () => {
+  for (const line of [0, 999_999_999]) {
+    const { missing } = await verifyCitations(`${PKG}:${line}`, alwaysExists);
+    assert.equal(missing.length, 1, `line ${line} must be reported`);
+  }
 });
 
 test("formatMissingCitations renders path:line when a line was cited", () => {

@@ -44,6 +44,11 @@ export function budgetCharsFor(numCtx) {
 // the budget only trimming the final string. Capping the count bounds that
 // work regardless of what the budget ends up doing.
 const MAX_FILES_PER_REQUEST = 40;
+const MAX_QUESTION_CHARS = 8_000;
+const MAX_GREP_CHARS = 2_000;
+const MAX_STYLE_CHARS = 200;
+const MAX_DIFF_ARGS = 32;
+const MAX_MODEL_OUTPUT_CHARS = 120_000;
 // The one agent-instructions file this repo keeps. review_diff grounds on it.
 const AGENTS_MD = "AGENTS.md";
 
@@ -234,7 +239,11 @@ const SYSTEM_PROMPT =
  * path is not grounds to discard a useful review — but it must not pass as
  * evidence, which is exactly how a small model's confident hallucination reads.
  */
-async function withVerifiedCitations(answer) {
+// Exported so the model-output contract below (non-text output, oversized
+// output) can be tested directly rather than only through a live model call.
+export async function withVerifiedCitations(answer) {
+  if (typeof answer !== "string") throw new Error("model returned a non-text response");
+  answer = truncateText(answer, MAX_MODEL_OUTPUT_CHARS, "model output");
   const { checked, missing } = await verifyCitations(answer);
   if (checked === 0 || missing.length === 0) return answer;
   return (
@@ -243,7 +252,58 @@ async function withVerifiedCitations(answer) {
   );
 }
 
+function validateToolArgs(name, args) {
+  if (!args || typeof args !== "object" || Array.isArray(args)) {
+    throw new Error(`${name} arguments must be an object`);
+  }
+  const allowed = {
+    olympus_context: [],
+    circuit_status: [],
+    check_invariants: [],
+    repo_qa: ["question", "files", "grep"],
+    review_diff: ["diffArgs"],
+    summarize: ["files", "diffArgs", "style"],
+  }[name];
+  if (!allowed) throw new Error(`Unknown tool "${name}"`);
+  for (const key of Object.keys(args)) {
+    if (!allowed.includes(key)) throw new Error(`${name}.${key} is not a supported argument`);
+  }
+  const stringField = (field, max, required = false) => {
+    if (args[field] === undefined) {
+      if (required) throw new Error(`${name}.${field} is required`);
+      return;
+    }
+    if (typeof args[field] !== "string" || args[field].length > max) {
+      throw new Error(`${name}.${field} must be a string of at most ${max} characters`);
+    }
+  };
+  const arrayField = (field, maxItems) => {
+    if (args[field] === undefined) return;
+    if (
+      !Array.isArray(args[field]) ||
+      args[field].length > maxItems ||
+      args[field].some((v) => typeof v !== "string" || v.length > 4096)
+    ) {
+      throw new Error(
+        `${name}.${field} must contain at most ${maxItems} strings of at most 4096 characters`,
+      );
+    }
+  };
+  if (name === "repo_qa") {
+    stringField("question", MAX_QUESTION_CHARS, true);
+    stringField("grep", MAX_GREP_CHARS);
+    arrayField("files", MAX_FILES_PER_REQUEST);
+  } else if (name === "review_diff") {
+    arrayField("diffArgs", MAX_DIFF_ARGS);
+  } else if (name === "summarize") {
+    arrayField("files", MAX_FILES_PER_REQUEST);
+    arrayField("diffArgs", MAX_DIFF_ARGS);
+    stringField("style", MAX_STYLE_CHARS);
+  }
+}
+
 export async function runTool(name, args = {}) {
+  validateToolArgs(name, args);
   if (name === "olympus_context") {
     const ctx = await getOlympusContext();
     return JSON.stringify(ctx, null, 2);

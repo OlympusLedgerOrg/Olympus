@@ -473,32 +473,84 @@ test("callModel treats a dead daemon (fetch throws) as unavailable, not as a bug
 // leaked into logs. Constants
 // are read at module load, so this re-imports with a cache-busting query to
 // get a module instance bound to the credentialed URL.
-test("callModel strips credentials from the endpoint before putting it in an error", async () => {
+// Asserted by name and by NOT being a ReferenceError, not by instanceof: each
+// cache-busted import above evaluates backend.mjs into a fresh module instance
+// with its own ModelRequestError binding, so the class identity the test file
+// imported statically can never match it. A ReferenceError here would mean the
+// class is declared after the URL check again (temporal dead zone), which is
+// exactly the bug that made this guard report the wrong error.
+function assertRequestError(err) {
+  assert.ok(!(err instanceof ReferenceError), `TDZ ReferenceError: ${err.message}`);
+  assert.equal(
+    err.name,
+    "ModelRequestError",
+    `expected ModelRequestError, got ${err.name}: ${err.message}`,
+  );
+  return true;
+}
+
+async function importBackendBoundTo(raw) {
   const original = process.env.WISEREPO_OLLAMA_URL;
-  process.env.WISEREPO_OLLAMA_URL = "http://user:sup3rs3cret@ollama.internal:11434/?token=abc123";
+  process.env.WISEREPO_OLLAMA_URL = raw;
   try {
-    const mod = await import(`../src/backend.mjs?credleak=${Date.now()}`);
-    await assert.rejects(
-      () =>
-        withStubbedFetch(
-          () => {
-            throw new Error("connect ECONNREFUSED");
-          },
-          () => mod.callModel({ prompt: "p" }),
-        ),
-      (err) => {
-        assert.ok(!err.message.includes("sup3rs3cret"), `password leaked: ${err.message}`);
-        assert.ok(!err.message.includes("abc123"), `token leaked: ${err.message}`);
-        assert.ok(!err.message.includes("user:"), `userinfo leaked: ${err.message}`);
-        // Still useful for debugging: the host must survive.
-        assert.match(err.message, /ollama\.internal/);
-        return true;
-      },
+    // The query string is what defeats the module cache; encodeURIComponent
+    // keeps a raw URL with `?`/`#` out of the specifier's query syntax.
+    return await import(
+      `../src/backend.mjs?urlcheck=${encodeURIComponent(raw)}&n=${Math.random()}`
     );
   } finally {
-    if (original !== undefined) process.env.WISEREPO_OLLAMA_URL = original;
-    else delete process.env.WISEREPO_OLLAMA_URL;
+    if (original === undefined) delete process.env.WISEREPO_OLLAMA_URL;
+    else process.env.WISEREPO_OLLAMA_URL = original;
   }
+}
+
+test("callModel rejects credentialed remote endpoints before sending repo content", async () => {
+  await assert.rejects(
+    () => importBackendBoundTo("http://user:sup3rs3cret@ollama.internal:11434/?token=abc123"),
+    (err) => {
+      // The specific type, not just a message: bin/wiserepo.mjs branches on
+      // `instanceof ModelRequestError` to print "request error" and exit 1
+      // rather than reporting an unclassified crash. A bare Error silently
+      // downgrades that path.
+      assertRequestError(err);
+      assert.match(err.message, /credential-free http URL/);
+      assert.ok(!err.message.includes("sup3rs3cret"), `password leaked: ${err.message}`);
+      assert.ok(!err.message.includes("abc123"), `token leaked: ${err.message}`);
+      return true;
+    },
+  );
+});
+
+// The trust boundary this closes is the whole point of the local backend: repo
+// content must never be posted to a daemon off this machine.
+test("callModel refuses a non-loopback WISEREPO_OLLAMA_URL", async () => {
+  await assert.rejects(
+    () => importBackendBoundTo("http://192.168.1.10:11434"),
+    (err) => assertRequestError(err) && /credential-free http URL/.test(err.message),
+  );
+});
+
+// Loopback over https is still a loopback host, but the check is explicit about
+// the scheme, so a self-signed TLS endpoint must fail loudly rather than
+// surface later as an opaque fetch error.
+test("callModel refuses https even on loopback", async () => {
+  await assert.rejects(
+    () => importBackendBoundTo("https://localhost:11434"),
+    (err) => assertRequestError(err) && /credential-free http URL/.test(err.message),
+  );
+});
+
+test("callModel reports an unparseable WISEREPO_OLLAMA_URL as a request error", async () => {
+  await assert.rejects(
+    () => importBackendBoundTo("not a url at all"),
+    (err) => assertRequestError(err) && /is not a valid URL/.test(err.message),
+  );
+});
+
+// Positive control: the guards above must not reject the documented default.
+test("callModel accepts a credential-free loopback endpoint", async () => {
+  const mod = await importBackendBoundTo("http://127.0.0.1:11434");
+  assert.equal(typeof mod.callModel, "function");
 });
 
 test("callModel tolerates trailing slashes on WISEREPO_OLLAMA_URL", async () => {
