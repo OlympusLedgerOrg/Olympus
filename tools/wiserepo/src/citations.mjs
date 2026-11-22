@@ -10,7 +10,8 @@
 // A path that does not resolve is reported, not rewritten — the answer is still
 // returned, with the unverified citations named so a human knows what to check.
 
-import { readFile, stat } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import { stat } from "node:fs/promises";
 import path from "node:path";
 import { repoRoot, resolveInRepoFollowingSymlinks } from "./repo.mjs";
 
@@ -89,8 +90,8 @@ export async function verifyCitations(text, { exists = existsInRepo } = {}) {
       // lexically inside the tree while pointing at a file outside it, and
       // following it here would pull bytes we never meant to touch just to
       // count their lines. It also rejects a path that escapes the root.
-      const content = await readFile(await resolveInRepoFollowingSymlinks(citation.path), "utf8");
-      if (citation.line < 1 || citation.line > countLines(content)) missing.push(citation);
+      const resolved = await resolveInRepoFollowingSymlinks(citation.path);
+      if (!(await hasLine(resolved, citation.line))) missing.push(citation);
     } catch {
       // Unreadable (dangling symlink, permissions, a directory, invalid UTF-8
       // path) means the cited line cannot be confirmed, so the citation is
@@ -102,18 +103,49 @@ export async function verifyCitations(text, { exists = existsInRepo } = {}) {
 }
 
 /**
- * Number of addressable lines in `content`.
+ * Whether the file at `absPath` has an addressable line `line`.
  *
- * A trailing newline TERMINATES the last line rather than opening an empty
- * one: "a\n" is one line, not two. Counting `split("\n").length` gets this
- * wrong for every newline-terminated file in the repo — which is nearly all of
- * them — and accepts a citation exactly one line past the end.
+ * Streamed, not buffered: the previous version read the whole file to count
+ * lines, so a citation naming a very large tracked file (a lockfile, a fixture)
+ * allocated it in full just to answer a question about one line number. This
+ * counts 0x0A bytes — never part of a multi-byte UTF-8 sequence, so no decoding
+ * is needed — and returns the moment the cited line starts, so memory stays
+ * constant and the usual case costs only the prefix up to that line. Worst case
+ * still scans the file once, at the same order as the old stat+read.
+ *
+ * Line semantics: a trailing newline TERMINATES the last line rather than
+ * opening an empty one, so "a\n" has one line, not two. Counting newlines and
+ * treating a final unterminated segment as a line is what keeps a citation one
+ * past the end of a newline-terminated file from being accepted.
+ *
+ * Exported for the bounded-read test; callers should go through
+ * verifyCitations, which also enforces repo confinement.
  */
-function countLines(content) {
-  if (content === "") return 0;
-  const lines = content.split("\n");
-  if (lines[lines.length - 1] === "") lines.pop();
-  return lines.length;
+export async function hasLine(absPath, line) {
+  if (line < 1) return false;
+  let newlines = 0;
+  let bytes = 0;
+  let lastByte = -1;
+  const stream = createReadStream(absPath);
+  try {
+    for await (const chunk of stream) {
+      bytes += chunk.length;
+      for (let i = 0; i < chunk.length; i++) {
+        if (chunk[i] !== 0x0a) continue;
+        newlines += 1;
+        // `line` newlines seen means line `line` has begun; the rest of the
+        // file cannot change that answer.
+        if (newlines >= line) return true;
+      }
+      lastByte = chunk[chunk.length - 1];
+    }
+  } finally {
+    stream.destroy();
+  }
+  // An empty file has no addressable line, matching a zero-line count rather
+  // than reporting its single empty segment as line 1.
+  if (bytes === 0) return false;
+  return lastByte !== 0x0a && line === newlines + 1;
 }
 
 export function formatMissingCitations(missing) {

@@ -4,7 +4,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { extractCitations, verifyCitations, formatMissingCitations } from "../src/citations.mjs";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import {
+  extractCitations,
+  verifyCitations,
+  formatMissingCitations,
+  hasLine,
+} from "../src/citations.mjs";
 
 test("extractCitations finds repo paths with and without line numbers", () => {
   const found = extractCitations(
@@ -112,4 +120,49 @@ test("formatMissingCitations renders path:line when a line was cited", () => {
     ]),
     "a/b.rs:12, c/d.md",
   );
+});
+
+// hasLine streams instead of buffering the file, so exercise it on a fixture far
+// larger than anything tracked here. Correctness at scale is the point: the
+// bounds are what a buffered reader got wrong, and streaming them must not
+// change the answers.
+test("hasLine bounds a large file correctly without buffering it", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "wiserepo-cite-"));
+  try {
+    const lines = 200_000;
+    const file = path.join(dir, "big.txt");
+    await writeFile(
+      file,
+      Array.from({ length: lines }, (_, i) => `line ${i + 1}`).join("\n") + "\n",
+    );
+    assert.equal(await hasLine(file, 1), true, "first line");
+    assert.equal(await hasLine(file, lines), true, "last line of a newline-terminated file");
+    assert.equal(await hasLine(file, lines + 1), false, "one past the end");
+    assert.equal(await hasLine(file, 0), false, "line 0 is never addressable");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("hasLine counts an unterminated final line, and an empty file has none", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "wiserepo-cite-"));
+  try {
+    const file = path.join(dir, "small.txt");
+    await writeFile(file, "one\ntwo");
+    assert.equal(await hasLine(file, 2), true, "final line without a trailing newline");
+    assert.equal(await hasLine(file, 3), false);
+    await writeFile(file, "");
+    assert.equal(await hasLine(file, 1), false, "an empty file has no line 1");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// The confinement check must still run before any bytes are read, so a
+// traversal citation fails even though the target is readable.
+test("verifyCitations still refuses traversal now that it streams", async () => {
+  const { missing } = await verifyCitations("see ../../package.json:1", {
+    exists: async () => true,
+  });
+  assert.equal(missing.length, 1);
 });
