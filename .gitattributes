@@ -19,3 +19,15 @@ proofs/zkvm/canonicalization/*.elf binary
 proofs/zkvm/canonicalization/*.id text eol=lf
 # Shared git hooks are POSIX shell scripts; must keep LF on every platform
 .githooks/* text eol=lf
+# Web/JS/TS sources, data and prose are normalised to LF on every platform:
+# CRLF in these breaks Prettier's check, the Python/JS golden-vector blake3
+# pins and verifiers/rust's end_to_end fixture pin, which hash raw bytes.
+*.js text eol=lf
+*.mjs text eol=lf
+*.cjs text eol=lf
+*.ts text eol=lf
+*.tsx text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.css text eol=lf
+.gitattributes text eol=lf
