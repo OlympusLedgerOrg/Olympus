@@ -82,14 +82,43 @@ jobs:
           echo "Changed files:"
           cat "$RUNNER_TEMP/changed-files.txt"
 
+      # A PR must not be able to weaken the gate that evaluates it. This runs
+      # the base branch's checker, so editing the head copy changes nothing
+      # here, and any change to the gate's own files needs an explicit label.
+      - name: Verify the scope gate itself was not edited
+        env:
+          PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if git cat-file -e "${BASE_SHA}:scripts/check-gate-integrity.mjs" 2>/dev/null; then
+            git show "${BASE_SHA}:scripts/check-gate-integrity.mjs" \
+              > "$RUNNER_TEMP/check-gate-integrity.mjs"
+          else
+            # Bootstrap: the PR that first introduces the checker cannot read
+            # it from base. Run its head copy once, still requiring the label,
+            # so this path disappears as soon as the checker is merged.
+            cp scripts/check-gate-integrity.mjs "$RUNNER_TEMP/check-gate-integrity.mjs"
+          fi
+          node "$RUNNER_TEMP/check-gate-integrity.mjs" \
+            --changed-files-file "$RUNNER_TEMP/changed-files.txt" \
+            --labels-json "$PR_LABELS" \
+            --summary-file "$GITHUB_STEP_SUMMARY"
+
       - name: Check the diff against the declared scope
         env:
           PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
+          # Run the base branch's checker, not the PR's copy: the file this
+          # gate reads must be the reviewed one. The gate-integrity step above
+          # is what allows an intentional checker change (with its label).
+          git show "${BASE_SHA}:scripts/check-pr-scope.mjs" \
+            > "$RUNNER_TEMP/check-pr-scope.mjs"
           # Drop --require-scope to make a missing Scope block a pass instead of
           # a failure (advisory mode).
-          node scripts/check-pr-scope.mjs \
+          node "$RUNNER_TEMP/check-pr-scope.mjs" \
             --body-file "$RUNNER_TEMP/pr-body.md" \
             --changed-files-file "$RUNNER_TEMP/changed-files.txt" \
             --labels-json "$PR_LABELS" \

@@ -8,9 +8,9 @@
             "type": "command",
             "shell": "bash",
             "if": "Bash(git commit*)",
-            "command": "failed=0; ruff_dirs=''; for d in protocol storage api tests tools; do [ -d \"$d\" ] && ruff_dirs=\"$ruff_dirs $d\"; done; mypy_dirs=''; for d in protocol storage api; do [ -d \"$d\" ] && mypy_dirs=\"$mypy_dirs $d\"; done; if [ -n \"$ruff_dirs\" ]; then echo '=== ruff check --fix ==='; ruff check --fix $ruff_dirs || failed=1; echo '=== ruff format ==='; ruff format $ruff_dirs || failed=1; if git diff --name-only -- $ruff_dirs | grep -q .; then echo 'ruff modified tracked files — re-stage and retry'; failed=1; fi; else echo 'No Python source dirs present — skipping ruff (Python retired in v0.9).'; fi; if [ -n \"$mypy_dirs\" ]; then echo '=== mypy ==='; mypy $mypy_dirs || failed=1; fi; if [ $failed -ne 0 ]; then echo '{\"continue\":false,\"stopReason\":\"Pre-commit checks failed (ruff/mypy). Fix errors above before committing.\"}'; exit 1; fi",
+            "command": "set -e; echo '=== cargo check ==='; cargo check --workspace 2>&1 | tail -20; echo '=== cargo clippy (warnings as errors) ==='; cargo clippy --workspace -- -D warnings 2>&1 | tail -20",
             "timeout": 120,
-            "statusMessage": "Running ruff + mypy before commit..."
+            "statusMessage": "Running cargo check + clippy before commit..."
           }
         ]
       }

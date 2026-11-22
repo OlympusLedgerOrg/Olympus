@@ -22,7 +22,7 @@ hybrid shape that can carry:
 Add `olympus_crypto::signature_envelope` behind the opt-in
 `signature-envelope` feature. The module defines:
 
-- `SignatureEnvelopeV2`
+- `SignatureEnvelopeV3`
 - `SignatureSuite`
 - `SignatureAlgorithm`
 - `SignatureVerificationMode`
@@ -33,11 +33,22 @@ Every component signs the same envelope message:
 
 ```text
 BLAKE3(
-  OLY:SIGNATURE-ENVELOPE:V2 ||
+  OLY:SIGNATURE-ENVELOPE:V3 ||
   lp(domain_separator_utf8) ||
-  lp(payload_digest_32)
+  lp(payload_digest_32) ||
+  lp(suite_wire_name) ||
+  u32_be(algorithm_count) ||
+  for each algorithm in the suite's canonical order: lp(algorithm_wire_name)
 )
 ```
+
+v3 is a deliberate breaking revision of v2, which signed only the domain and
+payload digest. In v2 the suite label and the algorithm list were unauthenticated
+metadata: a hybrid envelope could be relabelled as `ed25519` and its PQ leg
+stripped while the Ed25519 signature still verified (audit A-P2-1). Binding both
+into the message means any relabel, leg addition, or leg removal invalidates the
+Ed25519 signature. The algorithm list is taken from the suite descriptor, not
+from the serialized component order, so reordering JSON cannot change the digest.
 
 The payload is a 32-byte digest produced by the caller's existing domain, not a
 replacement for that domain. This keeps ADR-0005 framing and existing
@@ -56,8 +67,10 @@ hybrid leg.
 - No verifier vector migration.
 - No ceremony or circuit change.
 - No new trust in unaudited PQC code by default.
+- v3 changes the signed bytes and the schema tag; envelopes produced by v2 do
+  not verify and must be re-signed. There is no deployed consumer of v2.
 - Future ML-DSA or SLH-DSA support can be added behind a separate feature while
-  keeping the envelope bytes stable.
+  keeping the v3 envelope bytes stable.
 
 ## Non-goals
 

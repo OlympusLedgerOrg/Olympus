@@ -140,7 +140,7 @@ checkpoint analogue of `federation::cosign`:
   requester cared to ask for.
 - **`collect_and_store_checkpoint_quorum`** — the gossip loop's per-round
   entry point, called from `federation::gossip::sync_round` with the exact
-  `own_checkpoints` row `id` that round's push loop just *attempted* to push
+  `own_checkpoints` row `id` that round's push loop just _attempted_ to push
   to every trusted peer (so, for any peer the push actually reached, its
   synchronous `receive_checkpoint` handler has already verified-and-stored it
   before collection asks for a co-signature; a peer the push missed just
@@ -161,14 +161,16 @@ checkpoint analogue of `federation::cosign`:
 
 The signer set is sourced from `quorum::trusted_signer_set` (the trusted-peer
 registry), and the threshold from `OLYMPUS_CHECKPOINT_QUORUM_THRESHOLD`
-(clamped `≥ 1`, defaulting to `1`) — a dedicated env var, distinct from
+(defaulting to `1` when unset; an explicitly-set empty, non-integer, or zero
+value refuses startup instead of silently degrading to 1-of-N — audit D-P2-1)
+— a dedicated env var, distinct from
 `OLYMPUS_FEDERATION_QUORUM_THRESHOLD` (which scopes SBT credential quorums),
 so an operator can run different M-of-N policies for the two, unless the
 checkpoint's shard carries a per-shard override (see "Per-shard threshold
 override" below), which takes precedence. Migration
 `0061_own_checkpoints_quorum_params.sql` adds `checkpoint_quorum_threshold` /
 `checkpoint_quorum_signers` to `own_checkpoints`, pinned **once**, on the
-**first attempt** (not the first time the threshold is *met* — see below),
+**first attempt** (not the first time the threshold is _met_ — see below),
 via `own_checkpoint::set_checkpoint_quorum_params`'s one-shot `WHERE
 checkpoint_quorum_threshold IS NULL` guard — so a later env change or
 trusted-peer-list edit cannot silently re-scope an already-pinned
@@ -178,13 +180,13 @@ signatures persist via `store_checkpoint_quorum_signatures` (migration
 verification against the pinned `(threshold, signer-set)` on the row.
 
 **Why pin on first attempt, not first success.** Pinning is what lets
-signatures accumulate *across* gossip rounds against the same signed
+signatures accumulate _across_ gossip rounds against the same signed
 message: a later round reuses the pinned `(threshold, signers)` instead of
 recomputing fresh ones (which could legitimately drift if a peer is
 added/removed between rounds — `checkpoint_quorum_message` binds both into
 the signed digest, so a different signer set is a different message).
 Deferring the pin until the threshold is met would mean every unsatisfied
-round signs a *different* message, so nothing collected in an earlier round
+round signs a _different_ message, so nothing collected in an earlier round
 would ever count toward a later one — the checkpoint could never accumulate
 its way to quorum at all. The one real failure mode this trades in — a
 threshold pinned above the live signer count — is closed separately, above:
@@ -207,7 +209,7 @@ fresh-pin branch — a shard override takes precedence over
 `OLYMPUS_CHECKPOINT_QUORUM_THRESHOLD` when set, `None` falls back to the env
 default unchanged. Because pinning is still one-shot on first attempt (see
 above), setting or clearing the override never retroactively changes an
-already-pinned checkpoint row — it only takes effect on that shard's *next*
+already-pinned checkpoint row — it only takes effect on that shard's _next_
 checkpoint. The override is deliberately not validated against the live
 trusted-peer count at set time; that would be a second, driftable source of
 truth for a check the pin-time path (`threshold as usize > signers.len()`

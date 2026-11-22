@@ -2,6 +2,14 @@
 # Keep this file sorted and prefer removing IDs as dependencies are upgraded.
 #
 # Last revalidated: 2026-07-18 — RISC Zero receipt dependency triage.
+#
+# Static revalidation: 2026-11-22 — audit F-P2-1. `cargo audit` was NOT run in
+# this environment, so this is a reading of the entries against `Cargo.lock`,
+# not a fresh scan. Nothing could be removed: the same three upstream families
+# (tauri/gtk-rs, ark-circom/wasmer, RISC Zero) still pin them.
+# RUSTSEC-2023-0071 (rsa) remains reachable only with the optional `federation`
+# feature; default desktop builds do not link Arti, so its blast radius is
+# unchanged from the entry below.
 # Each entry below was confirmed still-active against the current
 # `Cargo.lock` via `cargo tree -i <crate> --target all`; the rationale
 # now names the concrete upstream release that would unblock removal.
