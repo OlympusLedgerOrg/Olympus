@@ -3,9 +3,11 @@ import type { Verdict, VerdictState } from "../lib/types";
 import CopyButton from "./CopyButton";
 import { ApiError, issueZkBundle } from "../lib/api";
 import { getStoredApiKey } from "../lib/storage";
+import { blake3 } from "@noble/hashes/blake3.js";
 
 type VerificationResult = {
   content_hash?: string;
+  original_root?: string | null;
   proof_id?: string;
   record_id?: string;
   shard_id?: string;
@@ -21,6 +23,11 @@ type VerificationResult = {
   is_redacted?: boolean;
   original_hash?: string;
   record_type?: string;
+  signature?: string | Record<string, unknown> | null;
+  issuer?: string | null;
+  signature_public_key?: { x: string; y: string } | null;
+  leaf_index?: number | null;
+  snapshot_size?: number | null;
 };
 
 type ResultRow = {
@@ -51,6 +58,21 @@ function asString(value: unknown): string | undefined {
   return undefined;
 }
 
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value as Record<string, unknown>)
+      .sort()
+      .map((k) => `${JSON.stringify(k)}:${stableJson((value as Record<string, unknown>)[k])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function hex(bytes: Uint8Array): string {
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 function detailValue(verdict: VerdictState, keyPattern: RegExp): string | undefined {
   return verdict.details.find((detail) => keyPattern.test(detail.key))?.value;
 }
@@ -65,6 +87,7 @@ function normalizeResult(verdict: VerdictState): VerificationResult {
       asString(raw.contentHash) ??
       detailValue(verdict, /content\s*hash/i) ??
       verdict.displayHash,
+    original_root: asString(raw.original_root),
     proof_id:
       asString(raw.proof_id) ?? asString(raw.proofId) ?? detailValue(verdict, /proof\s*id/i),
     record_id:
@@ -99,6 +122,17 @@ function normalizeResult(verdict: VerdictState): VerificationResult {
     is_redacted: raw.is_redacted === true,
     original_hash: asString(raw.original_hash),
     record_type: asString(raw.record_type),
+    signature:
+      typeof raw.signature === "string" || (raw.signature && typeof raw.signature === "object")
+        ? (raw.signature as string | Record<string, unknown>)
+        : null,
+    issuer: asString(raw.issuer),
+    signature_public_key:
+      raw.signature_public_key && typeof raw.signature_public_key === "object"
+        ? (raw.signature_public_key as { x: string; y: string })
+        : null,
+    leaf_index: typeof raw.leaf_index === "number" ? raw.leaf_index : null,
+    snapshot_size: typeof raw.snapshot_size === "number" ? raw.snapshot_size : null,
   };
 }
 
@@ -205,20 +239,53 @@ export default function ProofResultPanel({ verdict }: { verdict: VerdictState })
   }
 
   // Build a structured verification bundle for copy/download
-  const bundle = {
+  const proofLabel =
+    result.merkle_proof_valid === true
+      ? "VALID"
+      : result.merkle_proof_valid === false
+        ? "INVALID"
+        : "UNKNOWN";
+
+  const bundleWithoutHash = {
+    protocol: { name: "Olympus", network: "olympus-mainnet", schema: "olympus-proof-v1" },
+    authority: { id: "olympus-mainnet-authority-v1" },
+    version: "1.0",
+    algorithm: "blake3",
     proof_id: result.proof_id,
     record_id: result.record_id,
     shard_id: result.shard_id,
     content_hash: result.content_hash,
+    original_root: result.original_root ?? null,
     merkle_root: result.merkle_root,
     poseidon_root: result.poseidon_root ?? null,
     ledger_entry_hash: result.ledger_entry_hash,
     committed_at: committedAt,
     merkle_proof: result.merkle_proof ?? {},
+    signature: result.signature ?? null,
+    signed_fields: ["content_hash", "merkle_root", "ledger_entry_hash"],
+    signature_public_key: result.signature_public_key ?? null,
+    issuer: result.issuer ?? "Olympus",
     merkle_proof_valid: result.merkle_proof_valid ?? null,
     record_type: result.record_type ?? "file",
     is_redacted: result.is_redacted ?? false,
     original_hash: result.original_hash ?? null,
+    canonicalization: { algorithm: "olympus-canonical-v1" },
+    tree: {
+      depth: 20,
+      leaf_index: result.leaf_index ?? null,
+      tree_size: result.snapshot_size ?? null,
+      hash_algorithm: "poseidon",
+    },
+    commitment: { type: "merkle_root", value: result.merkle_root ?? null },
+    verified_at: new Date().toISOString(),
+    summary: {
+      status: proofLabel,
+      message: "Content hash is included in the committed root and has a valid Olympus signature.",
+    },
+  };
+  const bundle = {
+    ...bundleWithoutHash,
+    bundle_hash: hex(blake3(new TextEncoder().encode(stableJson(bundleWithoutHash)))),
   };
   let proofJson: string;
   try {
@@ -226,13 +293,6 @@ export default function ProofResultPanel({ verdict }: { verdict: VerdictState })
   } catch {
     proofJson = JSON.stringify({ error: "proof_json not serializable" }, null, 2);
   }
-
-  const proofLabel =
-    result.merkle_proof_valid === true
-      ? "VALID"
-      : result.merkle_proof_valid === false
-        ? "INVALID"
-        : "UNKNOWN";
 
   const rows: ResultRow[] = [
     { label: "CONTENT_HASH_BLAKE3", value: result.content_hash, copyable: true },

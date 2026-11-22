@@ -94,3 +94,17 @@ let ok     = olympus_manifest::proof::verify(&proof, &sealed.manifest_root())?.i
 
 See ADR-0027 (`docs/adr/ADR-0027-dataset-manifest-commitments.md`) for the design
 and `docs/benchmarks/manifest-throughput.md` for performance.
+# Offline proof-bundle verification
+
+Verify an exported `olympus-proof-v1` artifact without contacting an Olympus
+node:
+
+```text
+olympus verify proof.json
+```
+
+The command checks the canonical `bundle_hash`, reconstructs the Poseidon
+snapshot root from the explicit left/right path, and verifies the BJJ signature
+against the embedded `signature_public_key`. It returns a non-zero exit code
+for malformed or invalid artifacts.
+

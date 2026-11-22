@@ -126,10 +126,20 @@ export default function RecordDetailPage() {
 
   const proofBundle = JSON.stringify(
     {
+      version: "1.0",
+      algorithm: "blake3",
       proof_id: data.proof_id,
+      record_id: data.record_id,
       content_hash: data.content_hash,
       merkle_root: data.merkle_root,
+      ledger_entry_hash: data.ledger_entry_hash,
+      committed_at: data.timestamp,
       merkle_proof: data.merkle_proof,
+      // Keep the field in the stable proof-pack schema. Older servers do not
+      // expose a detached signature on this endpoint, while newer servers
+      // may provide one without requiring a UI change.
+      signature: data.signature ?? null,
+      issuer: data.issuer ?? "Olympus",
     },
     null,
     2,

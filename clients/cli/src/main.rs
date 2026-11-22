@@ -11,6 +11,7 @@ mod scan;
 #[cfg(feature = "server")]
 mod server;
 
+use ark_bn254::Fr;
 use std::process::ExitCode;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -30,7 +31,7 @@ USAGE:
 COMMANDS:
     build    Hash a local directory into a dataset manifest + record index
     prove    Produce an inclusion/exclusion proof for a record
-    verify   Verify a record proof against a manifest (offline)
+    verify   Verify a record proof against a manifest, or `verify <bundle.json>`
     diff     Seal an incremental version on top of a parent (v2 = v1 − + )
     link     Verify the structural version link between parent and child
     hash     BLAKE3-hash a file
@@ -300,6 +301,9 @@ olympus verify --proof <path> --manifest <path>
 ";
 
 fn cmd_verify(a: &Args) -> Result<bool, String> {
+    if a.positional().len() == 1 && a.opt("proof").is_none() {
+        return cmd_verify_protocol(&a.positional()[0]);
+    }
     require(a, &["proof", "manifest"], VERIFY_USAGE)?;
     let bundle: RecordProofBundle = read_json(a.req("proof")?)?;
     let manifest: DatasetManifest = read_json(a.req("manifest")?)?;
@@ -336,6 +340,156 @@ fn cmd_verify(a: &Args) -> Result<bool, String> {
         // Non-zero would be ideal but we keep a single failure path; emit a
         // clear marker and let callers grep. Return an error for exit code.
         Err(format!("proof did not verify: {verdict:?}"))
+    }
+}
+
+/// Verify the portable `olympus-proof-v1` artifact without contacting a node.
+fn cmd_verify_protocol(path: &str) -> Result<bool, String> {
+    let raw: serde_json::Value = read_json(path)?;
+    let obj = raw
+        .as_object()
+        .ok_or("proof bundle must be a JSON object")?;
+    if raw.pointer("/protocol/schema").and_then(|v| v.as_str()) != Some("olympus-proof-v1") {
+        return Err("unsupported or missing proof bundle schema".into());
+    }
+    let supplied = obj
+        .get("bundle_hash")
+        .and_then(|v| v.as_str())
+        .ok_or("bundle_hash is missing")?;
+    let mut unhashed = obj.clone();
+    unhashed.remove("bundle_hash");
+    let computed = blake3::hash(canonical_json(&serde_json::Value::Object(unhashed)).as_bytes())
+        .to_hex()
+        .to_string();
+    if supplied != computed {
+        return Err(format!(
+            "bundle hash mismatch: expected {computed}, got {supplied}"
+        ));
+    }
+
+    let content_hash = obj
+        .get("content_hash")
+        .and_then(|v| v.as_str())
+        .ok_or("content_hash is missing")?;
+    let original_root = obj
+        .get("original_root")
+        .and_then(|v| v.as_str())
+        .ok_or("original_root is missing")?;
+    let root = raw
+        .pointer("/commitment/value")
+        .and_then(|v| v.as_str())
+        .or_else(|| obj.get("merkle_root").and_then(|v| v.as_str()))
+        .ok_or("commitment.value is missing")?;
+    let index = raw
+        .pointer("/tree/leaf_index")
+        .and_then(|v| v.as_u64())
+        .ok_or("tree.leaf_index is missing")?;
+    let signature = obj
+        .get("signature")
+        .and_then(|v| v.as_object())
+        .ok_or("signature is missing")?;
+    let key = obj
+        .get("signature_public_key")
+        .and_then(|v| v.as_object())
+        .ok_or("signature_public_key is missing")?;
+    let path_nodes = obj
+        .get("merkle_proof")
+        .and_then(|v| v.as_array())
+        .ok_or("merkle_proof must be an array")?;
+    let mut elements = Vec::with_capacity(path_nodes.len());
+    let mut indices = Vec::with_capacity(path_nodes.len());
+    for node in path_nodes {
+        let n = node.as_object().ok_or("malformed merkle proof node")?;
+        let h = n
+            .get("hash")
+            .and_then(|v| v.as_str())
+            .ok_or("proof node hash missing")?;
+        elements.push(h.to_owned());
+        indices.push(match n.get("position").and_then(|v| v.as_str()) {
+            Some("left") => 0,
+            Some("right") => 1,
+            _ => return Err("proof node position must be left or right".into()),
+        });
+    }
+    let snapshot = olympus_crypto::ledger_snapshot::LedgerSnapshot {
+        snapshot_root: root.to_owned(),
+        snapshot_index: index,
+        snapshot_size: raw
+            .pointer("/tree/tree_size")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0),
+        path_elements_hex: elements,
+        path_indices: indices,
+        signature_r8x: signature
+            .get("r8x")
+            .and_then(|v| v.as_str())
+            .ok_or("signature.r8x missing")?
+            .to_owned(),
+        signature_r8y: signature
+            .get("r8y")
+            .and_then(|v| v.as_str())
+            .ok_or("signature.r8y missing")?
+            .to_owned(),
+        signature_s: signature
+            .get("s")
+            .and_then(|v| v.as_str())
+            .ok_or("signature.s missing")?
+            .to_owned(),
+        signed_at_unix: signature.get("signed_at").and_then(|v| v.as_i64()),
+    };
+    let px = key
+        .get("x")
+        .and_then(|v| v.as_str())
+        .ok_or("public key x missing")?
+        .parse::<Fr>()
+        .map_err(|_| "invalid public key x")?;
+    let py = key
+        .get("y")
+        .and_then(|v| v.as_str())
+        .ok_or("public key y missing")?
+        .parse::<Fr>()
+        .map_err(|_| "invalid public key y")?;
+    let valid = olympus_crypto::ledger_snapshot::verify_snapshot(
+        &snapshot,
+        content_hash,
+        original_root,
+        px,
+        py,
+    );
+    println!("Protocol: Olympus\nNetwork: {}\n\nContent Hash: PRESENT\nMerkle Proof: {}\nCommitment: {}\nSignature: {}\nBundle Hash: VALID\n\nResult: {}", raw.pointer("/protocol/network").and_then(|v| v.as_str()).unwrap_or("unknown"), valid, valid, valid, if valid { "VALID" } else { "INVALID" });
+    if valid {
+        Ok(true)
+    } else {
+        Err("snapshot proof or signature verification failed".into())
+    }
+}
+
+fn canonical_json(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Object(map) => {
+            let mut keys: Vec<_> = map.keys().collect();
+            keys.sort();
+            format!(
+                "{{{}}}",
+                keys.iter()
+                    .map(|k| format!(
+                        "{}:{}",
+                        serde_json::to_string(k).unwrap(),
+                        canonical_json(&map[*k])
+                    ))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            )
+        }
+        serde_json::Value::Array(values) => format!(
+            "[{}]",
+            values
+                .iter()
+                .map(canonical_json)
+                .collect::<Vec<_>>()
+                .join(",")
+        ),
+        _ => serde_json::to_string(value).unwrap(),
     }
 }
 
