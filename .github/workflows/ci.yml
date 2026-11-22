@@ -100,9 +100,8 @@ jobs:
               - 'docs/adr/**'
               - 'scripts/check_adr_index.mjs'
             agent-docs:
-              - 'CLAUDE.md'
               - 'AGENTS.md'
-              - 'CODEX.md'
+              - 'CLAUDE.md'
               - 'tools/wiserepo/**'
             tooling:
               - '.license-header-baseline'
@@ -189,14 +188,14 @@ jobs:
       - name: Check ADR index/status drift
         run: node scripts/check_adr_index.mjs
 
-  # ── AGENTS.md drift gate (wiserepo) ──────────────────────────────────────────
-  # CLAUDE.md and AGENTS.md carry the same guidance for two different
-  # assistants and have drifted apart for real in this repo before (commit
-  # 4f5e270f). wiserepo's own unit tests (structural-parity check, path-guard)
-  # run unconditionally; the actual drift check needs a model API key and is
-  # a soft gate — see the step below for why.
-  docs-agent-sync:
-    name: AGENTS.md drift check (wiserepo)
+  # ── Agent instructions: exactly one document, plus the tool that reads it ───
+  # AGENTS.md is hand-maintained now — nothing generates it. This job keeps the
+  # two guarantees the retired CLAUDE.md→AGENTS.md generator partly covered:
+  # that there is still exactly ONE instructions document, and that wiserepo's
+  # test suite runs somewhere (deleting the generator also deleted the only job
+  # that ran `npm test` for tools/wiserepo).
+  agent-docs:
+    name: one instructions document (AGENTS.md)
     runs-on: ubuntu-latest
     needs: changes
     if: needs.changes.outputs.agent-docs == 'true' || needs.changes.outputs.ci == 'true'
@@ -207,6 +206,24 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: AGENTS.md is the only instructions document
+        run: |
+          # CLAUDE.md is an import bridge for Claude Code < v2.1.277, not a copy.
+          test -f AGENTS.md || { echo "AGENTS.md is missing"; exit 1; }
+          test -f CLAUDE.md || { echo "CLAUDE.md is missing: it is the @AGENTS.md bridge"; exit 1; }
+          if [ "$(tr -d '\r' < CLAUDE.md)" != "@AGENTS.md" ]; then
+            echo "CLAUDE.md must contain exactly one line: @AGENTS.md"
+            echo "A second copy of the guidance is the drift this repo removed."
+            exit 1
+          fi
+          for f in CODEX.md AGENTS.local.md CLAUDE.local.md; do
+            if [ -e "$f" ]; then
+              echo "$f must not exist: AGENTS.md is the only instructions document"
+              exit 1
+            fi
+          done
+          echo "OK: one instructions document; CLAUDE.md is a 1-line bridge."
+
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -214,30 +231,8 @@ jobs:
           cache: npm
           cache-dependency-path: tools/wiserepo/package-lock.json
 
-      - name: Install wiserepo dependencies
-        run: npm ci
-        working-directory: tools/wiserepo
-
-      - name: wiserepo unit tests
-        run: npm test
-        working-directory: tools/wiserepo
-
-      - name: Check AGENTS.md is in sync with CLAUDE.md
-        run: |
-          # A HARD gate, and cheap: `--check` is a pure content-hash
-          # comparison of CLAUDE.md against the source-hash trailer stamped
-          # in AGENTS.md. It calls no model, so it needs no Ollama daemon,
-          # no network, and no secret — and can therefore only exit 0 (in
-          # sync) or 1 (drifted). The exit-2 "backend unavailable" branch of
-          # the contract is unreachable here by construction; only an actual
-          # regeneration (running this script WITHOUT --check, which CI
-          # never does) can hit it.
-          #
-          # This step previously had to juggle a repo secret and skip itself
-          # on pull_request to avoid exposing an API key to PR-authored
-          # code. wiserepo is Ollama-only now: there is no key to leak, so
-          # the gate runs identically on every trigger.
-          node bin/sync-agent-docs.mjs --check
+      - name: wiserepo tests
+        run: npm ci && npm test
         working-directory: tools/wiserepo
 
   # ── Formatting + per-file license headers ───────────────────────────────────
@@ -273,7 +268,7 @@ jobs:
   # ── Static analysis (Semgrep) ────────────────────────────────────────────────
   # Runs on every push/PR regardless of what changed -- like secrets-scan,
   # deliberately not gated behind the `changes` filter, because
-  # .semgrep/olympus-rules.yml encodes repo-wide invariants (CLAUDE.md's
+  # .semgrep/olympus-rules.yml encodes repo-wide invariants (AGENTS.md's
   # "Critical Invariants" section) that any Rust change anywhere could
   # violate, not just changes in one filtered area.
   #
@@ -424,7 +419,7 @@ jobs:
 
   # ── Public API drift (olympus-crypto) ────────────────────────────────────────
   # olympus-crypto carries the ADR-0005 leaf-hash layout and the other
-  # constants CLAUDE.md lists as "four independent implementations to keep in
+  # constants AGENTS.md lists as "four independent implementations to keep in
   # step" -- an accidental rename or signature change here is exactly the
   # silent-drift class of bug that section exists to prevent, and nothing
   # else in CI would catch a change that compiles fine but alters the crate's

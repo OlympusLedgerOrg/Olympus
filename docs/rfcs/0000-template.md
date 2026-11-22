@@ -29,7 +29,7 @@ could implement it. Cover:
 
 ## Security & invariant impact
 
-Call out any effect on the Critical Invariants in `CLAUDE.md`, the threat model
+Call out any effect on the Critical Invariants in `AGENTS.md`, the threat model
 ([`docs/threat-model.md`](../threat-model.md)), or the ceremony integrity
 checks. State the new assumptions a verifier or auditor must trust.
 

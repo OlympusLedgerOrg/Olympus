@@ -50,7 +50,7 @@ const TOOLS = [
   {
     name: "review_diff",
     description:
-      "Review a git diff against this repo's CLAUDE.md engineering standards (invariants, hard boundaries, etc). " +
+      "Review a git diff against this repo's AGENTS.md engineering standards (invariants, hard boundaries, etc). " +
       "Defaults to `git diff HEAD` (working tree + staged) if no diffArgs given.",
     inputSchema: {
       type: "object",
@@ -157,12 +157,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     if (name === "review_diff") {
       const diffArgs = args.diffArgs?.length ? args.diffArgs : ["HEAD"];
       const diff = await gitDiff(diffArgs);
-      let claudeMd = "";
+      let standards = "";
       try {
-        claudeMd = await readRepoFile("CLAUDE.md");
+        standards = await readRepoFile(AGENTS_MD);
       } catch (err) {
         // Only a genuinely missing file is safe to silently review without
-        // standards. A permission error, a path-type error (e.g. CLAUDE.md
+        // standards. A permission error, a path-type error (e.g. AGENTS.md
         // is a directory), or any other I/O failure is a real problem the
         // caller should see — swallowing those would silently produce a
         // review that looks standards-checked but never actually was.
@@ -171,7 +171,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const prompt =
         `Review this diff against the project's engineering standards below. ` +
         `Flag correctness bugs, invariant violations, and missed test coverage. Be concise, most-severe first.\n\n` +
-        (claudeMd ? `## CLAUDE.md (standards)\n\`\`\`\n${claudeMd}\n\`\`\`\n\n` : "") +
+        (standards ? `## AGENTS.md (standards)\n\`\`\`\n${standards}\n\`\`\`\n\n` : "") +
         `## Diff\n\`\`\`diff\n${diff || "(empty diff)"}\n\`\`\``;
       const review = await callModel({
         system: SYSTEM_PROMPT,

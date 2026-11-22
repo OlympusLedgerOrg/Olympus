@@ -246,7 +246,7 @@ There's no Docker requirement at runtime. Any historical `docker-compose.yml` re
 
 ## Where to Look Next
 
-- [CLAUDE.md](../CLAUDE.md) — the source-of-truth file for working with Claude in this repo. Read this first.
+- [AGENTS.md](../AGENTS.md) — the single source-of-truth instructions file for any AI agent in this repo. Read this first.
 - [docs/architecture.md](architecture.md) — deeper architecture notes.
 - [docs/court-evidence.md](court-evidence.md) — how the anchoring stack maps to legal evidence requirements.
 - [docs/adr/](adr/) — Architecture Decision Records.

@@ -470,13 +470,17 @@ reviews:
           PASS as not-applicable for migrations that only INSERT or UPDATE
           seed data, and for PRs touching no migrations.
 
-      - name: "CLAUDE.md and AGENTS.md stay in sync"
+      - name: "AGENTS.md stays the only instructions document"
         mode: warning
         instructions: |
-          FAIL if the PR modifies CLAUDE.md without a corresponding change to
-          AGENTS.md, or vice versa. AGENTS.md is generated from CLAUDE.md and
-          the docs-agent-sync CI gate blocks on any drift between them.
-          PASS if neither file is touched or both changed together.
+          The repo keeps exactly ONE agent-instructions document: AGENTS.md.
+          CLAUDE.md is only a one-line import bridge containing `@AGENTS.md`,
+          kept for Claude Code versions older than v2.1.277 (which cannot read
+          AGENTS.md directly).
+          FAIL if a PR adds a second instructions document (CODEX.md, another
+          copy of the invariants), or grows CLAUDE.md beyond that single
+          import line. A duplicate is the drift this repo removed on purpose.
+          PASS if only AGENTS.md changes, or if neither file is touched.
 
       - name: "CodeRabbit path_filters stay exclude-only"
         mode: warning

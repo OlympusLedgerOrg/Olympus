@@ -14,7 +14,7 @@ The PR Scope Drift check fails if the diff reaches outside them.
 
 Reaching further can be right — widen this list if the extra paths were always
 part of the task, or apply the `scope-override` label and say why below.
-Note that staging CLAUDE.md regenerates AGENTS.md, so declare both.
+`AGENTS.md` is the single agent-instructions file — edit it directly; nothing regenerates it.
 
   ## Scope
 

@@ -98,7 +98,7 @@ locally. Bypass per-invocation with `--no-verify`, or set
 
 ## Environment variables
 
-All optional in dev; defaults Just Work. See [`CLAUDE.md`](../CLAUDE.md#environment)
+All optional in dev; defaults Just Work. See [`AGENTS.md`](../AGENTS.md#environment)
 for the authoritative list. Common overrides:
 
 | Variable | Purpose |

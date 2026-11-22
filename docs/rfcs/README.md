@@ -19,7 +19,7 @@ Open an RFC for any of:
 
 - Changes to **protocol semantics** — leaf/node hashing, SMT shape,
   canonicalization, domain separation (see the Critical Invariants in
-  [`CLAUDE.md`](../../CLAUDE.md)).
+  [`AGENTS.md`](../../AGENTS.md)).
 - Changes to **ZK circuits**, the proving/verifying surface, or the ceremony.
 - Changes to the **threat model** or security boundaries.
 - Changes to **governance**, the contributor ladder, or release authority.

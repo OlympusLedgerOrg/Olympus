@@ -29,7 +29,7 @@ Companion documents:
 - **Transparency.** Decisions and releases are recorded via ADRs, RFCs, and
   signed tags. Discussion happens in the open on issues and pull requests.
 - **Fail-closed on the protocol.** Changes to the Critical Invariants in
-  [`CLAUDE.md`](../CLAUDE.md) are migration-class events and never land
+  [`AGENTS.md`](../AGENTS.md) are migration-class events and never land
   without an ADR.
 - **Grow the bus factor.** We prefer to widen the maintainer pool over
   concentrating authority.
@@ -65,7 +65,7 @@ objects within the **review window** below, it is approved.
 
 All PRs require DCO sign-off (`CONTRIBUTING.md`) and passing required CI before
 merge. The Critical Invariants gate overrides everything: no invariant-breaking
-merge without the ADR and regeneration steps in `CLAUDE.md`.
+merge without the ADR and regeneration steps in `AGENTS.md`.
 
 ### Voting
 
@@ -155,7 +155,7 @@ remaining maintainers or designated stewards will:
 3. Update [`MAINTAINERS.md`](MAINTAINERS.md) and `.github/CODEOWNERS`.
 
 The persistence requirements for signing keys (Ed25519 and Baby Jubjub) in
-`CLAUDE.md` exist precisely so that historical signed roots remain verifiable
+`AGENTS.md` exist precisely so that historical signed roots remain verifiable
 across a succession.
 
 ## Bootstrapping clause

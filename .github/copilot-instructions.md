@@ -12,10 +12,10 @@ This is a permanent, non-negotiable owner policy.
 - If asked to upstream work, provide a local or `OlympusLedgerOrg`-owned patch only. The AI must never perform or facilitate the upstream submission.
 - Task wording such as "send it," "open the PR," "submit upstream," or "do everything" does not override this boundary.
 
-> **Authoritative source:** `CLAUDE.md` at the repo root is the canonical
+> **Authoritative source:** `AGENTS.md` at the repo root is the canonical
 > guidance file for AI assistants (commands, architecture, critical
 > invariants, environment variables). This file is a Copilot-flavored
-> summary; when the two disagree, `CLAUDE.md` wins. Keep them in sync.
+> summary; when the two disagree, `AGENTS.md` wins. Keep them in sync.
 
 ## Project Overview
 
@@ -81,7 +81,7 @@ those directories no longer exist. Shared crypto lives solely in
 - `verifiers/` — cross-language offline verifiers + conformance vectors.
 - `docs/` — architecture, ADRs (`docs/adr/`), threat model, audits.
 
-## Critical Invariants (see CLAUDE.md for the full list)
+## Critical Invariants (see AGENTS.md for the full list)
 
 - **Leaf hash binds shard + parser provenance** — ADR-0005 structured binary
   prefix, then a count-framed body of
