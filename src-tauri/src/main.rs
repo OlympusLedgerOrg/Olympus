@@ -51,6 +51,9 @@ fn main() {
         .try_init();
 
     tauri::Builder::default()
+        // Paths the IPC layer may read, populated only by native pickers and
+        // OS drops (audit E-P2-1). No command can add to it.
+        .manage(commands::ApprovedPaths::new())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let app_data_dir = app

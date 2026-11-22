@@ -61,18 +61,44 @@ pub const CHECKPOINT_QUORUM_PREFIX: &[u8] = b"OLY:CHECKPOINT:QUORUM:V2";
 /// "how many institutions must co-sign this node's checkpoint root".
 pub const CHECKPOINT_QUORUM_THRESHOLD_ENV: &str = "OLYMPUS_CHECKPOINT_QUORUM_THRESHOLD";
 
+/// Validate an explicitly-set [`CHECKPOINT_QUORUM_THRESHOLD_ENV`] value.
+///
+/// `Some(reason)` means the value is present but unusable. Startup treats that
+/// as fatal in every environment (see `run_preflight_checks`). This closes the
+/// audit D-P2-1 fail-open: an unparseable value used to degrade an intended
+/// M-of-N policy to 1-of-N with only a log line.
+pub fn checkpoint_quorum_threshold_config_error() -> Option<String> {
+    let raw = std::env::var(CHECKPOINT_QUORUM_THRESHOLD_ENV).ok();
+    checkpoint_quorum_threshold_config_error_for(raw.as_deref())
+}
+
+fn checkpoint_quorum_threshold_config_error_for(raw: Option<&str>) -> Option<String> {
+    let raw = raw?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Some(format!(
+            "{CHECKPOINT_QUORUM_THRESHOLD_ENV} is set but empty; unset it for the default of 1"
+        ));
+    }
+    match trimmed.parse::<u32>() {
+        Ok(m) if m >= 1 => None,
+        Ok(_) => Some(format!(
+            "{CHECKPOINT_QUORUM_THRESHOLD_ENV}={raw:?} must be at least 1"
+        )),
+        Err(_) => Some(format!(
+            "{CHECKPOINT_QUORUM_THRESHOLD_ENV}={raw:?} is not a non-negative integer"
+        )),
+    }
+}
+
 /// The configured default checkpoint-quorum threshold `M`, read from
 /// [`CHECKPOINT_QUORUM_THRESHOLD_ENV`].
 ///
 /// Defaults to `1` (single-signer — the collector then never needs a peer
-/// co-signature) when unset, and clamps `0` up to `1` for the same reason
-/// [`super::configured_threshold`] does: a zero threshold is never vacuously
-/// satisfied by [`verify_checkpoint_quorum`], so pinning one would just
-/// produce a checkpoint quorum that can never be satisfied. An unparseable
-/// (but present) value also falls back to `1` — fail-open on the weakest
-/// policy, matching `configured_threshold` — but logs a warning, since `1`
-/// silently downgrades an intended M-of-N to 1-of-N with no other signal an
-/// operator's env var has a typo.
+/// co-signature) when unset. An explicitly-set value is validated by
+/// [`checkpoint_quorum_threshold_config_error`] at startup, so the defensive
+/// fallback below should be unreachable in a running app; it is kept so a
+/// library caller cannot pin an unsatisfiable `0`.
 pub fn configured_checkpoint_threshold() -> u32 {
     let Ok(raw) = std::env::var(CHECKPOINT_QUORUM_THRESHOLD_ENV) else {
         return 1;
@@ -80,9 +106,11 @@ pub fn configured_checkpoint_threshold() -> u32 {
     match raw.trim().parse::<u32>() {
         Ok(m) => m.max(1),
         Err(_) => {
-            tracing::warn!(
+            // Startup refuses this configuration; reaching here means a caller
+            // bypassed preflight. Fail to the weakest policy rather than panic.
+            tracing::error!(
                 "{CHECKPOINT_QUORUM_THRESHOLD_ENV}={raw:?} is not a valid non-negative integer; \
-                 defaulting the checkpoint-quorum threshold to 1"
+                 using 1 (startup should have rejected this)"
             );
             1
         }
@@ -491,6 +519,26 @@ mod tests {
         let sigs = vec![cosign(&k1, &cid, epoch, &root, 0, &signers)];
         let status = verify_checkpoint_quorum(&cid, epoch, &root, &signers, 0, &sigs);
         assert!(!status.satisfied);
+    }
+
+    #[test]
+    fn checkpoint_threshold_env_validation_rejects_typos_and_zero() {
+        assert_eq!(checkpoint_quorum_threshold_config_error_for(None), None);
+        assert_eq!(
+            checkpoint_quorum_threshold_config_error_for(Some("2")),
+            None
+        );
+        assert_eq!(
+            checkpoint_quorum_threshold_config_error_for(Some(" 3 ")),
+            None
+        );
+
+        for bad in ["0", "", "  ", "two", "-1", "2.5"] {
+            assert!(
+                checkpoint_quorum_threshold_config_error_for(Some(bad)).is_some(),
+                "{bad:?} must be rejected"
+            );
+        }
     }
 
     #[test]

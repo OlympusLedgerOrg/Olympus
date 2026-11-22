@@ -13,11 +13,13 @@
 //! `crate::commands::*` through the re-exports below — `main.rs`'s
 //! `use commands::*;` is unchanged by this split.
 
+mod approved_paths;
 mod files;
 mod keychain;
 mod secrets;
 mod server_state;
 
+pub(crate) use approved_paths::ApprovedPaths;
 pub(crate) use files::{
     commit_file, describe_by_path, hash_file_for_manifest, open_file_dialog, pick_file_path,
     read_file_for_render, redact_by_path, save_text_to_disk, FileMeta, PickedFile, ProgressEvent,

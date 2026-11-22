@@ -16,6 +16,7 @@ use crate::common;
 
 use olympus_tauri_lib::api::trusted_issuers::load_trusted_issuers_with_registry;
 use olympus_tauri_lib::bootstrap::rotate_authority;
+use olympus_tauri_lib::zk::proof::fr_to_decimal;
 use olympus_tauri_lib::zk::witness::baby_jubjub::BabyJubJubPubKey;
 use serde_json::{json, Value};
 use sqlx::PgPool;
@@ -190,4 +191,160 @@ async fn rotate_authority_supersedes_append_only_and_windows_history() {
         Some(true),
         "pre-rotation credential must remain valid: {verdict}"
     );
+}
+
+/// Regression: bootstrap must register the authority key it adopts.
+///
+/// The dev keychain tier used to call `persist_bjj_pubkey` (an UPDATE) and
+/// return. On a fresh database that is a no-op, so bootstrap adopted a
+/// signing key while leaving `account_signing_keys` empty and
+/// `rotate_authority` had no predecessor to supersede. This pins that
+/// invariant independently of the end-to-end rotation test above.
+#[tokio::test]
+async fn bootstrap_registers_the_authority_key_it_adopts() {
+    let h = common::boot().await;
+    let pool = PgPool::connect(&h.database_url).await.expect("pool");
+
+    let x = fr_to_decimal(&h.bjj_authority_pubkey.x);
+    let y = fr_to_decimal(&h.bjj_authority_pubkey.y);
+    let registered: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM account_signing_keys
+          WHERE purpose = 'authority' AND bjj_pubkey_x = $1 AND bjj_pubkey_y = $2",
+    )
+    .bind(&x)
+    .bind(&y)
+    .fetch_one(&pool)
+    .await
+    .expect("count authority rows for the bootstrapped key");
+
+    assert!(
+        registered >= 1,
+        "bootstrap adopted a BJJ authority key but no account_signing_keys row records it; rotate_authority would have no predecessor to supersede"
+    );
+}
+
+/// Regression: a legacy pre-registry authority row (`bjj_pubkey_x/y` NULL)
+/// must be repaired in place, and a repeat call for the registered key must
+/// be a no-op. Inserting over the legacy row would violate
+/// `ix_account_signing_keys_single_active_authority` instead of repairing.
+#[tokio::test]
+async fn ensure_authority_registry_row_repairs_legacy_rows_and_is_idempotent() {
+    let h = common::boot().await;
+
+    // One test process owns one fresh embedded cluster, so a fixed name
+    // cannot collide with a concurrent test.
+    const DB_NAME: &str = "olympus_authority_legacy_test";
+
+    let admin = PgPool::connect(&h.database_url).await.expect("admin pool");
+    sqlx::query("CREATE DATABASE olympus_authority_legacy_test")
+        .execute(&admin)
+        .await
+        .expect("create isolated authority-registry database");
+    admin.close().await;
+
+    let base = h
+        .database_url
+        .rsplit_once('/')
+        .map(|(base, _)| base)
+        .expect("database URL has a path");
+    let pool = PgPool::connect(&format!("{base}/{DB_NAME}"))
+        .await
+        .expect("isolated pool");
+    sqlx::migrate!("../migrations")
+        .run(&pool)
+        .await
+        .expect("migrate isolated database");
+
+    // `bootstrap::run` normally creates this row; the FK needs it before a
+    // legacy authority row can exist.
+    sqlx::query(
+        "INSERT INTO users (id, email, password_hash, role, created_at)
+         VALUES ('00000000-0000-0000-0000-000000000001',
+                 'legacy-authority@example.invalid', '', 'system', NOW())",
+    )
+    .execute(&pool)
+    .await
+    .expect("seed system user");
+    sqlx::query(
+        "INSERT INTO account_signing_keys
+             (key_id, user_id, public_key, label, purpose, created_at)
+         VALUES ('legacy-null-authority',
+                 '00000000-0000-0000-0000-000000000001',
+                 '', 'legacy-authority', 'authority', NOW())",
+    )
+    .execute(&pool)
+    .await
+    .expect("seed legacy NULL-pubkey authority row");
+
+    let secret = [0x47u8; 32];
+    let pubkey = BabyJubJubPubKey::from_private(&secret).expect("derive legacy key");
+    olympus_tauri_lib::bootstrap::ensure_authority_registry_row(&pool, &pubkey, Some(&secret))
+        .await
+        .expect("repair legacy authority row");
+
+    type AuthorityRow = (String, Option<String>, Option<String>, Option<Vec<u8>>);
+    let rows: Vec<AuthorityRow> = sqlx::query_as(
+        "SELECT key_id, bjj_pubkey_x, bjj_pubkey_y, bjj_private_dev
+           FROM account_signing_keys
+          WHERE purpose = 'authority' AND revoked_at IS NULL",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("read repaired authority registry");
+    assert_eq!(
+        rows.len(),
+        1,
+        "repair must not add a second active authority row"
+    );
+    assert_eq!(rows[0].0, "legacy-null-authority");
+    let x = fr_to_decimal(&pubkey.x);
+    let y = fr_to_decimal(&pubkey.y);
+    assert_eq!(rows[0].1.as_deref(), Some(x.as_str()));
+    assert_eq!(rows[0].2.as_deref(), Some(y.as_str()));
+    assert_eq!(rows[0].3.as_deref(), Some(secret.as_slice()));
+
+    // Idempotent: a repeat call for an already-registered key is a no-op.
+    olympus_tauri_lib::bootstrap::ensure_authority_registry_row(&pool, &pubkey, None)
+        .await
+        .expect("repeat adoption is a no-op");
+    let active_after_repeat: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM account_signing_keys
+          WHERE purpose = 'authority' AND revoked_at IS NULL",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("count active authority rows after repeat");
+    assert_eq!(
+        active_after_repeat, 1,
+        "an idempotent repeat must leave exactly one active authority row"
+    );
+
+    // A different active authority key is still refused.
+    let other = BabyJubJubPubKey::from_private(&[0x48; 32]).expect("derive other key");
+    let err = olympus_tauri_lib::bootstrap::ensure_authority_registry_row(&pool, &other, None)
+        .await
+        .expect_err("a different active authority must be refused");
+    assert!(
+        err.contains("different"),
+        "mismatch error must name the conflict: {err}"
+    );
+
+    let unchanged: (String, String) = sqlx::query_as(
+        "SELECT key_id, bjj_pubkey_x FROM account_signing_keys
+          WHERE purpose = 'authority' AND revoked_at IS NULL",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("read authority registry after refusal");
+    assert_eq!(unchanged.0, "legacy-null-authority");
+    assert_eq!(unchanged.1, x);
+    pool.close().await;
+    let admin = PgPool::connect(&h.database_url)
+        .await
+        .expect("admin pool for cleanup");
+    sqlx::query("DROP DATABASE olympus_authority_legacy_test")
+        .execute(&admin)
+        .await
+        .expect("drop isolated authority-registry database");
+    admin.close().await;
 }

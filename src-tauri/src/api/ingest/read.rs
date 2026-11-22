@@ -38,7 +38,7 @@ pub(super) async fn verify_by_hash(
     // e.g. an attacker's — can never shadow the original's verify response.
     let row = sqlx::query_as::<_, IngestRow>(
         "SELECT proof_id, record_id, shard_id, record_type, content_hash, merkle_root,
-                ledger_entry_hash, ts, batch_id, poseidon_root, snapshot_root, canonicalization, merkle_proof_json, original_hash
+                ledger_entry_hash, ts, batch_id, poseidon_root, snapshot_root, canonicalization, merkle_proof_json, original_hash, snapshot_path, snapshot_sig, snapshot_index, snapshot_size, original_root
          FROM ingest_records
          WHERE content_hash = $1
          ORDER BY ts ASC, proof_id ASC
@@ -50,7 +50,9 @@ pub(super) async fn verify_by_hash(
     .map_err(db_err)?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Hash not found in ledger."))?;
 
-    Ok(Json(row_to_proof_response(&row, true)))
+    let mut response = row_to_proof_response(&row, true);
+    response.signature_public_key = authority_public_key_json(&state);
+    Ok(Json(response))
 }
 
 // ── Route: GET /ingest/records/{proof_id} ────────────────────────────────────
@@ -67,7 +69,7 @@ pub(super) async fn get_record(
 
     let row = sqlx::query_as::<_, IngestRow>(
         "SELECT proof_id, record_id, shard_id, record_type, content_hash, merkle_root,
-                ledger_entry_hash, ts, batch_id, poseidon_root, snapshot_root, canonicalization, merkle_proof_json, original_hash
+                ledger_entry_hash, ts, batch_id, poseidon_root, snapshot_root, canonicalization, merkle_proof_json, original_hash, snapshot_path, snapshot_sig, snapshot_index, snapshot_size, original_root
          FROM ingest_records
          WHERE proof_id = $1
          LIMIT 1",
@@ -78,5 +80,7 @@ pub(super) async fn get_record(
     .map_err(db_err)?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Record not found."))?;
 
-    Ok(Json(row_to_proof_response(&row, false)))
+    let mut response = row_to_proof_response(&row, false);
+    response.signature_public_key = authority_public_key_json(&state);
+    Ok(Json(response))
 }

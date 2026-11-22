@@ -83,6 +83,12 @@ pub(crate) fn handle_window_event(window: &tauri::Window, event: &tauri::WindowE
         // redaction tab can use the path-based flow (no JS bytes).
         tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) => {
             for path in paths {
+                // The OS delivered this drop to the app; that is the user's
+                // native intent, so admit it to the path-read allowlist before
+                // telling the renderer (audit E-P2-1).
+                if let Some(approved) = window.try_state::<crate::commands::ApprovedPaths>() {
+                    approved.approve(path);
+                }
                 let name = path
                     .file_name()
                     .and_then(|s| s.to_str())

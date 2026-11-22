@@ -244,8 +244,8 @@ async fn ensure_bjj_authority(pool: &PgPool) -> Result<BootstrapResult, String> 
         //     signing authority.
         match stored_authority_pubkey(pool).await? {
             None => {
-                insert_authority_row(pool, &pubkey, None).await?;
-                tracing::info!("bootstrap: BJJ authority loaded from env (registry row created)");
+                ensure_authority_registry_row(pool, &pubkey, None).await?;
+                tracing::info!("bootstrap: BJJ authority loaded from env");
             }
             Some((sx, sy)) if sx == fr_to_decimal(&pubkey.x) && sy == fr_to_decimal(&pubkey.y) => {
                 if authority_rotation_confirmed() {
@@ -330,8 +330,11 @@ async fn ensure_bjj_authority(pool: &PgPool) -> Result<BootstrapResult, String> 
                                     // Fall through to the DB / generate tiers.
                                     key.fill(0);
                                 }
-                                _ => {
-                                    persist_bjj_pubkey(pool, &pubkey).await;
+                                Ok(_) => {
+                                    // Matching or absent — the helper is
+                                    // idempotent and only writes when the
+                                    // registry has no row for this key yet.
+                                    ensure_authority_registry_row(pool, &pubkey, None).await?;
                                     tracing::info!(
                                         "bootstrap: BJJ authority loaded from OS keychain"
                                     );
@@ -384,7 +387,7 @@ async fn ensure_bjj_authority(pool: &PgPool) -> Result<BootstrapResult, String> 
                     // signing authority while the rest of the system kept
                     // verifying against the old pubkey — a hard-to-spot trust
                     // anchor swap. Decimal-string compare matches the format
-                    // used by `persist_bjj_pubkey` / `fr_to_decimal`.
+                    // used by the authority registry / `fr_to_decimal`.
                     let derived_x = fr_to_decimal(&derived.x);
                     let derived_y = fr_to_decimal(&derived.y);
                     if &derived_x != stored_pubkey_x || &derived_y != stored_pubkey_y {
@@ -436,12 +439,11 @@ async fn ensure_bjj_authority(pool: &PgPool) -> Result<BootstrapResult, String> 
         );
     }
 
-    // Insert authority row. In dev, store the secret so subsequent runs
-    // self-bootstrap; in production, leave bjj_private_dev NULL.
+    // Anchor the authority row. In dev, store the secret so subsequent runs
+    // self-bootstrap; in production, leave bjj_private_dev NULL. The helper
+    // repairs a legacy NULL-pubkey row instead of colliding with it.
     let secret_for_insert: Option<&[u8]> = if is_production { None } else { Some(&key) };
-    insert_authority_row(pool, &pubkey, secret_for_insert).await?;
-
-    persist_bjj_pubkey(pool, &pubkey).await;
+    ensure_authority_registry_row(pool, &pubkey, secret_for_insert).await?;
 
     // Persist to keychain so the next launch doesn't need to auto-generate
     // again. Failure is non-fatal: the key is still surfaced via the GUI.
@@ -862,21 +864,54 @@ pub async fn ensure_redaction_blind_secret_fingerprint(
     }
 }
 
-async fn persist_bjj_pubkey(pool: &PgPool, pubkey: &BabyJubJubPubKey) {
+/// Anchor an adopted authority key in the registry.
+///
+/// Idempotent, like the other `ensure_*` helpers: an active row that already
+/// records this key is a no-op. A legacy pre-registry row with NULL
+/// `bjj_pubkey_x/y` is repaired in place (inserting over it would violate
+/// `ix_account_signing_keys_single_active_authority`), and a fresh database gets
+/// the first row inserted. An active row recording a different key is refused;
+/// changing the authority is `rotate_authority`'s job.
+///
+/// `secret` is the dev-only `bjj_private_dev` payload used by the generated-key
+/// path; pass `None` when the key has another persistence surface (env var or
+/// OS keychain). It is written only when this call inserts or repairs a row.
+pub async fn ensure_authority_registry_row(
+    pool: &PgPool,
+    pubkey: &BabyJubJubPubKey,
+    secret: Option<&[u8]>,
+) -> Result<(), String> {
     let x = fr_to_decimal(&pubkey.x);
     let y = fr_to_decimal(&pubkey.y);
 
-    // Update existing authority row if pubkey columns are null.
-    let _ = sqlx::query(
-        "UPDATE account_signing_keys
-         SET bjj_pubkey_x = $1, bjj_pubkey_y = $2
-         WHERE user_id = $3 AND purpose = 'authority' AND bjj_pubkey_x IS NULL",
-    )
-    .bind(&x)
-    .bind(&y)
-    .bind(SYSTEM_USER_ID)
-    .execute(pool)
-    .await;
+    match stored_authority_pubkey(pool).await? {
+        Some((stored_x, stored_y)) if stored_x == x && stored_y == y => Ok(()),
+        Some(_) => Err(
+            "ensure_authority_registry_row: the active authority row records a different key; refusing to replace it (use rotate_authority for a deliberate change)"
+                .into(),
+        ),
+        None => {
+            let repaired_rows = sqlx::query(
+                "UPDATE account_signing_keys
+                    SET bjj_pubkey_x = $1, bjj_pubkey_y = $2,
+                        bjj_private_dev = COALESCE($4::bytea, bjj_private_dev)
+                  WHERE user_id = $3 AND purpose = 'authority' AND revoked_at IS NULL
+                    AND bjj_pubkey_x IS NULL",
+            )
+            .bind(&x)
+            .bind(&y)
+            .bind(SYSTEM_USER_ID)
+            .bind(secret)
+            .execute(pool)
+            .await
+            .map_err(|e| format!("ensure_authority_registry_row: repair legacy row: {e}"))?
+            .rows_affected();
+            if repaired_rows == 0 {
+                insert_authority_row(pool, pubkey, secret).await?;
+            }
+            Ok(())
+        }
+    }
 }
 
 /// Mint the system authority SBT on first launch (idempotent).

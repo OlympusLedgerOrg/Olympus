@@ -9,7 +9,7 @@ use crate::length_prefixed;
 pub const REQUEST_V1_PREFIX: &[u8] = REQUEST_V1_DOMAIN_SEPARATOR.as_bytes();
 
 /// Human-readable domain separator used when wrapping [`signed_request_message`]
-/// in `SignatureEnvelopeV2`.
+/// in `SignatureEnvelopeV3`.
 pub const REQUEST_V1_DOMAIN_SEPARATOR: &str = "OLY:REQUEST:V1";
 
 /// Compute the ADR-0036 request digest.
