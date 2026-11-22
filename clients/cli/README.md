@@ -107,4 +107,3 @@ The command checks the canonical `bundle_hash`, reconstructs the Poseidon
 snapshot root from the explicit left/right path, and verifies the BJJ signature
 against the embedded `signature_public_key`. It returns a non-zero exit code
 for malformed or invalid artifacts.
-
