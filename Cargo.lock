@@ -258,7 +258,7 @@ dependencies = [
  "ark-serialize 0.5.0",
  "ark-snark 0.5.1",
  "ark-std 0.5.0",
- "blake2",
+ "blake2 0.10.6",
  "derivative",
  "digest 0.10.7",
  "fnv",
@@ -281,7 +281,7 @@ dependencies = [
  "ark-serialize 0.6.0",
  "ark-snark 0.6.0",
  "ark-std 0.6.0",
- "blake2",
+ "blake2 0.10.6",
  "blake3",
  "derivative",
  "digest 0.10.7",
@@ -1293,6 +1293,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "46502ad458c9a52b69d4d4d32775c788b7a1b85e8bc9d482d92250fc0e3f8efe"
 dependencies = [
  "digest 0.10.7",
+]
+
+[[package]]
+name = "blake2"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5b5d4d889834ee8ecfc0f8426ad30faf7cdcb10f741a8e6d7224d95325479f6f"
+dependencies = [
+ "digest 0.11.3",
 ]
 
 [[package]]
@@ -6189,7 +6198,7 @@ dependencies = [
  "axum",
  "babyjubjub-permissive",
  "base64 0.23.1",
- "blake2",
+ "blake2 0.11.0",
  "blake3",
  "chrono",
  "cms",
@@ -7885,7 +7894,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "21c0c921e5e2d44197940d387a45e29c6165e318b5a168fdfdbd50f50ba03678"
 dependencies = [
  "anyhow",
- "blake2",
+ "blake2 0.10.6",
  "borsh",
  "bytemuck",
  "cfg-if",
