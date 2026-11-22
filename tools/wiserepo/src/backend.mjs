@@ -10,13 +10,12 @@
 
 import { Agent } from "undici";
 
-// Declared before the env validation below, not after it. These are `class`
+// Declared before the URL validation below, not after it. These are `class`
 // declarations, so their bindings are in the temporal dead zone until their
-// definition is evaluated — which is exactly where a `throw new
-// ModelRequestError(...)` inside DEFAULT_OLLAMA_URL used to land, turning a
-// misconfigured URL into `ReferenceError: Cannot access 'ModelRequestError'
-// before initialization` instead of the real message. Hoisting the classes is
-// what lets the validation keep the specific error type its callers switch on.
+// definition is evaluated — which is where a throw from that validation lands if
+// it is ever evaluated at module scope, turning a misconfigured URL into
+// `ReferenceError: Cannot access 'ModelRequestError' before initialization`
+// instead of the real message. Ordering is what keeps the specific type.
 /**
  * The backend could not be reached or could not produce usable output:
  * daemon not running, network failure, timeout, or a 200 whose body has no
@@ -46,7 +45,17 @@ export class ModelRequestError extends Error {
   }
 }
 
-const DEFAULT_OLLAMA_URL = (() => {
+/**
+ * The endpoint to talk to, validated on every call rather than once at import.
+ *
+ * Evaluated at module scope, a bad WISEREPO_OLLAMA_URL throws before any handler
+ * exists to catch it: bin/wiserepo.mjs's main() and mcp-server.mjs's tool
+ * handler both only see a Node stack trace, so the operator gets a crash instead
+ * of "request error — ...". Resolving here keeps exactly the same fail-closed
+ * guard (it runs before the first request and before any repo content is
+ * gathered), while letting the caller classify what went wrong.
+ */
+function ollamaBaseUrl() {
   const raw = process.env.WISEREPO_OLLAMA_URL || "http://localhost:11434";
   let url;
   try {
@@ -69,7 +78,7 @@ const DEFAULT_OLLAMA_URL = (() => {
     );
   }
   return url.origin;
-})();
+}
 // qwen2.5-coder:7b-instruct: a 7.61B code-specialised model (5.5T code tokens,
 // 92 languages, HumanEval 88.4 / MBPP 83.5). Wiserepo's work is reading code and
 // reviewing diffs, which is what that training buys; the cost is ~4.7GB of
@@ -395,7 +404,7 @@ async function declaredContextLength(model) {
   if (contextLengthCache.has(model)) return contextLengthCache.get(model);
   let declared = null;
   try {
-    const res = await fetch(`${DEFAULT_OLLAMA_URL.replace(/\/+$/, "")}/api/show`, {
+    const res = await fetch(`${ollamaBaseUrl().replace(/\/+$/, "")}/api/show`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ model }),
@@ -445,7 +454,7 @@ export async function callModel({
   model = DEFAULT_OLLAMA_MODEL,
   onProgress = defaultProgressReporter(),
 }) {
-  const url = `${DEFAULT_OLLAMA_URL.replace(/\/+$/, "")}/api/chat`;
+  const url = `${ollamaBaseUrl().replace(/\/+$/, "")}/api/chat`;
   const options = {
     temperature: temperature ?? DEFAULT_TEMPERATURE,
     num_ctx: await effectiveNumCtx(model),
@@ -490,7 +499,7 @@ export {
   numericEnv,
   boolEnv,
   DEFAULT_OLLAMA_MODEL,
-  DEFAULT_OLLAMA_URL,
+  ollamaBaseUrl,
   DEFAULT_NUM_CTX,
   DEFAULT_THINK,
   DEFAULT_KEEP_ALIVE,

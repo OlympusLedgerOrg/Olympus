@@ -14,7 +14,7 @@ import {
   effectiveNumCtx,
   modelForTool,
   DEFAULT_OLLAMA_MODEL,
-  DEFAULT_OLLAMA_URL,
+  ollamaBaseUrl,
   DEFAULT_NUM_CTX,
   DEFAULT_KEEP_ALIVE,
 } from "../src/backend.mjs";
@@ -239,7 +239,7 @@ test("callModel POSTs the documented Ollama /api/chat request shape", async () =
   assert.equal(result, "hello");
   const chat = chatCalls(calls);
   assert.equal(chat.length, 1);
-  assert.equal(chat[0].url, `${DEFAULT_OLLAMA_URL}/api/chat`);
+  assert.equal(chat[0].url, `${ollamaBaseUrl()}/api/chat`);
   assert.equal(chat[0].options.method, "POST");
   assert.equal(chat[0].options.headers["content-type"], "application/json");
 
@@ -489,68 +489,100 @@ function assertRequestError(err) {
   return true;
 }
 
-async function importBackendBoundTo(raw) {
+// The URL is read per call now, so the variable has to stay set for the whole
+// callback — restoring it before the module is used would silently fall back to
+// the default endpoint and make every rejection test pass for the wrong reason.
+async function withBackendBoundTo(raw, fn) {
   const original = process.env.WISEREPO_OLLAMA_URL;
   process.env.WISEREPO_OLLAMA_URL = raw;
   try {
     // The query string is what defeats the module cache; encodeURIComponent
     // keeps a raw URL with `?`/`#` out of the specifier's query syntax.
-    return await import(
+    const mod = await import(
       `../src/backend.mjs?urlcheck=${encodeURIComponent(raw)}&n=${Math.random()}`
     );
+    return await fn(mod);
   } finally {
     if (original === undefined) delete process.env.WISEREPO_OLLAMA_URL;
     else process.env.WISEREPO_OLLAMA_URL = original;
   }
 }
 
+// URL validation runs when the endpoint is USED, not when the module loads, so
+// main()'s catch and the MCP tool handler can classify it as a request error
+// instead of dumping a stack trace from module evaluation. The guard is still
+// fail-closed: nothing may be sent, which is the zero-call assertion here.
+async function rejectionFromCall(raw) {
+  return withBackendBoundTo(raw, async (mod) => {
+    let caught;
+    const { calls } = await withStubbedFetch(
+      () => {
+        throw new Error("fetch must not be reached for a rejected endpoint");
+      },
+      async () => {
+        caught = await mod.callModel({ prompt: "p" }).then(
+          () => {
+            throw new Error("expected callModel to reject");
+          },
+          (err) => err,
+        );
+      },
+    );
+    assert.equal(
+      calls.length,
+      0,
+      `a rejected endpoint must not send anything, got ${calls.length} call(s)`,
+    );
+    return caught;
+  });
+}
+
 test("callModel rejects credentialed remote endpoints before sending repo content", async () => {
-  await assert.rejects(
-    () => importBackendBoundTo("http://user:sup3rs3cret@ollama.internal:11434/?token=abc123"),
-    (err) => {
-      // The specific type, not just a message: bin/wiserepo.mjs branches on
-      // `instanceof ModelRequestError` to print "request error" and exit 1
-      // rather than reporting an unclassified crash. A bare Error silently
-      // downgrades that path.
-      assertRequestError(err);
-      assert.match(err.message, /credential-free http URL/);
-      assert.ok(!err.message.includes("sup3rs3cret"), `password leaked: ${err.message}`);
-      assert.ok(!err.message.includes("abc123"), `token leaked: ${err.message}`);
-      return true;
-    },
+  const err = await rejectionFromCall(
+    "http://user:sup3rs3cret@ollama.internal:11434/?token=abc123",
   );
+  assertRequestError(err);
+  assert.match(err.message, /credential-free http URL/);
+  assert.ok(!err.message.includes("sup3rs3cret"), `password leaked: ${err.message}`);
+  assert.ok(!err.message.includes("abc123"), `token leaked: ${err.message}`);
 });
 
 // The trust boundary this closes is the whole point of the local backend: repo
 // content must never be posted to a daemon off this machine.
 test("callModel refuses a non-loopback WISEREPO_OLLAMA_URL", async () => {
-  await assert.rejects(
-    () => importBackendBoundTo("http://192.168.1.10:11434"),
-    (err) => assertRequestError(err) && /credential-free http URL/.test(err.message),
-  );
+  const err = await rejectionFromCall("http://192.168.1.10:11434");
+  assertRequestError(err);
+  assert.match(err.message, /credential-free http URL/);
 });
 
 // Loopback over https is still a loopback host, but the check is explicit about
 // the scheme, so a self-signed TLS endpoint must fail loudly rather than
 // surface later as an opaque fetch error.
 test("callModel refuses https even on loopback", async () => {
-  await assert.rejects(
-    () => importBackendBoundTo("https://localhost:11434"),
-    (err) => assertRequestError(err) && /credential-free http URL/.test(err.message),
-  );
+  const err = await rejectionFromCall("https://localhost:11434");
+  assertRequestError(err);
+  assert.match(err.message, /credential-free http URL/);
 });
 
 test("callModel reports an unparseable WISEREPO_OLLAMA_URL as a request error", async () => {
-  await assert.rejects(
-    () => importBackendBoundTo("not a url at all"),
-    (err) => assertRequestError(err) && /is not a valid URL/.test(err.message),
-  );
+  const err = await rejectionFromCall("not a url at all");
+  assertRequestError(err);
+  assert.match(err.message, /is not a valid URL/);
+});
+
+// Importing with a bad URL must now SUCCEED — that is the whole point of
+// deferring validation, and it is what lets the CLI reach its own handler.
+test("a bad WISEREPO_OLLAMA_URL no longer breaks importing the module", async () => {
+  await withBackendBoundTo("http://192.168.1.10:11434", (mod) => {
+    assert.equal(typeof mod.callModel, "function");
+  });
 });
 
 // Positive control: the guards above must not reject the documented default.
 test("callModel accepts a credential-free loopback endpoint", async () => {
-  const mod = await importBackendBoundTo("http://127.0.0.1:11434");
-  assert.equal(typeof mod.callModel, "function");
+  await withBackendBoundTo("http://127.0.0.1:11434", (mod) => {
+    assert.equal(mod.ollamaBaseUrl(), "http://127.0.0.1:11434");
+  });
 });
 
 test("callModel tolerates trailing slashes on WISEREPO_OLLAMA_URL", async () => {
