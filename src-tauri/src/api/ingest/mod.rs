@@ -299,15 +299,30 @@ fn row_to_proof_response(row: &IngestRow, _for_verify: bool) -> RecordProofRespo
     }
 }
 
-pub(crate) fn authority_public_key_json(
+pub(crate) async fn authority_public_key_json(
     state: &crate::state::AppState,
+    snapshot_sig: Option<&str>,
 ) -> Option<serde_json::Value> {
-    state.bjj_authority_pubkey.as_ref().map(|key| {
-        serde_json::json!({
-            "x": key.x.to_string(),
-            "y": key.y.to_string(),
-        })
-    })
+    let signed_at = snapshot_sig
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+        .and_then(|value| value.get("signed_at").and_then(serde_json::Value::as_i64));
+    let pool = state.pool.as_ref()?;
+    let row = sqlx::query_as::<_, (String, String)>(
+        "SELECT bjj_pubkey_x, bjj_pubkey_y
+           FROM account_signing_keys
+          WHERE user_id = $1 AND purpose = 'authority'
+            AND bjj_pubkey_x IS NOT NULL AND bjj_pubkey_y IS NOT NULL
+            AND ($2::bigint IS NULL OR (EXTRACT(EPOCH FROM valid_from)::bigint IS NULL OR EXTRACT(EPOCH FROM valid_from)::bigint <= $2)
+             AND (EXTRACT(EPOCH FROM valid_until)::bigint IS NULL OR EXTRACT(EPOCH FROM valid_until)::bigint > $2))
+          ORDER BY valid_from DESC NULLS FIRST
+          LIMIT 1",
+    )
+    .bind(crate::bootstrap::SYSTEM_USER_ID)
+    .bind(signed_at)
+    .fetch_optional(pool)
+    .await
+    .ok()??;
+    Some(serde_json::json!({ "x": row.0, "y": row.1 }))
 }
 
 // ── Shared snapshot-signature discriminator ─────────────────────────────────────

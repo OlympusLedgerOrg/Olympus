@@ -289,6 +289,7 @@ async function withTimeout(url, options, timeoutMs, consume) {
   try {
     const res = await fetch(url, {
       ...options,
+      redirect: "error",
       signal: controller.signal,
       dispatcher: MODEL_DISPATCHER,
     });
@@ -367,6 +368,7 @@ async function readCompletion(res, provider, onProgress) {
   const decoder = new TextDecoder();
   let buffer = "";
   let content = "";
+  let sawDone = false;
 
   const handleLine = (line) => {
     const event = parseJsonBody(line, provider);
@@ -378,7 +380,8 @@ async function readCompletion(res, provider, onProgress) {
       content += piece;
       onProgress?.(content.length);
     }
-    return event.done === true;
+    if (event.done === true) sawDone = true;
+    return sawDone;
   };
 
   for await (const chunk of res.body) {
@@ -391,7 +394,12 @@ async function readCompletion(res, provider, onProgress) {
     }
   }
   buffer += decoder.decode();
-  if (buffer.trim()) handleLine(buffer.trim());
+  if (buffer.trim() && handleLine(buffer.trim())) {
+    return extractCompletion({ message: { content } });
+  }
+  if (!sawDone) {
+    throw new ModelUnavailableError(`${provider} stream ended before a terminal event`);
+  }
   return extractCompletion({ message: { content } });
 }
 
@@ -409,6 +417,7 @@ async function declaredContextLength(model) {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ model }),
       dispatcher: MODEL_DISPATCHER,
+      redirect: "error",
       signal: AbortSignal.timeout(10_000),
     });
     if (res.ok) {
@@ -425,7 +434,7 @@ async function declaredContextLength(model) {
     // value rather than failing the call over metadata.
     declared = null;
   }
-  contextLengthCache.set(model, declared);
+  if (declared !== null) contextLengthCache.set(model, declared);
   return declared;
 }
 

@@ -5,9 +5,9 @@
 // These return structured data about the repo state WITHOUT calling the model —
 // they are fast, deterministic, and work offline.
 
-import { readFile, readdir, stat } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
-import { repoRoot, resolveInRepo, gitGrep } from "./repo.mjs";
+import { repoRoot, resolveInRepoFollowingSymlinks, gitGrep } from "./repo.mjs";
 
 // ---------------------------------------------------------------------------
 // olympus_context — machine-readable project facts from context.json
@@ -19,8 +19,8 @@ import { repoRoot, resolveInRepo, gitGrep } from "./repo.mjs";
  */
 export async function getOlympusContext() {
   const root = repoRoot();
-  const contextPath = path.join(root, "context.json");
   try {
+    const contextPath = await resolveInRepoFollowingSymlinks("context.json");
     const raw = await readFile(contextPath, "utf8");
     return { source: "context.json", data: JSON.parse(raw) };
   } catch (err) {
@@ -58,12 +58,12 @@ const PLACEHOLDER_SENTINEL = "PLACEHOLDER";
 
 async function fileStatus(absPath) {
   try {
-    const st = await stat(absPath);
-    if (!st.isFile()) return { exists: false, size: 0, isPlaceholder: false };
     // Only read the first 64 bytes to check for the placeholder sentinel —
     // we do NOT want to buffer potentially large binary files.
     const handle = await (await import("node:fs/promises")).open(absPath, "r");
     try {
+      const st = await handle.stat();
+      if (!st.isFile()) return { exists: false, size: 0, isPlaceholder: false };
       const buf = Buffer.alloc(64);
       await handle.read(buf, 0, 64, 0);
       const preview = buf.toString("ascii");
@@ -99,7 +99,7 @@ export async function getCircuitStatus() {
     const manifest = await fileStatus(path.join(manifestsDir, `${circuit}_manifest.json`));
 
     const anyPlaceholder = [wasm, r1cs, arkzkey, vkey, manifest].some((f) => f.isPlaceholder);
-    const allPresent = [wasm, r1cs, arkzkey].every((f) => f.exists);
+    const allPresent = [wasm, r1cs, arkzkey, vkey, manifest].every((f) => f.exists);
 
     results[circuit] = {
       wasm: wasm.exists ? (wasm.isPlaceholder ? "placeholder" : "ok") : "missing",

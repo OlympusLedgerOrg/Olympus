@@ -14,16 +14,17 @@
 # aggregates those records yet; that is deliberately a separate piece of work,
 # not something this workflow claims to do.
 #
-# Trigger safety: this uses `pull_request`, not `pull_request_target`, so a
-# fork PR gets a read-only token and no repository secrets; the job declares
-# `contents: read` and references no secrets in either case. The PR body and
+# Trigger safety: this uses `pull_request_target` so GitHub evaluates the
+# workflow from the protected base revision, never the PR's edited workflow.
+# It has only `contents: read`, checks out the base SHA, and references no
+# secrets. The PR body and
 # label names are attacker-influenced strings on a fork PR, so both reach the
 # checker through `env:` and files — never interpolated into a `run:` script,
 # where `${{ }}` substitution happens before the shell parses the line.
 name: PR Scope Drift
 
 on:
-  pull_request:
+  pull_request_target:
     # `edited` catches a body change (that is where the scope lives) and
     # `labeled`/`unlabeled` re-run the gate when the override is applied or
     # withdrawn, so the check reflects the PR's current state rather than its
@@ -52,6 +53,7 @@ jobs:
         with:
           # Full history so both PR endpoints resolve for the three-dot diff.
           fetch-depth: 0
+          ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0

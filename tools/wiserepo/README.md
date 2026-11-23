@@ -96,12 +96,12 @@ its own port, with `num_ctx 16384`, `temperature 0` and `keep_alive 0`, so no ru
 inherited a warm prompt cache. The only difference between the arms was
 `OLLAMA_IGPU_ENABLE`:
 
-| | CPU (`=0`) | iGPU (`=1`) | iGPU ÷ CPU |
-| --- | --- | --- | --- |
-| **prefill** | 16.9 tok/s (482 s, 668 s) | 130 tok/s (64 s, 84 s) | ~7.7× |
-| **generation** | 3.0 tok/s | 8.8 tok/s | ~2.9× |
-| model load | 13.5 s | 13–18 s | — |
-| placement (`api/ps`) | `vram=0.00 GB` | `vram=5.64 GB` (100 %) | — |
+|                      | CPU (`=0`)                | iGPU (`=1`)            | iGPU ÷ CPU |
+| -------------------- | ------------------------- | ---------------------- | ---------- |
+| **prefill**          | 16.9 tok/s (482 s, 668 s) | 130 tok/s (64 s, 84 s) | ~7.7×      |
+| **generation**       | 3.0 tok/s                 | 8.8 tok/s              | ~2.9×      |
+| model load           | 13.5 s                    | 13–18 s                | —          |
+| placement (`api/ps`) | `vram=0.00 GB`            | `vram=5.64 GB` (100 %) | —          |
 
 Reproducing this needs no harness. `POST /api/chat` with `stream: false`,
 `"keep_alive": 0`, `"options": {"num_ctx": 16384, "num_predict": 160,
@@ -143,7 +143,7 @@ Two separate facts about the hardware:
 - **iGPU is worth turning on.** Ollama drops integrated GPUs unless
   `OLLAMA_IGPU_ENABLE=1`. **Nothing in this repo sets it** — it is a user
   environment variable on the machine these figures come from (`setx
-  OLLAMA_IGPU_ENABLE 1`, then restart the daemon), and the daemon proves it took
+OLLAMA_IGPU_ENABLE 1`, then restart the daemon), and the daemon proves it took
   by logging `inference compute … library=Vulkan … type=iGPU` at startup instead
   of `dropping integrated GPU`. The gain is almost entirely **prefill** (see the
   table above); generation improves ~2.9×, and published Arc 140V figures
@@ -172,7 +172,7 @@ Two model behaviours the backend has to account for (`src/backend.mjs`):
   on for a qwen3.5 run (worth it for a hard `review_diff`, and it costs minutes).
 - **`num_ctx` is pinned, not inherited.** Ollama sizes its default window from
   available VRAM and lands at 4096 here; an oversized prompt is truncated by the
-  daemon *silently*, so the model would answer from a partial view with nothing
+  daemon _silently_, so the model would answer from a partial view with nothing
   in the output saying so. Wiserepo sends `WISEREPO_NUM_CTX` (default 16384),
   clamped to the window the model declares in `/api/show` (32 K for the default
   tag), and sizes its context budget from that clamped number, so the two cannot
@@ -236,6 +236,7 @@ It prints PASS/FAIL per question, the number of unverified citations, and a
 score. It exits `0` whenever the run completed (it is a benchmark, not a gate)
 and `2` when the backend was unavailable. Runs are slow on CPU — one question is
 one full `repo_qa` call — so `--limit` exists for smoke tests.
+
 - `WISEREPO_TIMEOUT_MS` — default `300000` (5 min). Much larger than a
   cloud-backed tool would need: local generation on a 30B model is far
   slower per token, and `review_diff` / AGENTS.md regeneration can emit
@@ -334,7 +335,7 @@ cd tools/wiserepo
 npm test
 ```
 
-93 tests covering the places a bug is silent rather than loud:
+114 tests covering the places a bug is silent rather than loud:
 
 - `resolveInRepo` path-traversal guard, including the sibling-prefix case
   (`Olympus-evil` must not count as inside `Olympus`) — and

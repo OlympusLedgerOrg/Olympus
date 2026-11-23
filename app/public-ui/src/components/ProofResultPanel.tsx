@@ -251,18 +251,24 @@ export default function ProofResultPanel({ verdict }: { verdict: VerdictState })
     authority: { id: "olympus-mainnet-authority-v1" },
     version: "1.0",
     algorithm: "blake3",
-    proof_id: result.proof_id,
-    record_id: result.record_id,
-    shard_id: result.shard_id,
-    content_hash: result.content_hash,
+    proof_id: result.proof_id ?? null,
+    record_id: result.record_id ?? null,
+    shard_id: result.shard_id ?? null,
+    content_hash: result.content_hash ?? null,
     original_root: result.original_root ?? null,
-    merkle_root: result.merkle_root,
+    merkle_root: result.merkle_root ?? null,
     poseidon_root: result.poseidon_root ?? null,
-    ledger_entry_hash: result.ledger_entry_hash,
+    ledger_entry_hash: result.ledger_entry_hash ?? null,
     committed_at: committedAt,
     merkle_proof: result.merkle_proof ?? {},
     signature: result.signature ?? null,
-    signed_fields: ["content_hash", "merkle_root", "ledger_entry_hash"],
+    signed_fields: [
+      "content_hash",
+      "snapshot_root",
+      "snapshot_index",
+      "snapshot_size",
+      "signed_at",
+    ],
     signature_public_key: result.signature_public_key ?? null,
     issuer: result.issuer ?? "Olympus",
     merkle_proof_valid: result.merkle_proof_valid ?? null,
@@ -280,7 +286,12 @@ export default function ProofResultPanel({ verdict }: { verdict: VerdictState })
     verified_at: new Date().toISOString(),
     summary: {
       status: proofLabel,
-      message: "Content hash is included in the committed root and has a valid Olympus signature.",
+      message:
+        proofLabel === "VALID"
+          ? "Content hash is included in the committed root and has a valid Olympus signature."
+          : proofLabel === "INVALID"
+            ? "The proof or signature is invalid. Do not rely on this bundle."
+            : "The proof has not been verified.",
     },
   };
   const bundle = {

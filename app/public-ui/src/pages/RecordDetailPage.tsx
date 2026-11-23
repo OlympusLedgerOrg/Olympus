@@ -6,6 +6,18 @@ import VerdictCard from "../components/VerdictCard";
 import HashDisplay from "../components/HashDisplay";
 import CopyButton from "../components/CopyButton";
 import type { VerdictDetail } from "../lib/types";
+import { blake3 } from "@noble/hashes/blake3.js";
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value as Record<string, unknown>)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableJson((value as Record<string, unknown>)[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
 
 export default function RecordDetailPage() {
   const { proof_id } = useParams<{ proof_id: string }>();
@@ -124,22 +136,48 @@ export default function RecordDetailPage() {
       : []),
   ];
 
+  const bundleWithoutHash = {
+    protocol: { name: "Olympus", network: "olympus-mainnet", schema: "olympus-proof-v1" },
+    authority: { id: "olympus-mainnet-authority-v1" },
+    version: "1.0",
+    algorithm: "blake3",
+    proof_id: data.proof_id ?? null,
+    record_id: data.record_id ?? null,
+    shard_id: data.shard_id ?? null,
+    content_hash: data.content_hash ?? null,
+    original_root: null,
+    merkle_root: data.merkle_root ?? null,
+    poseidon_root: data.poseidon_root ?? null,
+    ledger_entry_hash: data.ledger_entry_hash ?? null,
+    committed_at: data.timestamp ?? null,
+    merkle_proof: data.merkle_proof ?? {},
+    // Keep the field in the stable proof-pack schema. Older servers do not
+    // expose a detached signature on this endpoint, while newer servers
+    // may provide one without requiring a UI change.
+    signature: data.signature ?? null,
+    signed_fields: [
+      "content_hash",
+      "snapshot_root",
+      "snapshot_index",
+      "snapshot_size",
+      "signed_at",
+    ],
+    signature_public_key: data.signature_public_key ?? null,
+    issuer: data.issuer ?? "Olympus",
+    tree: {
+      depth: 20,
+      leaf_index: data.leaf_index ?? null,
+      tree_size: data.snapshot_size ?? null,
+      hash_algorithm: "poseidon",
+    },
+    verified_at: new Date().toISOString(),
+  };
   const proofBundle = JSON.stringify(
     {
-      version: "1.0",
-      algorithm: "blake3",
-      proof_id: data.proof_id,
-      record_id: data.record_id,
-      content_hash: data.content_hash,
-      merkle_root: data.merkle_root,
-      ledger_entry_hash: data.ledger_entry_hash,
-      committed_at: data.timestamp,
-      merkle_proof: data.merkle_proof,
-      // Keep the field in the stable proof-pack schema. Older servers do not
-      // expose a detached signature on this endpoint, while newer servers
-      // may provide one without requiring a UI change.
-      signature: data.signature ?? null,
-      issuer: data.issuer ?? "Olympus",
+      ...bundleWithoutHash,
+      bundle_hash: Array.from(blake3(new TextEncoder().encode(stableJson(bundleWithoutHash))))
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join(""),
     },
     null,
     2,
@@ -151,7 +189,9 @@ export default function RecordDetailPage() {
     const a = document.createElement("a");
     a.href = url;
     a.download = `olympus-proof-${data.proof_id}.json`;
+    document.body.appendChild(a);
     a.click();
+    a.remove();
     URL.revokeObjectURL(url);
   };
 

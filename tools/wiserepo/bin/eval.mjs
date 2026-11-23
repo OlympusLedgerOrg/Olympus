@@ -43,7 +43,10 @@ function parseArgs(argv) {
         throw new Error("--limit needs a positive integer");
       options.limit = value;
     } else if (arg.startsWith("--limit=")) {
-      options.limit = Number(arg.slice("--limit=".length));
+      const value = Number(arg.slice("--limit=".length));
+      if (!Number.isInteger(value) || value < 1)
+        throw new Error("--limit needs a positive integer");
+      options.limit = value;
     } else if (arg === "--model") {
       options.model = argv[++i];
     } else if (arg.startsWith("--model=")) {

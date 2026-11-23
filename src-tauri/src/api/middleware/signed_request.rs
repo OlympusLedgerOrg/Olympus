@@ -682,7 +682,7 @@ mod tests {
     use serde_json::json;
 
     fn signed_envelope_body(method: &str, path: &str, payload: &[u8]) -> Vec<u8> {
-        let sk = SigningKey::from_bytes(&[0x42; 32]);
+        let sk = SigningKey::generate(&mut rand::thread_rng());
         let body_hash = *blake3::hash(payload).as_bytes();
         let request = SignedRequestV1 {
             operator_id: "operator-a".to_string(),

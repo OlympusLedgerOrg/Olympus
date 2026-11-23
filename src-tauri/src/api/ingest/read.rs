@@ -51,7 +51,7 @@ pub(super) async fn verify_by_hash(
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Hash not found in ledger."))?;
 
     let mut response = row_to_proof_response(&row, true);
-    response.signature_public_key = authority_public_key_json(&state);
+    response.signature_public_key = authority_public_key_json(&state, row.snapshot_sig.as_deref()).await;
     Ok(Json(response))
 }
 
@@ -81,6 +81,6 @@ pub(super) async fn get_record(
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Record not found."))?;
 
     let mut response = row_to_proof_response(&row, false);
-    response.signature_public_key = authority_public_key_json(&state);
+    response.signature_public_key = authority_public_key_json(&state, row.snapshot_sig.as_deref()).await;
     Ok(Json(response))
 }
