@@ -88,6 +88,22 @@ format-only churn, generated artifacts, or unrelated security fixes.
   review or fix task must not silently rewrite agent guidance or dependency
   locks.
 
+## Review comment completion
+
+Do not declare a pull request reviewed or fixed while inline review comments
+remain unattended. Before handoff or merge:
+
+- Fetch all current inline review threads, including CodeRabbit, CodeQL, and
+  human comments; do not rely only on the top-level review summary.
+- Track every thread to a concrete outcome: implement the fix and resolve the
+  thread, or reply with a specific technical explanation and leave it open when
+  maintainer action is required.
+- Re-check comments after pushing because new inline comments can arrive on the
+  new commit. Repeat until there are no unresolved actionable threads.
+- Never silently dismiss, hide, or mark a comment resolved without addressing
+  the underlying issue. Record intentional false-positive decisions in the PR
+  discussion.
+
 ## Architecture
 
 ### Language Ownership — Hard Boundaries

@@ -335,7 +335,18 @@ cd tools/wiserepo
 npm test
 ```
 
-114 tests covering the places a bug is silent rather than loud:
+The 114-test suite covers the places a bug is silent rather than loud.
+
+## Review completion contract
+
+When Wiserepo is used for a PR review or fix, its result is incomplete until
+all inline review threads have an explicit outcome. The operator must fetch
+the complete thread list (not just summary comments), map each thread to a
+fix or a written technical response, and re-check after every push. Actionable
+threads should be resolved only after the fix is verified; false positives or
+intentional deferrals must receive a specific reply in the PR. The final
+report must include the unresolved-thread count and list any remaining
+maintainer decisions.
 
 - `resolveInRepo` path-traversal guard, including the sibling-prefix case
   (`Olympus-evil` must not count as inside `Olympus`) — and
