@@ -5,7 +5,7 @@
 // These return structured data about the repo state WITHOUT calling the model —
 // they are fast, deterministic, and work offline.
 
-import { readFile, stat } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { repoRoot, resolveInRepoFollowingSymlinks, gitGrep } from "./repo.mjs";
 
@@ -18,7 +18,6 @@ import { repoRoot, resolveInRepoFollowingSymlinks, gitGrep } from "./repo.mjs";
  * Falls back to a minimal hardcoded summary if the file is missing.
  */
 export async function getOlympusContext() {
-  const root = repoRoot();
   try {
     const contextPath = await resolveInRepoFollowingSymlinks("context.json");
     const raw = await readFile(contextPath, "utf8");

@@ -691,7 +691,7 @@ mod tests {
             path: path.to_string(),
             body_hash,
             timestamp_utc: chrono::Utc::now().timestamp(),
-            nonce: "nonce-123".to_string(),
+            nonce: format!("nonce-{}", rand::random::<u64>()),
             scope: "ingest".to_string(),
         };
         let signature = SignatureEnvelopeV3::sign_ed25519(
