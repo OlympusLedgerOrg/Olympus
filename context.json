@@ -105,11 +105,11 @@
       "circuit_status",
       "check_invariants"
     ],
-    "backend": "Ollama (local, default model: qwen3-coder:30b)",
+    "backend": "Ollama (local, default model: qwen2.5-coder:7b-instruct)",
     "env": {
       "WISEREPO_ROOT": "repo root override (auto-detected when unset)",
       "WISEREPO_OLLAMA_URL": "Ollama URL (default: http://localhost:11434)",
-      "WISEREPO_OLLAMA_MODEL": "model override (default: qwen3-coder:30b)"
+      "WISEREPO_OLLAMA_MODEL": "model override (default: qwen2.5-coder:7b-instruct)"
     }
   },
 
