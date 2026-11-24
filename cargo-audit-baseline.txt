@@ -3,6 +3,11 @@
 #
 # Last revalidated: 2026-07-18 — RISC Zero receipt dependency triage.
 #
+# Audit run: 2026-11-23 — `cargo audit 0.22.2` WAS executed against every
+# tracked lockfile with the CI recipe. What the upgrades fixed, and the nine
+# entries added as a result, are documented in the dated block at the end of
+# this file.
+#
 # Static revalidation: 2026-11-22 — audit F-P2-1. `cargo audit` was NOT run in
 # this environment, so this is a reading of the entries against `Cargo.lock`,
 # not a fresh scan. Nothing could be removed: the same three upstream families
@@ -227,3 +232,164 @@ RUSTSEC-2025-0080
 RUSTSEC-2025-0100
 # RUSTSEC-2025-0098 — unic-ucd-version 0.9.0
 RUSTSEC-2025-0098
+#
+# ═══════════════════════════════════════════════════════════════════════════
+# 2026-11-23 — audit executed; 31 advisories fixed by upgrade, 9 listed below
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# The 2026-11-22 pass above was static. This pass ran the CI recipe
+# (`cargo audit --file <lock> <ignores>` for all eight tracked lockfiles) with
+# cargo-audit 0.22.2. Since the July revalidation the RustSec DB had added 40
+# failing advisories to the workspace lockfile alone; 31 of them were fixed by
+# upgrading rather than listing, recorded here so a later pass knows they are
+# already handled:
+#
+#   quinn-proto 0.11.15 -> 0.11.19, quinn-udp 0.5.14 -> 0.5.16   (7 advisories)
+#     RUSTSEC-2026-0338/-0339/-0340/-0341/-0342/-0523/-0524, -0538
+#   rustls 0.23.40 -> 0.23.46, rustls-webpki 0.103.13 -> 0.103.17
+#     RUSTSEC-2026-0285/-0346/-0348/-0349, -0382
+#   h2 0.4.14 -> 0.4.20                             RUSTSEC-2026-0258
+#   url 2.5.8 -> 2.5.9                              RUSTSEC-2026-0592
+#   webpki-roots / webpki-root-certs -> 1.0.12      RUSTSEC-2026-0381/-0383
+#   ctutils 0.4.2 -> 0.4.8                          RUSTSEC-2026-0385
+#   zstd 0.13.3 -> 0.13.5, zstd-safe 7.2.4 -> 7.4.1, zstd-sys 2.0.16 -> 2.1.3
+#     RUSTSEC-2026-0391/-0398/-0403/-0410
+#   zip 8.6.0 -> 9.8.1 (our own manifests: olympus-crypto, src-tauri,
+#     pg-embed-local)  RUSTSEC-2026-0367/-0368/-0369/-0429/-0545/-0548
+#   spin 0.9.8 -> 0.9.9 (clears the yanked-release warning)
+#
+# clients/cli and proofs/zkvm/canonicalization/host-tools took the same
+# patch-level bumps (quinn-proto/quinn-udp/rustls/rustls-webpki/webpki-roots/
+# url). pg-embed-local additionally moved to sqlx 0.9.1 + libsqlite3-sys
+# 0.39.0, which clears RUSTSEC-2026-0459 for that lockfile.
+#
+# Of the nine entries below, two are real exposures rather than dormant code
+# (RUSTSEC-2026-0387 and RUSTSEC-2026-0459); each says so explicitly.
+
+#
+# ── zip 2.4.2 — risc0-circuit-recursion's optional extraction path ──────────
+#
+# RUSTSEC-2026-0367 — extraction preserves SUID/SGID bits.
+# RUSTSEC-2026-0368 — extracted symlink targets escape the destination dir.
+# RUSTSEC-2026-0369 — Unix permissions applied through symlinks.
+# RUSTSEC-2026-0429 — symlink entry with a large declared size aborts.
+# RUSTSEC-2026-0545 — AES entries returned without MAC verification.
+# RUSTSEC-2026-0548 — stream extraction uses local-header names.
+#
+# Why we have it: risc0-circuit-recursion 4.0.5 declares `zip = "2.1"` as an
+# optional, `cfg(not(target_os = "zkvm"))` dependency. Olympus enables it only
+# in proofs/zkvm/canonicalization/host-tools, where the risc0-zkvm `client`
+# feature turns that edge on; in the workspace lockfile the package is recorded
+# but never resolved (`cargo tree -i zip@2.4.2` prints nothing, same for
+# ruzstd@0.7.3). Our own zip edges are on 9.8.1 and use only
+# ZipArchive::by_index / ZipWriter::start_file.
+#
+# Blast radius: the only binary that links 2.4.2 is the canonicalization
+# host-tools downloader — a local, offline fetch of RISC Zero's own release
+# archives. It never calls `extract`, `ZipStreamReader` or the AES reader, and
+# never opens an archive from an untrusted party, so all six advisories sit in
+# paths this build does not reach.
+#
+# Unblock: a risc0-circuit-recursion release that accepts zip ^9 (risc0-zkvm
+# 3.0.x pins `=4.0.5`), then bump host-tools' risc0-zkvm in the same commit
+# that refreshes the pinned guest image ID.
+RUSTSEC-2026-0367
+RUSTSEC-2026-0368
+RUSTSEC-2026-0369
+RUSTSEC-2026-0429
+RUSTSEC-2026-0545
+RUSTSEC-2026-0548
+
+#
+# ── ruzstd — decompression bomb via object/wasmer and object/risc0 ─────────
+#
+# RUSTSEC-2026-0344 — a tiny zstd frame can exhaust memory (OOM).
+#
+# Two copies, two parents:
+#   * ruzstd 0.5.0 <- object 0.32.2 <- wasmer-compiler 6.1.0 <- wasmer 6.1.0
+#     <- ark-circom 0.6.0, i.e. the default `prover` feature. object 0.32.2
+#     requires `ruzstd = "^0.5.0"`.
+#   * ruzstd 0.7.3 <- object 0.36.7 <- risc0-zkvm, resolved only in host-tools
+#     (the workspace graph does not reach it). object 0.36.7 requires
+#     `ruzstd = "^0.7.0"`.
+#
+# Blast radius: object consults ruzstd only when it reads a compressed
+# object-file section, and both call sites parse artifacts our own build
+# produced (cranelift output for ark-circom's circuit WASM; RISC Zero's own
+# ELFs). No upload, request body or witness input is handed to it, so a
+# decompression bomb is not reachable from untrusted data.
+#
+# Unblock: object >= 0.37 (ruzstd 0.9) accepted by wasmer-compiler and by
+# risc0-zkvm. ark-circom 0.6.0 pins `wasmer = "=6.1.0"`, so this waits in the
+# same upstream queue as RUSTSEC-2024-0436 and RUSTSEC-2026-0173.
+RUSTSEC-2026-0344
+
+#
+# ── crypto-bigint 0.5.5 — the stated fix is not installable ────────────────
+#
+# RUSTSEC-2026-0387 — subtraction, zero counting, division and Montgomery
+# multiplication in crypto-bigint could branch on secret data; `UintRef`
+# equality and `BoxedMontyForm::invert` likewise. Patched in >= 0.7.6.
+#
+# WARNING: THIS ONE IS A REAL EXPOSURE, NOT A DORMANT ENTRY.
+# crates/babyjubjub-permissive/src/ct.rs uses crypto-bigint's
+# `modular::constant_mod::Residue` for exactly the secret-scalar Baby Jubjub
+# arithmetic (256 fixed double/add/select rounds) that the crate is built
+# around, and `Residue` multiplication is Montgomery multiplication. The
+# constant-time property ct.rs relies on is what the advisory puts in
+# question, so this needs a deliberate decision rather than a bump:
+#   * the patched line cannot be installed. 0.7.5, 0.7.6 and 0.7.7 are ALL
+#     yanked on crates.io ("selected package was yanked by the author"), and
+#     no 0.6.x or 0.8.x release exists, so there is no non-yanked version to
+#     move to;
+#   * `elliptic-curve 0.13.8` (via ecdsa 0.16.9 <- k256 0.13.4 <-
+#     ethers-core 2.0.14 <- ark-circom 0.6.0) pins `crypto-bigint = "^0.5.5"`
+#     independently, and 0.5.5 is the version keyed here.
+# Second path, lower risk: the k256/ECDSA route verifies public ethers-core
+# data; no long-lived secret scalar goes through it.
+#
+# Unblock (either):
+#   (a) a non-yanked crypto-bigint >= 0.7.6 — then move ct.rs onto it and let
+#       elliptic-curve 0.14 / k256 0.14 catch up for the ethers-core edge; or
+#   (b) vendor 0.5.5 with pull/1365's branch removal the way glib and
+#       ppv-lite86 are already vendored, and retire it the same way.
+# Track as a security follow-up; do not let this entry sit unchallenged.
+RUSTSEC-2026-0387
+
+#
+# ── libsqlite3-sys 0.30.1 — bundled SQLite < 3.54.0 page-cache leak ────────
+#
+# RUSTSEC-2026-0459 / CVE-2026-119375 — SQLite before 3.54.0 can return
+# uninitialized page-cache memory when a database is opened together with a
+# sibling `-wal` whose page size differs. Fixed by libsqlite3-sys 0.39.0
+# (bundled SQLite 3.54.0).
+#
+# What was fixed: pg-embed-local's lockfile now uses sqlx 0.9.1 +
+# libsqlite3-sys 0.39.0 (sqlx-sqlite 0.9.0 capped the requirement at
+# "<0.38.0"; 0.9.1 allows ">=0.30.1, <0.41.0"), so that lockfile passes.
+#
+# Why the workspace lockfile still resolves 0.30.1: libsqlite3-sys declares
+# `links = "sqlite3"`, so a graph may contain exactly one copy, and
+# rusqlite 0.32.1 — pulled by tor-dirmgr 0.31.0 <- arti-client 0.31.0 behind
+# the optional `federation` feature — requires `^0.30.1`. Cargo resolves
+# optional dependencies into the lockfile, so that requirement pins the shared
+# package for the whole workspace even though the feature is off:
+#     $ cargo update -p libsqlite3-sys@0.30.1 --precise 0.39.0
+#     error: failed to select a version for the requirement
+#            `libsqlite3-sys = "^0.30.1"` ... required by package `rusqlite`
+# arti-client 0.31.0 is the newest 0.31.x, and rusqlite has no newer
+# compatible release, so no lockfile edit resolves this.
+#
+# WARNING: blast radius is NOT zero. The resolved 0.30.1 is the copy
+# sqlx-sqlite builds (bundled SQLite 3.46.x) in the default desktop build, so
+# it is what ships. Exploitation needs a local db + `-wal` pair written by a
+# less trusted party and then opened by the process; Olympus opens its own
+# application database, but any path that opens a user-supplied SQLite file
+# would expose it. Verify that assumption before shipping such a path.
+#
+# Unblock (either):
+#   (a) drop or narrow the `federation` feature so rusqlite leaves the resolve
+#       graph — then sqlx can take 0.39.x (its trusted-setup ceremony has not
+#       been run, so the feature is not usable in production today); or
+#   (b) an Arti release whose tor-dirmgr accepts rusqlite >= 0.41.
+RUSTSEC-2026-0459

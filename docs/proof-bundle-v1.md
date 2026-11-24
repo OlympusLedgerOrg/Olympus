@@ -9,11 +9,15 @@ UTF-8 bytes of the compact JSON serialization of the bundle **without** the
 arrays retain their order; no insignificant whitespace is emitted. This rule
 is intentionally independent of pretty-printed download formatting.
 
-The persisted `signature` is the BJJ EdDSA-Poseidon signature over the Olympus
-ledger-snapshot payload (`content_hash`, snapshot root/index/size and the
-authenticated signing time), not a signature over the browser-generated
-`bundle_hash`. The `signed_fields` member therefore names the ledger fields it
-attests to. A future schema that signs the complete exported artifact MUST
+The persisted `signature` is the BJJ EdDSA-Poseidon signature over
+`olympus_crypto::persist_message` — `original_root`, the snapshot root, and
+`snapshot_size` — plus the authenticated signing time it carries as `signed_at`.
+It is not a signature over the browser-generated `bundle_hash`, and it does not
+cover `content_hash`, `tree.leaf_index`, `merkle_root`,
+`ledger_entry_hash`, or any other bundle member: those are metadata the panel
+displays and `olympus verify` does not authenticate. The `signed_fields`
+member names exactly the fields the signature attests to, so keep it to that
+set — listing a field there asserts a check that does not exist. A future schema that signs the complete exported artifact MUST
 change the schema identifier and define the signing envelope before doing so.
 
 Snapshot path entries use `position: "left"` when the record is the left

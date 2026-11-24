@@ -33,17 +33,25 @@ const QUESTIONS_PATH = path.join(
   "golden-questions.json",
 );
 
+function parseLimit(raw) {
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1) {
+    throw new Error("--limit needs a positive integer");
+  }
+  return value;
+}
+
 function parseArgs(argv) {
   const options = { limit: Infinity, model: undefined };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--limit") {
-      const value = Number(argv[++i]);
-      if (!Number.isInteger(value) || value < 1)
-        throw new Error("--limit needs a positive integer");
-      options.limit = value;
+      options.limit = parseLimit(argv[++i]);
     } else if (arg.startsWith("--limit=")) {
-      options.limit = Number(arg.slice("--limit=".length));
+      // Both spellings route through the same validation. Previously only the
+      // spaced form was checked, so `--limit=abc` stored NaN and
+      // `slice(0, NaN)` silently ran zero questions while printing a 0% score.
+      options.limit = parseLimit(arg.slice("--limit=".length));
     } else if (arg === "--model") {
       options.model = argv[++i];
     } else if (arg.startsWith("--model=")) {

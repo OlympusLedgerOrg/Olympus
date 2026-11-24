@@ -156,7 +156,10 @@ pub fn stored_data_spans(artifact: &[u8]) -> Result<HashMap<String, (u64, u64)>,
         let f = archive
             .by_index(i)
             .map_err(|e| ContainerError::new(format!("re-read entry {i}: {e}")))?;
-        let name = f.name().to_string();
+        let name = f
+            .name()
+            .map_err(|e| ContainerError::new(format!("re-read entry {i}: {e}")))?
+            .to_string();
         let size = f.size();
         let hs = f.header_start() as usize;
         drop(f);

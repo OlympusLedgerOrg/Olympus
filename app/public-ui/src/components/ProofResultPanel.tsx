@@ -262,7 +262,13 @@ export default function ProofResultPanel({ verdict }: { verdict: VerdictState })
     committed_at: committedAt,
     merkle_proof: result.merkle_proof ?? {},
     signature: result.signature ?? null,
-    signed_fields: ["content_hash", "merkle_root", "ledger_entry_hash"],
+    // The persisted BJJ signature covers `olympus_crypto::persist_message` —
+    // original_root, snapshot_root, snapshot_size — plus the `signed_at` it
+    // carries. Nothing else in this bundle is authenticated by it, so
+    // `content_hash`, `merkle_root`, `ledger_entry_hash` and the remaining
+    // metadata stay out of this list: naming a field here claims the signature
+    // attests to it, and the offline verifier does not check them.
+    signed_fields: ["original_root", "snapshot_root", "snapshot_size", "signed_at"],
     signature_public_key: result.signature_public_key ?? null,
     issuer: result.issuer ?? "Olympus",
     merkle_proof_valid: result.merkle_proof_valid ?? null,

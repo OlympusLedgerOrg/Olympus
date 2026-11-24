@@ -42,7 +42,12 @@ fn resolve_pg_port(raw: Option<&str>) -> u16 {
     }
 }
 
-fn pg_port() -> u16 {
+/// The resolved embedded-cluster port.
+///
+/// Public because integration tests must reserve the port the app will really
+/// bind: `OLYMPUS_PG_PORT` means a hand-copied `5433` constant in a test no
+/// longer describes the running cluster (audit G-P2-2).
+pub fn pg_port() -> u16 {
     static RESOLVED: OnceLock<u16> = OnceLock::new();
     *RESOLVED.get_or_init(|| {
         let raw = std::env::var("OLYMPUS_PG_PORT").ok();

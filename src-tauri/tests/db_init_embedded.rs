@@ -21,10 +21,12 @@
 //!    branch, which every launch after the very first one takes, and which
 //!    additionally covers stored-credential reuse and migration idempotence.
 //!
-//! Database: always an embedded cluster on the private `db::PG_PORT` (5433).
-//! That port is a private const with no environment override, so this test owns
-//! it for the duration of the run — hence the serial job in
-//! `scripts/embedded-postgres-tests.sh`.
+//! Database: always an embedded cluster, on whatever port `db::pg_port()`
+//! resolves — `OLYMPUS_PG_PORT` when it is set and valid (audit G-P2-2),
+//! otherwise the 5433 default. The test reads that function rather than a
+//! hand-copied constant so it reserves the port the app will really bind; the
+//! serial job in `scripts/embedded-postgres-tests.sh` exists because whichever
+//! port that is, this test owns it exclusively.
 
 use olympus_tauri_lib::db::{self, EmbeddedDb};
 use sqlx::Row;
@@ -32,10 +34,15 @@ use std::net::TcpListener;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-/// Mirrors the private `db::PG_PORT`. Not importable, so
-/// `assert_pool_is_live_and_migrated` re-derives the live server's port from
-/// the connection itself and fails if this copy has drifted.
-const PG_PORT: u16 = 5433;
+/// The port `db::init_embedded` will actually bind.
+///
+/// Read through `db::pg_port()` rather than a hand-copied constant: the port is
+/// no longer a private const with no override, so a copy would keep reserving
+/// 5433 while the app started on `OLYMPUS_PG_PORT` — guarding a port nothing
+/// uses and colliding on the one the cluster takes.
+fn pg_port() -> u16 {
+    db::pg_port()
+}
 
 /// `init_embedded`'s error text is intentionally operator-safe (no paths, no
 /// PIDs, no command lines), and pg-embed routes child stdio to the null device.
@@ -52,13 +59,14 @@ fn panic_with_debug_log(app_data_dir: &Path, context: &str, error: &dyn std::fmt
 /// reaches a release looking green, which is the exact failure class this test
 /// exists to catch.
 fn require_free_pg_port() {
-    if let Err(error) = TcpListener::bind(("127.0.0.1", PG_PORT)) {
+    let port = pg_port();
+    if let Err(error) = TcpListener::bind(("127.0.0.1", port)) {
         panic!(
-            "127.0.0.1:{PG_PORT} is already in use ({error}). `db::init_embedded` hardcodes this \
-             port with no environment override, so this test needs exclusive use of it. Stop the \
-             other listener (a stray embedded postmaster, or a second copy of this test running \
-             concurrently) and re-run. See scripts/embedded-postgres-tests.sh — these binaries \
-             must run serially."
+            "127.0.0.1:{port} is already in use ({error}). `db::init_embedded` binds this port \
+             (`OLYMPUS_PG_PORT` when set and valid, otherwise 5433), so this test needs \
+             exclusive use of it. Stop the other listener (a stray embedded postmaster, or a \
+             second copy of this test running concurrently) and re-run. See \
+             scripts/embedded-postgres-tests.sh — these binaries must run serially."
         );
     }
 }
@@ -67,14 +75,15 @@ fn require_free_pg_port() {
 /// `Drop` terminates the postmaster synchronously, but the listening socket can
 /// linger for a moment after the process exits.
 fn wait_for_pg_port_release() {
+    let port = pg_port();
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
-        if TcpListener::bind(("127.0.0.1", PG_PORT)).is_ok() {
+        if TcpListener::bind(("127.0.0.1", port)).is_ok() {
             return;
         }
         assert!(
             Instant::now() < deadline,
-            "embedded PostgreSQL still holding 127.0.0.1:{PG_PORT} 30s after EmbeddedDb::drop; \
+            "embedded PostgreSQL still holding 127.0.0.1:{port} 30s after EmbeddedDb::drop; \
              the reaper did not terminate the cluster"
         );
         std::thread::sleep(Duration::from_millis(200));
@@ -148,9 +157,9 @@ async fn assert_pool_is_live_and_migrated(db: &EmbeddedDb, app_data_dir: &Path, 
          database"
     );
 
-    // `PG_PORT` above is a hand-copy of a private const. Re-derive the real
-    // port from the live connection so a change in `db.rs` surfaces here rather
-    // than silently weakening this test's exclusive-port assumption.
+    // Re-derive the real port from the live connection: `db::pg_port()` is a
+    // lazily-initialised OnceLock, so confirm the server the pool actually
+    // reached is the one `require_free_pg_port` reserved.
     let server_port: i32 = sqlx::query_scalar("SELECT inet_server_port()")
         .fetch_one(&db.pool)
         .await
@@ -161,12 +170,14 @@ async fn assert_pool_is_live_and_migrated(db: &EmbeddedDb, app_data_dir: &Path, 
                 &error,
             )
         });
+    let expected_port = pg_port();
     assert_eq!(
         server_port,
-        i32::from(PG_PORT),
+        i32::from(expected_port),
         "{phase}: init_embedded connected to port {server_port}, but this test reserves \
-         {PG_PORT}. `db::PG_PORT` changed — update the copy in this file and in \
-         scripts/embedded-postgres-tests.sh's serial-job rationale."
+         {expected_port}. The port the app resolves and the port this test reserved have \
+         diverged — check OLYMPUS_PG_PORT handling in src-tauri/src/db and the serial-job \
+         rationale in scripts/embedded-postgres-tests.sh."
     );
 
     applied_migration_count_is_stable(applied, phase);

@@ -425,7 +425,14 @@ async function declaredContextLength(model) {
     // value rather than failing the call over metadata.
     declared = null;
   }
-  contextLengthCache.set(model, declared);
+  // Cache only a successful declaration. `null` means "could not find out" —
+  // the daemon was down, the model was not pulled yet, or /api/show is too old
+  // to have the field. Caching that result would pin the fallback for the whole
+  // process lifetime, so a model pulled (or daemon restarted) a minute later
+  // would keep getting the wrong budget and the wrong num_ctx clamp.
+  if (declared !== null) {
+    contextLengthCache.set(model, declared);
+  }
   return declared;
 }
 

@@ -102,6 +102,12 @@ jobs:
             agent-docs:
               - 'AGENTS.md'
               - 'CLAUDE.md'
+              # Forbidden instruction files: the job below FAILS if any of these
+              # exist. They must select the filter too, or a PR that adds only
+              # CODEX.md never runs the check that rejects it.
+              - 'CODEX.md'
+              - 'AGENTS.local.md'
+              - 'CLAUDE.local.md'
               - 'tools/wiserepo/**'
             tooling:
               - '.license-header-baseline'

@@ -8,7 +8,7 @@ mod process_identity;
 // this module tree — unused on the lib target by construction.
 #[allow(unused_imports)]
 pub(crate) use embedded::confirm_and_disarm_embedded_postgres_reaper;
-pub use embedded::{init_embedded, reap_embedded_pg, EmbeddedDb};
+pub use embedded::{init_embedded, pg_port, reap_embedded_pg, EmbeddedDb};
 pub use external::connect_external;
 
 pub(crate) const MIGRATION_DATABASE_URL_ENV: &str = "OLYMPUS_DATABASE_MIGRATION_URL";

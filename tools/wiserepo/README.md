@@ -334,7 +334,7 @@ cd tools/wiserepo
 npm test
 ```
 
-93 tests covering the places a bug is silent rather than loud:
+114 tests covering the places a bug is silent rather than loud:
 
 - `resolveInRepo` path-traversal guard, including the sibling-prefix case
   (`Olympus-evil` must not count as inside `Olympus`) — and
