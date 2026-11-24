@@ -319,7 +319,7 @@ thiserror = "2"
 # pg-embed (same v8), so this adds no new crates to the supply-chain graph. We
 # only need DEFLATE decompression to read package parts; the canonical package is
 # re-emitted Stored (uncompressed), so no compression feature is required.
-zip = { version = "8", default-features = false, features = [ "deflate" ] }
+zip = { version = "9", default-features = false, features = [ "deflate" ] }
 # Parse the package-level relationship part so the OOXML redactor can identify
 # (and refuse to empty) the actual officeDocument target, even when it uses a
 # non-default part name. Already locked transitively through plist.
