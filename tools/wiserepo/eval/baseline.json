@@ -1,16 +1,16 @@
 {
-  "recorded_at": "2026-11-25T04:03:07.948Z",
+  "recorded_at": "2026-11-25T04:19:58.580Z",
   "model": "qwen2.5-coder:7b-instruct",
   "suites": {
     "qa": {
       "passed": 5,
       "total": 5,
-      "seconds": 64
+      "seconds": 68
     },
     "review": {
-      "passed": 0,
+      "passed": 1,
       "total": 2,
-      "seconds": 81
+      "seconds": 30
     },
     "summarize": {
       "passed": 1,

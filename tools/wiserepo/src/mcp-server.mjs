@@ -347,7 +347,13 @@ export async function runTool(name, args = {}) {
     }
     const prompt =
       `Review this diff against the project's engineering standards below. ` +
-      `Flag correctness bugs, invariant violations, and missed test coverage. Be concise, most-severe first.\n\n` +
+      `Flag correctness bugs, invariant violations, and missed test coverage. Be concise, most-severe first. ` +
+      // The fixture now carries two separated hunks, so per-hunk coverage is
+      // measurable; with a single merged hunk the model only ever had one region
+      // to report on, which made this instruction unmeasurable rather than
+      // merely ignored.
+      `Report a finding for EVERY hunk in the diff; for a hunk with no issue, say ` +
+      `so rather than leaving it out.\n\n` +
       // A small model reads a diff as if every line in it were the file: a
       // smoke review reported the fixture's removed `lastPage - 1` as live
       // behaviour because nothing said a `-` line is gone. Two sentences, not a
