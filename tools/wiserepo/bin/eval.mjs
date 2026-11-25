@@ -126,30 +126,24 @@ export function parseArgs(argv) {
  * only way to exercise the REAL tool path against a planted bug without
  * inventing a second code path for the eval to drift from.
  *
- * Both states are COMMITTED and the diff is taken between two revisions
- * (`HEAD~1..HEAD`) rather than from the working tree. That is not stylistic:
- * the two fixture files happen to be the same byte length, so an uncommitted
- * overwrite lands inside git's racy-clean window and `git diff HEAD` reports a
- * CLEAN tree — the eval then scores an empty diff and the failure looks like a
- * model miss. Committed blobs are compared by content, so the fixture diff
- * cannot silently vanish.
+ * Every state is COMMITTED and each case diffs two revisions rather than the
+ * working tree. That is not stylistic: fixture states can be the same byte
+ * length, so an uncommitted overwrite lands inside git's racy-clean window and
+ * `git diff HEAD` reports a CLEAN tree — the eval then scores an empty diff and
+ * the failure looks like a model miss. Committed blobs are compared by content,
+ * so a fixture diff cannot silently vanish.
+ *
+ * Three states, so a case can score a correct change as well as a broken one:
+ *
+ *   HEAD~2  pager.before.js   correct pageCount, off-by-one clampPage
+ *   HEAD~1  pager.after.js    planted bug, clampPage fixed   (bug + fix)
+ *   HEAD    pager.fixed.js    planted bug also fixed          (clean diff)
  */
 async function withFixtureRepo(fn) {
   const dir = await mkdtemp(path.join(os.tmpdir(), "wiserepo-eval-"));
   const previousRoot = process.env.WISEREPO_ROOT;
-  try {
-    await execFileAsync("git", ["init", "--quiet", dir]);
-    await mkdir(path.join(dir, "src"), { recursive: true });
-    await copyFile(
-      path.join(EVAL_DIR, "fixtures", "pager.before.js"),
-      path.join(dir, "src", "pager.js"),
-    );
-    // review_diff grounds on AGENTS.md (see AGENTS_MD in src/mcp-server.mjs).
-    // Give the fixture repo the real one and commit it, so the standards block
-    // is authentic while the file itself never appears in the diff.
-    await copyFile(path.join(REPO_ROOT, "AGENTS.md"), path.join(dir, "AGENTS.md"));
-    await execFileAsync("git", ["-C", dir, "add", "."]);
-    await execFileAsync("git", [
+  const commit = (message) =>
+    execFileAsync("git", [
       "-C",
       dir,
       "-c",
@@ -159,19 +153,19 @@ async function withFixtureRepo(fn) {
       "commit",
       "--quiet",
       "-m",
-      "fixture: before",
+      message,
     ]);
+  // Stage by CONTENT HASH, not `git add .`. A same-second overwrite can stay
+  // invisible behind git's stat cache: `git add` then stages nothing and
+  // `git commit` fails with a clean tree (the second way this fixture produced
+  // no diff). --cacheinfo writes the exact blob into the index, so a commit
+  // cannot be a no-op and the diff cannot depend on timestamps.
+  const commitState = async (fileName, message) => {
     await copyFile(
-      path.join(EVAL_DIR, "fixtures", "pager.after.js"),
+      path.join(EVAL_DIR, "fixtures", fileName),
       path.join(dir, "src", "pager.js"),
     );
-    // Stage by CONTENT HASH, not `git add .`. The two fixture files are the same
-    // byte length, so a same-second overwrite can stay invisible behind git's
-    // stat cache: `git add` then stages nothing and `git commit` fails with a
-    // clean tree (the second way this fixture produced no diff). --cacheinfo
-    // writes the exact blob into the index, so the commit cannot be a no-op and
-    // the diff cannot depend on timestamps.
-    const { stdout: afterBlob } = await execFileAsync("git", [
+    const { stdout: blob } = await execFileAsync("git", [
       "-C",
       dir,
       "hash-object",
@@ -184,28 +178,38 @@ async function withFixtureRepo(fn) {
       "update-index",
       "--add",
       "--cacheinfo",
-      `100644,${afterBlob.trim()},src/pager.js`,
+      `100644,${blob.trim()},src/pager.js`,
     ]);
-    await execFileAsync("git", [
-      "-C",
-      dir,
-      "-c",
-      "user.name=wiserepo-eval",
-      "-c",
-      "user.email=eval@localhost",
-      "commit",
-      "--quiet",
-      "-m",
-      "fixture: after (planted bug)",
-    ]);
+    await commit(message);
+  };
+  try {
+    await execFileAsync("git", ["init", "--quiet", dir]);
+    await mkdir(path.join(dir, "src"), { recursive: true });
+    await copyFile(
+      path.join(EVAL_DIR, "fixtures", "pager.before.js"),
+      path.join(dir, "src", "pager.js"),
+    );
+    // review_diff grounds on AGENTS.md (see AGENTS_MD in src/mcp-server.mjs).
+    // Give the fixture repo the real one and commit it, so the standards block
+    // is authentic while the file itself never appears in the diff.
+    await copyFile(path.join(REPO_ROOT, "AGENTS.md"), path.join(dir, "AGENTS.md"));
+    await execFileAsync("git", ["-C", dir, "add", "."]);
+    await commit("fixture: before");
+    await commitState("pager.after.js", "fixture: after (planted bug)");
+    await commitState("pager.fixed.js", "fixture: fixed (both changes correct)");
     process.env.WISEREPO_ROOT = dir;
     // A fixture that produces no diff would score 0/1 and look like a model
-    // regression. Fail as a setup error instead, by name.
-    const fixtureDiff = await gitDiff(["HEAD~1", "HEAD"]);
-    if (!fixtureDiff.trim()) {
-      throw new Error(
-        "fixture repo produced an EMPTY diff — eval/fixtures or the repo setup is broken, not the model",
-      );
+    // regression. Fail as a setup error instead, by name — for every range a
+    // golden case actually diffs.
+    for (const range of [
+      ["HEAD~2", "HEAD~1"],
+      ["HEAD~1", "HEAD"],
+    ]) {
+      if (!(await gitDiff(range)).trim()) {
+        throw new Error(
+          `fixture repo produced an EMPTY diff for ${range.join("..")} — eval/fixtures or the repo setup is broken, not the model`,
+        );
+      }
     }
     return await fn(dir);
   } finally {

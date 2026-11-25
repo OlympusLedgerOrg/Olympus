@@ -1,15 +1,22 @@
 [
   {
     "id": "planted-off-by-one",
-    "diffArgs": ["HEAD~1", "HEAD"],
+    "diffArgs": ["HEAD~2", "HEAD~1"],
     "expect": ["pageCount", ["extra page", "one page too many", "one too many", "too many pages", "overcounts"]],
     "why": "The diff adds `+ 1` to pageCount; the consequence is that it returns one page more than the items need, and no phrasing of that appears in the diff text. Expecting the consequence rather than the `+ 1` token is deliberate: `+ 1` can be echoed straight out of the added line without understanding it, so it cannot distinguish a review that found the bug from one that quoted the hunk. The array accepts equivalent phrasings of the same finding (`extra page`, `one page too many`, …) so the case scores whether the review found it, not whether it picked one wording. `off-by-one` is deliberately NOT accepted: paired with the required `pageCount` it can be satisfied by a review that only describes the `clampPage` hunk."
   },
   {
     "id": "no-phantom-removed-line",
-    "diffArgs": ["HEAD~1", "HEAD"],
+    "diffArgs": ["HEAD~2", "HEAD~1"],
     "expect": ["clampPage", "lastPage"],
     "expect_absent": ["lastPage - 1"],
     "why": "The diff REPLACES `lastPage - 1` with `lastPage` — a fix. A review that reads deleted lines as current reports `lastPage - 1` as live behaviour; a review that reads it correctly says it was removed or replaced, and passes. The matcher is SENTENCE-scoped: a sentence framing the value as removed, replaced, restored or previously returned passes, a sentence with no such framing fails, and `still`/`keeps` beats a removal word in the same sentence. `expect` exists because `expect_absent` alone is satisfied by SILENCE: a review that only discussed the `pageCount` bug passed this case without ever looking at the second hunk. `clampPage` and `lastPage` are identifiers, not prose, so wording cannot false-fail a review that addresses the change; direction is scored only by `expect_absent`."
+  },
+  {
+    "id": "clean-fix-not-flagged",
+    "diffArgs": ["HEAD~1", "HEAD"],
+    "expect": ["pageCount"],
+    "expect_absent": ["+ 1", "extra page"],
+    "why": "This diff's only change is a correct fix: it removes the `+ 1` the previous commit added, so `pageCount` is right in both revisions and there is no defect anywhere in this range. A review that flags it is reporting code that is visibly correct — the false-positive twin of the phantom case. Two needles, because one was not enough in practice: a real answer wrote 'pageCount adds an extra page by … adding 1' with no `+` anywhere, so the `+ 1` needle missed exactly the false positive this case exists to catch. 'extra page' is the consequence phrasing a review only produces if it read the fix as the bug; 'the diff removes the + 1' and 'no longer adds an extra page' are attributed and pass. Caveat: a bare 'there is no extra page' with no removal word in its sentence would false-fail, so a correct review is expected to attribute the change."
   }
 ]

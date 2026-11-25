@@ -1,10 +1,15 @@
 # Eval fixtures
 
-`bin/eval.mjs` builds one throwaway git repo from these files per run, commits
-`pager.before.js` as `src/pager.js`, then commits `pager.after.js` as a second
-commit — so the scored diff is `git diff HEAD~1 HEAD`, a real two-revision diff
-of the kind `review_diff` is used on. `review` and `summarize` both run inside
-that single repo, so both suites score the same checkout.
+`bin/eval.mjs` builds one throwaway git repo from these files per run and commits
+one state per commit, so every case scores a real two-revision diff of the kind
+`review_diff` is used on. `review` and `summarize` both run inside that single
+repo, so both suites score the same checkout.
+
+| revision | file | state | case that diffs it |
+| --- | --- | --- | --- |
+| `HEAD~2` | `pager.before.js` | correct `pageCount`, off-by-one `clampPage` | — |
+| `HEAD~1` | `pager.after.js` | planted bug, `clampPage` fixed | `HEAD~2..HEAD~1` (bug + fix) |
+| `HEAD` | `pager.fixed.js` | both changes correct | `HEAD~1..HEAD` (clean fix) |
 
 Both states are committed on purpose. The two files are the same byte length,
 so an *uncommitted* overwrite can land inside git's racy-clean window: `git
@@ -35,6 +40,12 @@ That second row is why this fixture exists: a smoke review in this repo once
 reported a removed line as still present. Scoring only "did it find the bug"
 would still pass a model that also invents issues, so the golden case is written
 so the phantom competes with the real finding.
+
+The third commit is the same idea with the bug removed: `HEAD~1..HEAD` deletes
+the planted `+ 1`, so the only change in that range is correct. The
+`clean-fix-not-flagged` case scores precision there — a review that calls the fix
+a defect fails on the same attribution rule (the removed `+ 1` stated as current),
+and `expect: pageCount` keeps a review that ignores the range from passing.
 
 The phantom case scores *attribution*, not mention: "the diff removes
 `lastPage - 1`" is the reading this fixture is meant to reward and passes, while

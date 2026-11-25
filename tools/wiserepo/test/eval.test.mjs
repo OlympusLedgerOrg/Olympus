@@ -82,6 +82,12 @@ test("the review fixture still plants the bug and the removed-line red herring",
   // it as still present instead of finding the real bug.
   assert.match(before, /lastPage - 1/);
   assert.doesNotMatch(after, /lastPage - 1/);
+
+  // The third state is the clean one: the bug is gone too, so a case can score
+  // a review that must find nothing and flag nothing.
+  const fixed = await fixture("pager.fixed.js");
+  assert.doesNotMatch(fixed, /PAGE_SIZE\) \+ 1/);
+  assert.doesNotMatch(fixed, /lastPage - 1/);
 });
 
 // `git diff -U3` merges changes that are 6 or fewer lines apart, so the planted
@@ -124,6 +130,17 @@ test("every review case requires the review to address the diff", async () => {
   const consequence = planted.expect.find(Array.isArray);
   assert.ok(consequence, "the planted-bug case has no consequence group");
   assert.ok(consequence.includes("extra page"));
+
+  // A clean range whose only change is a correct fix: the review must not turn
+  // the removed `+ 1` into a live defect. Without `expect` it would pass on a
+  // review that never looked.
+  const clean = cases.find((item) => item.id === "clean-fix-not-flagged");
+  assert.ok(clean, "the clean-fix case is missing");
+  assert.deepEqual(clean.diffArgs, ["HEAD~1", "HEAD"]);
+  // `+ 1` alone missed a real false positive (the answer wrote "adding 1" with
+  // no plus), so the consequence phrasing is scored too.
+  assert.deepEqual(clean.expect_absent, ["+ 1", "extra page"]);
+  assert.ok(clean.expect.length > 0);
 });
 
 // REGRESSION: a review that only discussed one hunk PASSED the phantom case
