@@ -75,6 +75,23 @@ fn retired_unified_canonicalization_error() -> ApiError {
     )
 }
 
+/// OLY-H2: the `non_existence` circuit proves absence from a *caller-supplied*
+/// Poseidon SMT root, and nothing binds that root to the signed BLAKE3 ledger.
+/// A valid proof therefore establishes only "this key is absent from some tree
+/// the prover chose", not absence from the authoritative ledger.
+///
+/// Both endpoints fail closed: minting a proof this node will always reject
+/// hands back a credential that reads as evidence and is not. Anchored absence
+/// is served by the BLAKE3 shard-root proof path (`api::monitor::proof_blake3`).
+fn non_existence_unsupported_error() -> ApiError {
+    err(
+        StatusCode::NOT_IMPLEMENTED,
+        "non_existence proofs are not an authenticated absence claim: \
+         the circuit root is caller-supplied and is not bound to a signed \
+         ledger checkpoint; use the anchored BLAKE3 shard-root proof",
+    )
+}
+
 /// Audit H-2 wrapper: thin adapter from the shared
 /// `zk::verify::enforce_empty_tree_invariant` (red-team F-RT-1 made the
 /// shared helper necessary so the federation receive path enforces the
@@ -308,22 +325,7 @@ async fn verify_request(
                     .verify(&proof_json, &signals)
                     .map_err(|_| err(StatusCode::BAD_REQUEST, "proof encoding is invalid"))?
             }
-            "non_existence" => {
-                // OLY-H2: the circuit proves absence from a *caller-supplied*
-                // Poseidon SMT root (`root` is a public input). Nothing binds
-                // that root to the signed BLAKE3 ledger, so a valid proof only
-                // establishes "this key is absent from some tree the prover
-                // chose", not absence from the authoritative ledger. Fail
-                // closed until an anchored-root attestation exists; anchored
-                // absence is served by the BLAKE3 shard-root proof path
-                // (`api::monitor::proof_blake3`).
-                return Err(err(
-                    StatusCode::NOT_IMPLEMENTED,
-                    "non_existence proofs are not an authenticated absence claim: \
-                     the circuit root is caller-supplied and is not bound to a signed \
-                     ledger checkpoint; use the anchored BLAKE3 shard-root proof",
-                ));
-            }
+            "non_existence" => return Err(non_existence_unsupported_error()),
             RETIRED_UNIFIED_CANONICALIZATION_ID => {
                 return Err(retired_unified_canonicalization_error())
             }
@@ -568,6 +570,17 @@ struct ProveResponse {
 #[cfg(feature = "prover")]
 use crate::zk::proof::fr_to_decimal;
 
+/// `/zk/prove` refuses the circuits whose proofs this node cannot authenticate.
+/// Separate from the dispatch so the policy is testable without an `AppState`
+/// and runs before any artifact lookup or native proving work.
+#[cfg(feature = "prover")]
+fn validate_prove_request(req: &ProveRequest) -> Result<(), ApiError> {
+    if req.circuit == "non_existence" {
+        return Err(non_existence_unsupported_error());
+    }
+    Ok(())
+}
+
 #[cfg(feature = "prover")]
 async fn prove(
     State(state): State<AppState>,
@@ -581,6 +594,11 @@ async fn prove(
             "API key lacks required scope: one of 'prove' or 'admin'",
         ));
     }
+
+    // Refuse before artifacts are resolved or native prover work is queued, so
+    // the answer is 501 rather than a 503 that depends on which keys happen to
+    // be staged.
+    validate_prove_request(&req)?;
 
     // Resolve where the circuit artifacts live. Order: explicit request override
     // → resolved-at-startup state.proofs_dir → repo-relative dev fallback. The
@@ -703,12 +721,10 @@ async fn prove(
                         .map_err(prove_err)?;
                     (output.0, output.1, None)
                 }
-                "non_existence" => {
-                    let w = parse::parse_non_existence_witness(&witness_val)?;
-                    let output = crate::zk::prove::prove_non_existence(&w, &wasm, &r1cs, &zkey)
-                        .map_err(prove_err)?;
-                    (output.0, output.1, None)
-                }
+                // Unreachable while `validate_prove_request` runs first, but the
+                // match must still answer with the policy error rather than fall
+                // through to "unknown circuit" if that guard is ever moved.
+                "non_existence" => return Err(non_existence_unsupported_error()),
                 UNIFIED_SECTION_COMMITMENT_ID => {
                     let w = parse::parse_unified_witness(&witness_val)?;
                     enforce_empty_tree_invariant(&w.public_signals(), 1, 3)?;
@@ -934,6 +950,32 @@ mod tests {
         assert!(verify_source_commitment(&expected.to_uppercase(), &actual).is_err());
         assert!(verify_source_commitment(&expected[..62], &actual).is_err());
         assert!(verify_source_commitment(&"00".repeat(32), &actual).is_err());
+    }
+
+    #[cfg(feature = "prover")]
+    #[test]
+    fn prove_rejects_the_unanchored_absence_that_verify_rejects() {
+        let unanchored = ProveRequest {
+            circuit: "non_existence".to_owned(),
+            keys_dir: None,
+            witness: serde_json::json!({}),
+        };
+        let error = validate_prove_request(&unanchored)
+            .expect_err("minting a proof this node refuses to verify must fail closed");
+        assert_eq!(error.0, StatusCode::NOT_IMPLEMENTED);
+        assert!(
+            api_error_detail(&error).contains("not an authenticated absence claim"),
+            "detail must explain why the proof is refused: {}",
+            api_error_detail(&error)
+        );
+
+        // The policy is specific to the unanchored circuit.
+        let anchored = ProveRequest {
+            circuit: "document_existence".to_owned(),
+            keys_dir: None,
+            witness: serde_json::json!({}),
+        };
+        assert!(validate_prove_request(&anchored).is_ok());
     }
 
     #[tokio::test]
