@@ -19,13 +19,29 @@ export function normaliseForExpect(text) {
 /**
  * Which expectations the answer never mentions, after normalisation.
  *
+ * An expectation may also be an ARRAY of equivalent phrasings: the group passes
+ * when the answer contains any one of them. A correct review of the planted bug
+ * can say "extra page", "one page too many" or "one too many", and scoring a
+ * single fixed phrase measured the model's vocabulary instead of whether it
+ * found the bug.
+ *
  * @param {string} answer
- * @param {string[]} expect
+ * @param {(string | string[])[]} expect
  * @returns {string[]} the expectations that are genuinely absent
  */
 export function missingExpectations(answer, expect) {
   const haystack = normaliseForExpect(answer);
-  return (expect ?? []).filter((needle) => !haystack.includes(normaliseForExpect(needle)));
+  const missing = [];
+  for (const entry of expect ?? []) {
+    // The report keeps the caller's spelling (`authorize_write`, not
+    // `authorizewrite`); only the comparison is normalised.
+    const alternatives = Array.isArray(entry) ? entry : [entry];
+    const needles = alternatives.map(normaliseForExpect).filter(Boolean);
+    if (needles.length === 0 || !needles.some((needle) => haystack.includes(needle))) {
+      missing.push(alternatives.join(" | "));
+    }
+  }
+  return missing;
 }
 
 // Normalised fragments (case, spaces and hyphens are folded out) that frame the

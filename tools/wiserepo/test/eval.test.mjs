@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { casePassed, parseArgs } from "../bin/eval.mjs";
+import { missingExpectations } from "../src/eval-match.mjs";
 
 const fixture = (name) =>
   readFile(fileURLToPath(new URL(`../eval/fixtures/${name}`, import.meta.url)), "utf8");
@@ -100,6 +101,24 @@ test("every review case requires the review to address the diff", async () => {
   const phantom = cases.find((item) => item.id === "no-phantom-removed-line");
   assert.ok(phantom, "the phantom case is missing");
   assert.ok(phantom.expect.includes("clampPage"));
+
+  // The planted bug is scored on the consequence, and the group of accepted
+  // phrasings must keep the original one — otherwise a rewrite could quietly
+  // drop the only wording the case was recorded against.
+  const planted = cases.find((item) => item.id === "planted-off-by-one");
+  const consequence = planted.expect.find(Array.isArray);
+  assert.ok(consequence, "the planted-bug case has no consequence group");
+  assert.ok(consequence.includes("extra page"));
+});
+
+// A correct review may phrase the same finding differently; the case scores the
+// finding, so any accepted phrasing passes and the diagnostic names them all.
+test("an expectation group accepts equivalent phrasings", () => {
+  const expect = ["pageCount", ["extra page", "one page too many"]];
+  assert.deepEqual(missingExpectations("pageCount now returns one page too many", expect), []);
+  assert.deepEqual(missingExpectations("pageCount adds + 1", expect), [
+    "extra page | one page too many",
+  ]);
 });
 
 // Citations were printed beside the verdict and never scored, so a review that

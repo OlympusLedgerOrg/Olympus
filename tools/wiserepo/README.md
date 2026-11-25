@@ -258,7 +258,7 @@ scores all three model-backed tools against golden cases in `eval/`:
 | suite | cases | a pass means |
 | --- | --- | --- |
 | `qa` | `eval/golden-questions.json` | the answer contains every `expect` string; each case also names the files to ground on |
-| `review` | `eval/golden-review.json` | two cases: the review names the **planted bug** in `eval/fixtures/pager.after.js` by its consequence (`extra page`, not the `+ 1` token the hunk literally shows), and it does **not** state the removed line (`lastPage - 1`) as current behaviour — naming it as removed passes |
+| `review` | `eval/golden-review.json` | two cases: the review names the **planted bug** in `eval/fixtures/pager.after.js` by its consequence (any of several accepted phrasings of `extra page`, never the `+ 1` token the hunk literally shows), and it does **not** state the removed line (`lastPage - 1`) as current behaviour — naming it as removed passes |
 | `summarize` | `eval/golden-summarize.json` | the summary names the surface it summarized |
 
 Every case in every suite additionally fails if the answer cites a `path` or
