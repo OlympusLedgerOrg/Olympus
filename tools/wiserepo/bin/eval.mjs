@@ -247,10 +247,8 @@ async function loadCases(fileName, limit) {
  * scored on appeared in the diff the review copied back — the echo the case
  * exists to rule out. Phantom scanning still sees the whole answer (see
  * eval-match.mjs): showing a removed line as live is a failure wherever it is.
- *
- * Exported so the rule is testable without a model call.
  */
-export function proseOnly(answer) {
+function proseOnly(answer) {
   return String(answer ?? "").replace(/```[\s\S]*?```/g, "\n");
 }
 
@@ -271,6 +269,21 @@ export function casePassed({ missing, phantom, badCitations }) {
   return missing.length === 0 && phantom.length === 0 && badCitations.length === 0;
 }
 
+/**
+ * Score one answer against one golden case.
+ *
+ * Exported so the WIRING is testable without a model call: expectations read
+ * the answer's prose, phantom scanning reads the whole answer, and citations are
+ * verified against the tree. A test that calls proseOnly and missingExpectations
+ * separately still passes if runSuite forgets to compose them.
+ */
+export async function scoreCase(answer, item) {
+  const missing = missingExpectations(proseOnly(answer), item.expect);
+  const phantom = unexpectedMentions(answer, item.expect_absent);
+  const { missing: badCitations } = await verifyCitations(answer);
+  return { missing, phantom, badCitations, ok: casePassed({ missing, phantom, badCitations }) };
+}
+
 async function runSuite(name, options) {
   const spec = SUITE_SPECS[name];
   const cases = await loadCases(spec.fileName, options.limit);
@@ -284,10 +297,7 @@ async function runSuite(name, options) {
     const seconds = Math.round((Date.now() - started) / 1000);
     secondsTotal += seconds;
 
-    const missing = missingExpectations(proseOnly(answer), item.expect);
-    const phantom = unexpectedMentions(answer, item.expect_absent);
-    const { missing: badCitations } = await verifyCitations(answer);
-    const ok = casePassed({ missing, phantom, badCitations });
+    const { missing, phantom, badCitations, ok } = await scoreCase(answer, item);
     if (ok) passed++;
 
     console.log(

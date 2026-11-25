@@ -5,7 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { casePassed, parseArgs, proseOnly } from "../bin/eval.mjs";
+import { casePassed, parseArgs, scoreCase } from "../bin/eval.mjs";
 import { missingExpectations } from "../src/eval-match.mjs";
 
 const fixture = (name) =>
@@ -84,6 +84,21 @@ test("the review fixture still plants the bug and the removed-line red herring",
   assert.doesNotMatch(after, /lastPage - 1/);
 });
 
+// `git diff -U3` merges changes that are 6 or fewer lines apart, so the planted
+// changes have to stay separated for "does the review cover each changed
+// function" to be observable at all: one hunk makes the second change invisible
+// as a distinct thing to report.
+test("the two fixture changes land in separate diff hunks", async () => {
+  const lines = (await fixture("pager.after.js")).split("\n");
+  const plantedBug = lines.findIndex((line) => line.includes("PAGE_SIZE) + 1"));
+  const clampFix = lines.findIndex((line) => line.includes("return lastPage;"));
+  assert.ok(plantedBug > -1 && clampFix > -1, "both changes must still be in the file");
+  assert.ok(
+    clampFix - plantedBug > 6,
+    `${clampFix - plantedBug} lines apart — -U3 merges changes within 6 into one hunk`,
+  );
+});
+
 // `expect_absent` alone is satisfied by SILENCE: a review that never mentions
 // the clampPage hunk passes it, so the case could not tell "read the deletion
 // correctly" from "never looked at it". Every review case now also has to
@@ -113,20 +128,36 @@ test("every review case requires the review to address the diff", async () => {
 
 // REGRESSION: a review that only discussed one hunk PASSED the phantom case
 // because the other function's identifier appeared in the diff it pasted back.
-// Expectations score the conclusion, so fenced blocks do not count.
-test("expectations ignore pasted code blocks", () => {
-  const answer = [
+// This drives scoreCase — the function runSuite actually calls — so it proves
+// the composition (prose for expectations, whole answer for phantoms), not just
+// that the two helpers work in isolation.
+test("scoreCase scores prose for expectations and the whole answer for phantoms", async () => {
+  const item = { expect: ["clampPage"], expect_absent: ["lastPage - 1"] };
+
+  const echoOnly = [
     "### Finding: pageCount",
     "It adds an extra page.",
     "```diff",
     " export function clampPage(page, lastPage) {",
+    "```",
+  ].join("\n");
+  const echoed = await scoreCase(echoOnly, item);
+  assert.deepEqual(echoed.missing, ["clampPage"], "an identifier only in the pasted diff is not a finding");
+  assert.equal(echoed.ok, false);
+
+  const correct = [
+    "### Finding: clampPage",
+    "The diff removes the `lastPage - 1` return.",
+    "```diff",
     "-  if (page > lastPage) return lastPage - 1;",
     "+  if (page > lastPage) return lastPage;",
     "```",
   ].join("\n");
-  assert.equal(proseOnly(answer).includes("clampPage"), false);
-  assert.equal(missingExpectations(proseOnly(answer), ["pageCount"]).length, 0);
-  assert.deepEqual(missingExpectations(proseOnly(answer), ["clampPage"]), ["clampPage"]);
+  const scored = await scoreCase(correct, item);
+  assert.deepEqual(
+    [scored.missing, scored.phantom, scored.badCitations, scored.ok],
+    [[], [], [], true],
+  );
 });
 
 // A correct review may phrase the same finding differently; the case scores the

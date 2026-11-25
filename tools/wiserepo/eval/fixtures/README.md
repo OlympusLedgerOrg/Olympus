@@ -16,6 +16,14 @@ The two files share an identical header on purpose: any comment difference would
 show up in the diff and give the model something to review that isn't the
 planted defect.
 
+`pageLabel` and `DEFAULT_PAGE` sit between the two changed functions for the
+same reason, inverted: they are identical in both states, and they push the
+changes more than 6 lines apart so `git diff -U3` emits **two** hunks instead of
+merging them into one. With a single hunk, "does the review cover each changed
+function" is not measurable — the model sees one region and gives it one finding.
+`test/eval.test.mjs` asserts the separation still holds, because an edit that
+closes the gap would silently collapse the diff back to one hunk.
+
 ## What the diff is designed to test
 
 | change | intent |
@@ -32,9 +40,11 @@ The phantom case scores *attribution*, not mention: "the diff removes
 `lastPage - 1`" is the reading this fixture is meant to reward and passes, while
 "`clampPage` returns `lastPage - 1`" fails. It also has a positive `expect`
 list, because `expect_absent` alone is satisfied by a review that never mentions
-`clampPage` at all. See `src/eval-match.mjs`: the
-attribution has to sit in the same sentence near the mention, and a present-tense
-marker such as "still" overrides a removal word elsewhere in that sentence.
+`clampPage` at all — and that list is matched against the answer's prose, so a
+pasted diff does not satisfy it. See `src/eval-match.mjs`: attribution is judged
+per sentence (removed/replaced/restored/previously returned all count), a
+unified-diff `-` line counts as removal, and a present-tense marker such as
+"still" overrides attribution in the same sentence.
 
 `test/eval.test.mjs` asserts both properties still hold: the `+ 1` is present in
 the after file and absent from the before file, and `lastPage - 1` is present

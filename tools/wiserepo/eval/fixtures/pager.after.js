@@ -8,6 +8,13 @@ export function pageCount(totalItems) {
   return Math.ceil(totalItems / PAGE_SIZE) + 1;
 }
 
+// Navigation helpers shared by the pager controls.
+export const DEFAULT_PAGE = 1;
+
+export function pageLabel(page) {
+  return `Page ${page}`;
+}
+
 export function clampPage(page, lastPage) {
   if (page < 1) return 1;
   if (page > lastPage) return lastPage;

@@ -71,10 +71,12 @@ const ATTRIBUTION = [
   "->",
 ];
 
-// A unified-diff body line IS the attribution: `-  code` says the code is gone,
-// `+  code` says it is new. Two spaces (or a tab) after the marker is what
-// separates that from a Markdown bullet, which is a live claim and still scores.
-const DIFF_LINE = /^[-+]\s{2,}|^[-+]\t/;
+// A unified-diff REMOVAL line is the attribution itself: `-  code` says the code
+// is gone. Two spaces (or a tab) after the marker separate it from a Markdown
+// bullet, which is a live claim and still scores. `+` is deliberately absent:
+// `+` is code the diff ADDS, so a `+` line repeating the forbidden value is
+// asserting it as the new behaviour, not describing its removal.
+const DIFF_LINE = /^-\s{2,}|^-\t/;
 
 // Present-tense markers that beat an attribution in the same sentence: "the diff
 // removes a guard, so `clampPage` STILL returns `lastPage - 1`" is a phantom even
