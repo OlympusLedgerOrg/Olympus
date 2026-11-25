@@ -1,0 +1,15 @@
+[
+  {
+    "id": "planted-off-by-one",
+    "diffArgs": ["HEAD~1", "HEAD"],
+    "expect": ["pageCount", "extra page"],
+    "why": "The diff adds `+ 1` to pageCount; `extra page` is the consequence, and it appears nowhere in the diff text. Expecting the consequence rather than the `+ 1` token is deliberate: `+ 1` can be echoed straight out of the added line without understanding it, so it cannot distinguish a review that found the bug from one that quoted the hunk. Update this phrase (and re-record the baseline) if a prompt change alters the wording a correct review uses."
+  },
+  {
+    "id": "no-phantom-removed-line",
+    "diffArgs": ["HEAD~1", "HEAD"],
+    "expect": ["clampPage", "lastPage"],
+    "expect_absent": ["lastPage - 1"],
+    "why": "The diff REPLACES `lastPage - 1` with `lastPage` — a fix. A review that reads deleted lines as current reports `lastPage - 1` as live behaviour; a review that reads it correctly says it was removed or replaced, and passes. The matcher is SENTENCE-scoped: a sentence framing the value as removed, replaced, restored or previously returned passes, a sentence with no such framing fails, and `still`/`keeps` beats a removal word in the same sentence. `expect` exists because `expect_absent` alone is satisfied by SILENCE: a review that only discussed the `pageCount` bug passed this case without ever looking at the second hunk. `clampPage` and `lastPage` are identifiers, not prose, so wording cannot false-fail a review that addresses the change; direction is scored only by `expect_absent`."
+  }
+]

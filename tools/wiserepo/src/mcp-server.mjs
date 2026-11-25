@@ -348,6 +348,14 @@ export async function runTool(name, args = {}) {
     const prompt =
       `Review this diff against the project's engineering standards below. ` +
       `Flag correctness bugs, invariant violations, and missed test coverage. Be concise, most-severe first.\n\n` +
+      // A small model reads a diff as if every line in it were the file: a
+      // smoke review reported the fixture's removed `lastPage - 1` as live
+      // behaviour because nothing said a `-` line is gone. Two sentences, not a
+      // tutorial — the prompt is already ~10.5k tokens of AGENTS.md.
+      `Diff semantics: \`-\` lines are code the diff REMOVES (no longer in the file), \`+\` lines ` +
+      `are code it ADDS, and a \`-\`/\`+\` pair at one position is a single change to read as a ` +
+      `fix. Judge the code as it stands after the diff, and describe removed code as removed, ` +
+      `never as current behaviour.\n\n` +
       (standards ? `## AGENTS.md (standards)\n\`\`\`\n${standards}\n\`\`\`\n\n` : "") +
       `## Diff\n\`\`\`diff\n${diff || "(empty diff)"}\n\`\`\``;
     return withVerifiedCitations(

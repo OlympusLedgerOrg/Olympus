@@ -1,0 +1,9 @@
+[
+  {
+    "id": "fixture-summary",
+    "files": ["src/pager.js"],
+    "style": "one paragraph",
+    "expect": ["pageCount", "clampPage"],
+    "why": "The fixture file exports both functions, and the summary is scored on whether it names the surface it summarized rather than on wording."
+  }
+]

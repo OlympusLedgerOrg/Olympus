@@ -82,6 +82,51 @@ test("verifyCitations refuses a traversal citation even when the file exists", a
 });
 
 const PKG = "tools/wiserepo/package.json";
+
+// REGRESSION: every review of a real diff quotes git's `--- a/<path>` /
+// `+++ b/<path>` headers, and the gate counted both as invented paths.
+
+test("verifyCitations resolves diff-header paths against the file they name", async () => {
+  const { checked, missing } = await verifyCitations(`--- a/${PKG}\n+++ b/${PKG}:3`);
+  assert.equal(checked, 2);
+  assert.deepEqual(missing, []);
+});
+
+// REGRESSION: a review that recommends a missing test file was scored as if it
+// had invented evidence. A proposal is expected NOT to exist, so it is excused —
+// but only when the sentence frames it that way.
+test("verifyCitations excuses a file the review proposes to add", async () => {
+  for (const answer of [
+    "No tests cover this; add a regression test in `tools/wiserepo/src/pager.test.js`.",
+    "`tools/wiserepo/src/pager.test.js` does not exist yet and should assert `extra page`.",
+  ]) {
+    const { missing } = await verifyCitations(answer);
+    assert.deepEqual(missing, [], answer);
+  }
+});
+
+// Same-sentence scoping is load-bearing: if any "missing" anywhere in the
+// answer excused any missing path, the gate would be off for every review that
+// also mentions test coverage.
+test("a proposal marker in another sentence does not excuse a fabricated citation", async () => {
+  const { missing } = await verifyCitations(
+    "The off-by-one lives in `tools/wiserepo/src/ghost.js`. Test coverage is missing.",
+  );
+  assert.deepEqual(
+    missing.map((c) => c.path),
+    ["tools/wiserepo/src/ghost.js"],
+  );
+});
+
+test("a confidently cited path with no proposal language is still reported", async () => {
+  const { missing } = await verifyCitations(
+    "The planted bug is at tools/wiserepo/src/ghost.js:42.",
+  );
+  assert.deepEqual(
+    missing.map((c) => c.path),
+    ["tools/wiserepo/src/ghost.js"],
+  );
+});
 // Counted independently of citations.mjs, so an off-by-one there cannot make
 // this fixture agree with the bug.
 const PKG_LAST_LINE = readFileSync(new URL("../package.json", import.meta.url), "utf8")

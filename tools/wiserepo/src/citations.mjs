@@ -56,6 +56,28 @@ export function extractCitations(text) {
   return found;
 }
 
+// git writes every unified diff header as `a/<path>` and `b/<path>`, so a review
+// that quotes a header is naming the file on disk, not a directory called `a`.
+// Tried only after the literal path fails, so a repo with a real `a/` still wins.
+const DIFF_HEADER_PREFIX = /^[ab]\//;
+
+// A review that says "add a regression test in `src/pager.test.js`" is proposing
+// a file, not citing evidence of one: the path is meant NOT to exist, so scoring
+// it as invented punishes the recommendation. Decided per SENTENCE — a sentence
+// that asserts a file exists carries no proposal language — rather than by
+// distance to a marker, which needed two windows and still broke at a clause.
+const PROPOSAL_RE =
+  /\b(add|adds|adding|needs?|missing|lacks?|untested|creates?|creating|propos\w*|suggest\w*|consider\w*|should|would|could)\b|no tests?\b|no coverage\b|does\s?not\s?exist|doesn'?t\s?exist|not\s?present/i;
+
+const sentencesOf = (text) => String(text ?? "").split(/(?<=[.!?])\s+|\n+/);
+
+function isProposedCitation(text, citation) {
+  const needle = citation.path.toLowerCase();
+  return sentencesOf(text).some(
+    (sentence) => sentence.toLowerCase().includes(needle) && PROPOSAL_RE.test(sentence),
+  );
+}
+
 async function existsInRepo(relPath) {
   const root = repoRoot();
   const resolved = path.resolve(root, relPath);
@@ -78,7 +100,19 @@ export async function verifyCitations(text, { exists = existsInRepo } = {}) {
   const citations = extractCitations(text);
   const missing = [];
   for (const citation of citations) {
-    if (!(await exists(citation.path))) {
+    let target = null;
+    if (await exists(citation.path)) target = citation.path;
+    else {
+      const stripped = DIFF_HEADER_PREFIX.test(citation.path)
+        ? citation.path.replace(DIFF_HEADER_PREFIX, "")
+        : null;
+      if (stripped && (await exists(stripped))) target = stripped;
+    }
+    if (target === null) {
+      // Two honest ways a path can legitimately not exist: it was quoted from a
+      // diff header (handled above), or the review is proposing it. Everything
+      // else is a fabricated citation and is reported.
+      if (isProposedCitation(text, citation)) continue;
       missing.push(citation);
       continue;
     }
@@ -90,7 +124,7 @@ export async function verifyCitations(text, { exists = existsInRepo } = {}) {
       // lexically inside the tree while pointing at a file outside it, and
       // following it here would pull bytes we never meant to touch just to
       // count their lines. It also rejects a path that escapes the root.
-      const resolved = await resolveInRepoFollowingSymlinks(citation.path);
+      const resolved = await resolveInRepoFollowingSymlinks(target);
       if (!(await hasLine(resolved, citation.line))) missing.push(citation);
     } catch {
       // Unreadable (dangling symlink, permissions, a directory, invalid UTF-8

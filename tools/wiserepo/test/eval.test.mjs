@@ -1,0 +1,117 @@
+// SPDX-FileCopyrightText: 2026 Olympus Contributors
+// SPDX-License-Identifier: Apache-2.0
+
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
+import { casePassed, parseArgs } from "../bin/eval.mjs";
+
+const fixture = (name) =>
+  readFile(fileURLToPath(new URL(`../eval/fixtures/${name}`, import.meta.url)), "utf8");
+
+const goldenReview = async () =>
+  JSON.parse(
+    await readFile(fileURLToPath(new URL("../eval/golden-review.json", import.meta.url)), "utf8"),
+  );
+
+test("parseArgs defaults to every suite with no limit", () => {
+  assert.deepEqual(parseArgs([]), {
+    limit: Infinity,
+    model: undefined,
+    showAnswers: false,
+    task: "all",
+    writeBaseline: false,
+  });
+});
+
+// The score cannot say why a case moved, so a run has to be able to show the
+// answers it scored without changing what is scored.
+test("parseArgs accepts --show-answers", () => {
+  const options = parseArgs(["--show-answers"]);
+  assert.equal(options.showAnswers, true);
+  assert.equal(options.task, "all");
+});
+
+test("parseArgs accepts --task=<suite> and --task <suite>", () => {
+  assert.equal(parseArgs(["--task=review"]).task, "review");
+  assert.equal(parseArgs(["--task", "summarize"]).task, "summarize");
+  assert.equal(parseArgs(["--task", "all"]).task, "all");
+});
+
+test("parseArgs rejects an unknown or missing task", () => {
+  assert.throws(() => parseArgs(["--task=qa2"]), /--task must be one of/);
+  assert.throws(() => parseArgs(["--task"]), /--task needs a value/);
+});
+
+test("parseArgs rejects a non-positive limit", () => {
+  assert.throws(() => parseArgs(["--limit", "0"]), /positive integer/);
+  assert.throws(() => parseArgs(["--limit=abc"]), /positive integer/);
+  assert.equal(parseArgs(["--limit=2"]).limit, 2);
+});
+
+test("parseArgs accepts --model and --write-baseline", () => {
+  const options = parseArgs(["--model", "qwen2.5-coder:3b", "--write-baseline"]);
+  assert.equal(options.model, "qwen2.5-coder:3b");
+  assert.equal(options.writeBaseline, true);
+});
+
+// The validation moved to where the value is read, so both spellings that carry
+// no tag are rejected — including `--model=`, which the old trailing
+// `argv.includes("--model")` re-check let through as an empty model name.
+test("parseArgs rejects --model with no value, in both spellings", () => {
+  assert.throws(() => parseArgs(["--model"]), /--model needs a value/);
+  assert.throws(() => parseArgs(["--model="]), /--model needs a value/);
+  assert.throws(() => parseArgs(["--write-baseline", "--model"]), /--model needs a value/);
+});
+
+// The review score is only meaningful while the fixture still contains the bug
+// it claims to plant, and the red herring it claims to remove. A future edit
+// that "fixes" the fixture would otherwise silently turn the eval into a test
+// that passes on an empty diff.
+test("the review fixture still plants the bug and the removed-line red herring", async () => {
+  const before = await fixture("pager.before.js");
+  const after = await fixture("pager.after.js");
+
+  // The planted bug: exactly one extra page, added by the diff.
+  assert.match(after, /Math\.ceil\(totalItems \/ PAGE_SIZE\) \+ 1/);
+  assert.doesNotMatch(before, /PAGE_SIZE\) \+ 1/);
+
+  // The red herring: removed by the diff, so a deletion-blind review reports
+  // it as still present instead of finding the real bug.
+  assert.match(before, /lastPage - 1/);
+  assert.doesNotMatch(after, /lastPage - 1/);
+});
+
+// `expect_absent` alone is satisfied by SILENCE: a review that never mentions
+// the clampPage hunk passes it, so the case could not tell "read the deletion
+// correctly" from "never looked at it". Every review case now also has to
+// mention what the diff changed, and the phantom case specifically has to name
+// the function whose removed line it is scored on.
+test("every review case requires the review to address the diff", async () => {
+  const cases = await goldenReview();
+  assert.ok(cases.length > 0);
+  for (const item of cases) {
+    assert.ok(
+      Array.isArray(item.expect) && item.expect.length > 0,
+      `${item.id} has no positive expectation`,
+    );
+  }
+  const phantom = cases.find((item) => item.id === "no-phantom-removed-line");
+  assert.ok(phantom, "the phantom case is missing");
+  assert.ok(phantom.expect.includes("clampPage"));
+});
+
+// Citations were printed beside the verdict and never scored, so a review that
+// named a file it never read could still PASS. An invented path now fails the
+// case on its own, with the other conditions still load-bearing.
+test("a case fails when any citation is unverified", () => {
+  const clean = { missing: [], phantom: [], badCitations: [] };
+  assert.equal(casePassed(clean), true);
+  assert.equal(
+    casePassed({ ...clean, badCitations: [{ path: "src/ghost.js", line: 12 }] }),
+    false,
+  );
+  assert.equal(casePassed({ ...clean, missing: ["extra page"] }), false);
+  assert.equal(casePassed({ ...clean, phantom: ["lastPage - 1"] }), false);
+});

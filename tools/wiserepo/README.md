@@ -74,15 +74,36 @@ minutes of wall clock. That range is from polling a background run, not a timer 
 `bin/eval.mjs` prints per-question seconds and is the cheap way to get an exact
 number.
 
-A smaller model will be faster, but **no speedup ratio has been measured here** —
-the 4B below was never benchmarked on this box, so treat its advantage as
-qualitative (less compute per token) rather than as a figure. Pull it and drop
-to it if speed matters more than review quality:
+### `qwen3.5:4b` is not recommended here (settled — read before re-proposing)
 
-```powershell
-ollama pull qwen3.5:4b
-$env:WISEREPO_OLLAMA_MODEL = 'qwen3.5:4b'
-```
+The 3B tag above is the fallback when memory or latency is the binding
+constraint. `qwen3.5:4b` is **not recommended for this repo**, tempting as it
+looks on paper (newer tag, smaller download). Three reasons, heaviest first:
+
+1. **General-purpose family vs the code-specialised default.**
+   `qwen2.5-coder:7b-instruct` was trained for reading and writing code (5.5T
+   code tokens over 92 languages), which is exactly this workload: read a
+   30–60 KB Rust file, or judge a diff against `AGENTS.md`. A general model at
+   4B fights both the task match and the parameter count at once.
+2. **Half the size.** 4B against 7.6B is a quality cut in the one dimension this
+   tool sells. `repo_qa` answers feed a reviewer and `review_diff` output is
+   judged against the repo's standards, so a weaker model yields more
+   confident-but-wrong prose. The citation check catches invented *paths*; it
+   cannot catch invented *reasoning*.
+3. **Thinking tokens cost minutes.** `qwen3.5` is thinking-capable and Ollama
+   enables reasoning for such models unless told not to. Wiserepo sends
+   `think: false` unless `WISEREPO_THINK=1`, but that flag is all that stands
+   between a short answer and thousands of reasoning tokens — minutes per
+   question on this machine, spent on a model that is *still* smaller than the
+   default.
+
+No speedup ratio for the 4B was ever measured on this box, so the "it will be
+faster" half of the argument has never had evidence behind it. When latency is
+the real complaint, the measured levers are `OLLAMA_IGPU_ENABLE=1` (the A/B
+below — roughly 7× prefill) and the 3B tag; both stay inside the
+code-specialised family. If someone does benchmark `qwen3.5:4b` against the
+default with `bin/eval.mjs`, record the numbers here and revisit — until then,
+this is the decision, and a re-pull is not progress.
 
 ### Hardware: iGPU yes, NPU no
 
@@ -220,22 +241,75 @@ working tree is named in an appended note (`N of M cited path(s) do not exist in
 the repo — treat as unverified: …`). The answer is still returned — a wrong path
 is not grounds to discard a useful review — but it cannot pass as evidence.
 
+Two things are *not* fabricated citations. Git's diff headers carry `a/` and `b/`
+prefixes (`--- a/src/pager.js`), so a path that does not resolve literally is
+tried again with that prefix stripped — as a fallback, never a rewrite, so a
+repo that really has an `a/` directory still resolves against it. And a file the
+answer is **proposing** (`add a regression test in src/pager.test.js`, "…does not
+exist yet") is supposed to be absent, so it is excused. Both rules are
+sentence-scoped: a confident claim about a path with neither a header prefix nor
+proposal language in its own sentence is still reported.
+
 ### Eval harness
 
 Every model decision above was originally argued rather than measured. `bin/eval.mjs`
-scores `repo_qa` against `eval/golden-questions.json`: each question names the
-files to ground on and the strings a correct answer must contain.
+scores all three model-backed tools against golden cases in `eval/`:
+
+| suite | cases | a pass means |
+| --- | --- | --- |
+| `qa` | `eval/golden-questions.json` | the answer contains every `expect` string; each case also names the files to ground on |
+| `review` | `eval/golden-review.json` | two cases: the review names the **planted bug** in `eval/fixtures/pager.after.js` by its consequence (`extra page`, not the `+ 1` token the hunk literally shows), and it does **not** state the removed line (`lastPage - 1`) as current behaviour — naming it as removed passes |
+| `summarize` | `eval/golden-summarize.json` | the summary names the surface it summarized |
+
+Every case in every suite additionally fails if the answer cites a `path` or
+`path:line` that does not resolve in the tree being scored. Citation checking is
+not a separate suite: an invented path is a false claim, and a benchmark that
+printed it beside a `PASS` would report the tool's worst failure mode as a
+correct answer. The fixture repo contains only `src/pager.js` and `AGENTS.md`, so
+a review that cites a plausible-looking file it never read fails there. The two
+honest exceptions above apply here too — a quoted `a/`/`b/` header and a
+recommended test file — so the case is decided by what the review claims about
+the code, not by how it drew its paths.
+
+`review_diff` and `summarize` take `git diff` arguments rather than diff text, so
+those two suites share one throwaway git repo built from `eval/fixtures/` per run
+(`qa` stays on this repo, since it grounds on the real tree):
+`pager.before.js` is committed as `src/pager.js`, `pager.after.js` is committed
+as a second commit, `WISEREPO_ROOT` is pointed at that repo, and the case diffs
+`HEAD~1..HEAD`. Both states are committed because the two fixture files are the
+same byte length — an uncommitted overwrite can fall inside git's racy-clean
+window, producing a clean tree and an empty diff that scores like a model miss.
+The eval also refuses to run on an empty fixture diff. The model therefore sees
+a real two-revision `git diff` through the real tool path, so the eval cannot
+drift from the prompt it is scoring. `eval/fixtures/README.md` explains why the diff
+carries a *fix* alongside the bug: a review that reads deleted lines as current
+reports the fix as a live defect and misses the real one — the exact failure a
+smoke review here once produced.
 
 ```bash
-node bin/eval.mjs                     # every question
-node bin/eval.mjs --limit 2           # smoke test
-node bin/eval.mjs --model qwen3.5:4b  # compare tags on the same questions
+node bin/eval.mjs                            # all three suites
+node bin/eval.mjs --task qa                  # the cheap suite (real repo, no fixture)
+node bin/eval.mjs --limit 2                  # first 2 cases per suite
+node bin/eval.mjs --model qwen2.5-coder:3b   # compare tags on the same cases
+node bin/eval.mjs --write-baseline           # record eval/baseline.json
+node bin/eval.mjs --show-answers             # print each raw answer under its verdict
 ```
 
-It prints PASS/FAIL per question, the number of unverified citations, and a
-score. It exits `0` whenever the run completed (it is a benchmark, not a gate)
-and `2` when the backend was unavailable. Runs are slow on CPU — one question is
-one full `repo_qa` call — so `--limit` exists for smoke tests.
+It prints PASS/FAIL per case, the number of unverified citations (any nonzero
+count is a failure), and with `--show-answers` the raw answer beneath each
+verdict — the score says a case moved, never why. It also prints a per-suite
+and overall score, and — when `eval/baseline.json` exists — a per-suite
+comparison (`unchanged` / `improved` / `REGRESSION`). It exits `0` whenever the
+run completed (it is a benchmark, not a gate) and `2` when the backend was
+unavailable. Runs are slow: one case is one full model call, so `--limit`
+exists for smoke tests and `--task qa` for a model-only check that needs no
+fixture repo.
+
+The baseline is what makes prompt changes measurable: record one with
+`--write-baseline` against the prompt you are about to change, then re-run
+without the flag and read the comparison. Do not edit `eval/baseline.json` by
+hand — it stores `recorded_at`, the model tag, and per-suite `passed`/`total`/
+`seconds` so a later run is comparable.
 - `WISEREPO_TIMEOUT_MS` — default `300000` (5 min). Much larger than a
   cloud-backed tool would need: local generation on a 30B model is far
   slower per token, and `review_diff` / AGENTS.md regeneration can emit
@@ -254,7 +328,67 @@ a client starts, so restart the client once after pulling it.
 
 ## Registering it and calling it
 
-`.mcp.json` registers the server (`node tools/wiserepo/src/mcp-server.mjs`).
+`.mcp.json` registers the server through `bin/mcp-launcher.mjs`, not by pointing
+the client straight at `src/mcp-server.mjs`. Two failure modes that avoids:
+
+- **The client's working directory.** An MCP client spawns `command` in its own
+  cwd — for a GUI/IDE client often the editor or its install directory, not this
+  repo. Reads are already anchored on the module location, and `git diff` /
+  `git grep` pass `cwd: repoRoot()`, but a process sitting elsewhere is one
+  relative-path mistake away from answering confidently about the wrong tree.
+  The launcher derives the repo root from its own path (an explicit
+  `WISEREPO_ROOT` still wins, resolved against the caller's cwd) and starts the
+  server there.
+- **Which node.** `"command": "${WISEREPO_NODE:-node}"` — Claude Code and VS
+  Code both expand that form. If the client starts without node on its PATH
+  (the usual reason a terminal works and the IDE does not), point
+  `WISEREPO_NODE` at the absolute interpreter path and restart the client:
+  `setx WISEREPO_NODE "C:\Program Files\nodejs\node.exe"`. The launcher
+  re-executes the server with `process.execPath`, so the child uses exactly the
+  interpreter the client resolved.
+
+That entry relies on two host behaviours: expanding `${WISEREPO_NODE:-node}`,
+and resolving `args` against the project root. Claude Code and VS Code do both.
+A host that does neither — it passes `command` through literally and resolves
+`args` against its own cwd — needs absolute paths, in **that host's own config**,
+not in the committed file (a machine-specific path here breaks every other
+clone):
+
+```bash
+node -e "console.log(process.execPath)"   # -> the absolute interpreter path
+```
+
+```json
+{ "mcpServers": { "wiserepo": {
+  "type": "stdio",
+  "command": "C:\\Program Files\\nodejs\\node.exe",
+  "args": ["C:\\path\\to\\Olympus\\tools\\wiserepo\\bin\\mcp-launcher.mjs"]
+} } }
+```
+
+### Verifying a host actually registered it
+
+Parsing JSON is not registration. Check the host, in this order:
+
+1. **The server is listed and connected.** Claude Code: `claude mcp list`, or
+   `/mcp` in-session; VS Code: `MCP: List Servers`. Expect `wiserepo` with its
+   six tools, not a red "failed".
+2. **It reads *this* tree.** Call `olympus_context` and check `data.version` is
+   this repo's version (`v0.10.0` at time of writing). That is the
+   cwd-independence probe: a server launched from a foreign directory still has
+   to report this repo's version. A wrong or empty answer means `args` resolved
+   somewhere else and the launch silently failed.
+3. **Only then** try `repo_qa`. It needs the Ollama daemon; `olympus_context`,
+   `circuit_status` and `check_invariants` do not, so they separate "registered"
+   from "model unreachable".
+
+If step 1 reports a failed server with only `MCP error -32000: Connection
+closed`, suspect the interpreter before anything else on this platform: with
+`WISEREPO_NODE` unset and no `node` on the host's PATH, Windows writes
+`'node' is not recognized as an internal or external command` to the child's
+stderr and the client shows nothing but the closed connection. Put node on the
+host's PATH or set `WISEREPO_NODE` (above); both are host-side fixes, which is
+the point — the committed file cannot know where a given machine keeps node.
 
 Because MCP registration only takes effect on a client restart, the same six
 tools are also callable directly from the shell. The CLI calls the identical
@@ -280,7 +414,11 @@ last.
 ## MCP tools
 
 - `repo_qa` — ask a question grounded in repo file contents / a git-grep search
-- `review_diff` — review a diff against `AGENTS.md`'s engineering standards
+- `review_diff` — review a diff against `AGENTS.md`'s engineering standards. The
+  prompt states the diff convention explicitly (`-` is removed code, `+` is added,
+  a `-`/`+` pair at one position is a fix), because a small model otherwise
+  reports a deleted line as current behaviour — the failure the `review` eval's
+  second case scores.
 - `summarize` — summarize a diff or set of files (changelog entry, PR description, etc.)
 
 Every file/diff/grep result is truncated per-piece, and the combined context for
@@ -334,7 +472,7 @@ cd tools/wiserepo
 npm test
 ```
 
-93 tests covering the places a bug is silent rather than loud:
+114 tests covering the places a bug is silent rather than loud:
 
 - `resolveInRepo` path-traversal guard, including the sibling-prefix case
   (`Olympus-evil` must not count as inside `Olympus`) — and
