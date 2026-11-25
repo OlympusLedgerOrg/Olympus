@@ -54,11 +54,7 @@ import { missingExpectations, unexpectedMentions } from "../src/eval-match.mjs";
 import { gitDiff } from "../src/repo.mjs";
 import { runTool } from "../src/mcp-server.mjs";
 import { verifyCitations } from "../src/citations.mjs";
-import {
-  ModelUnavailableError,
-  DEFAULT_OLLAMA_MODEL,
-  modelProvenance,
-} from "../src/backend.mjs";
+import { ModelUnavailableError, DEFAULT_OLLAMA_MODEL, modelProvenance } from "../src/backend.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -204,10 +200,7 @@ async function withFixtureRepo(fn) {
   // no diff). --cacheinfo writes the exact blob into the index, so a commit
   // cannot be a no-op and the diff cannot depend on timestamps.
   const commitState = async (fileName, message) => {
-    await copyFile(
-      path.join(EVAL_DIR, "fixtures", fileName),
-      path.join(dir, "src", "pager.js"),
-    );
+    await copyFile(path.join(EVAL_DIR, "fixtures", fileName), path.join(dir, "src", "pager.js"));
     const { stdout: blob } = await execFileAsync("git", [
       "-C",
       dir,
@@ -273,8 +266,7 @@ const SUITE_SPECS = {
   review: {
     fileName: "golden-review.json",
     needsFixture: true,
-    call: (item, onPrompt) =>
-      runTool("review_diff", { diffArgs: item.diffArgs }, { onPrompt }),
+    call: (item, onPrompt) => runTool("review_diff", { diffArgs: item.diffArgs }, { onPrompt }),
   },
   summarize: {
     fileName: "golden-summarize.json",
@@ -367,7 +359,9 @@ export function promptSha256({ system = "", prompt = "" } = {}) {
 
 /** One digest for a whole run, so two baselines can be compared at a glance. */
 function runPromptSha256(cases) {
-  return sha256(cases.map((entry) => `${entry.suite}/${entry.id}:${entry.prompt_sha256}`).join("\n"));
+  return sha256(
+    cases.map((entry) => `${entry.suite}/${entry.id}:${entry.prompt_sha256}`).join("\n"),
+  );
 }
 
 /**
@@ -424,9 +418,7 @@ export async function rescoreRecord(entries, goldenById) {
   for (const entry of entries) {
     const item = goldenById.get(`${entry.suite}/${entry.id}`);
     if (!item) {
-      throw new Error(
-        `run record names ${entry.suite}/${entry.id}, which is not a golden case`,
-      );
+      throw new Error(`run record names ${entry.suite}/${entry.id}, which is not a golden case`);
     }
     const { missing, phantom, badCitations, ok } = await scoreCase(entry.answer, item);
     scored.push({ ...entry, verdict: { missing, phantom, badCitations }, ok });
@@ -550,10 +542,7 @@ export function provenanceDiffs(before, after) {
   if ((was.prompt_sha256 ?? null) !== (now.prompt_sha256 ?? null)) {
     diffs.push(`prompt ${shortHash(was.prompt_sha256)} -> ${shortHash(now.prompt_sha256)}`);
   }
-  const models = new Set([
-    ...Object.keys(was.models ?? {}),
-    ...Object.keys(now.models ?? {}),
-  ]);
+  const models = new Set([...Object.keys(was.models ?? {}), ...Object.keys(now.models ?? {})]);
   for (const model of models) {
     const a = was.models?.[model] ?? {};
     const b = now.models?.[model] ?? {};
@@ -595,7 +584,10 @@ async function rescoreRun(file) {
   }
   const goldenEntries = [];
   for (const name of SUITE_NAMES) {
-    goldenEntries.push({ suite: name, cases: await loadCases(SUITE_SPECS[name].fileName, Infinity) });
+    goldenEntries.push({
+      suite: name,
+      cases: await loadCases(SUITE_SPECS[name].fileName, Infinity),
+    });
   }
   const goldenById = indexGoldenCases(goldenEntries);
   const recordedOk = new Map(
@@ -640,7 +632,9 @@ async function rescoreRun(file) {
   for (const [name, result] of Object.entries(suites)) {
     console.log(`${name}: ${result.passed}/${result.total} (${result.seconds}s)`);
   }
-  console.log(`overall: ${passed}/${scored.length} (${Math.round((passed / scored.length) * 100)}%)`);
+  console.log(
+    `overall: ${passed}/${scored.length} (${Math.round((passed / scored.length) * 100)}%)`,
+  );
 
   const baseline = await readBaseline();
   if (baseline) {
@@ -738,9 +732,7 @@ async function main() {
 
   // One record for the whole run: scores are DERIVED from the per-case records,
   // so the summary can never disagree with the answers stored beside it.
-  const caseRecords = SUITE_NAMES.filter((name) => results[name]).flatMap(
-    (name) => results[name],
-  );
+  const caseRecords = SUITE_NAMES.filter((name) => results[name]).flatMap((name) => results[name]);
   const record = buildRunRecord({
     recordedAt: new Date().toISOString(),
     model: options.model ?? DEFAULT_OLLAMA_MODEL,
@@ -757,7 +749,9 @@ async function main() {
   for (const [name, result] of Object.entries(record.suites)) {
     console.log(`${name}: ${result.passed}/${result.total} (${result.seconds}s)`);
   }
-  console.log(`overall: ${passed}/${caseRecords.length} (${Math.round((passed / caseRecords.length) * 100)}%)`);
+  console.log(
+    `overall: ${passed}/${caseRecords.length} (${Math.round((passed / caseRecords.length) * 100)}%)`,
+  );
 
   const baseline = await readBaseline();
   if (baseline) {

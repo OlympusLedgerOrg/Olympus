@@ -253,7 +253,10 @@ fn row_to_proof_response(row: &IngestRow, _for_verify: bool) -> RecordProofRespo
             serde_json::json!({ "hash": hash, "position": if direction.as_u64() == Some(0) { "left" } else { "right" } })
         }).collect()))
     }).unwrap_or(legacy_proof);
-    let signature = row.snapshot_sig.as_deref().and_then(|s| serde_json::from_str(s).ok());
+    let signature = row
+        .snapshot_sig
+        .as_deref()
+        .and_then(|s| serde_json::from_str(s).ok());
 
     // Prefer the canonical signed Poseidon snapshot root. Current commits
     // populate `snapshot_root` only; fall back to the legacy `merkle_root` /

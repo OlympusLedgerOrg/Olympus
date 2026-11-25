@@ -354,9 +354,7 @@ test("modelProvenance takes the digest from /api/tags when /api/show omits it", 
           ok: true,
           status: 200,
           json: async () => ({
-            models: [
-              { name: "digest-test:1b", model: "digest-test:1b", digest: "sha256:abc123" },
-            ],
+            models: [{ name: "digest-test:1b", model: "digest-test:1b", digest: "sha256:abc123" }],
           }),
         };
       }

@@ -2,7 +2,10 @@
   {
     "id": "planted-off-by-one",
     "diffArgs": ["HEAD~2", "HEAD~1"],
-    "expect": ["pageCount", ["extra page", "one page too many", "one too many", "too many pages", "overcounts"]],
+    "expect": [
+      "pageCount",
+      ["extra page", "one page too many", "one too many", "too many pages", "overcounts"]
+    ],
     "why": "The diff adds `+ 1` to pageCount; the consequence is that it returns one page more than the items need, and no phrasing of that appears in the diff text. Expecting the consequence rather than the `+ 1` token is deliberate: `+ 1` can be echoed straight out of the added line without understanding it, so it cannot distinguish a review that found the bug from one that quoted the hunk. The array accepts equivalent phrasings of the same finding (`extra page`, `one page too many`, …) so the case scores whether the review found it, not whether it picked one wording. `off-by-one` is deliberately NOT accepted: paired with the required `pageCount` it can be satisfied by a review that only describes the `clampPage` hunk."
   },
   {

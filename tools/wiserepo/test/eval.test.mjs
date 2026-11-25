@@ -150,7 +150,11 @@ test("every review case requires the review to address the diff", async () => {
   // replay of the first answer (at temperature 0, verbatim) instead of an
   // independent sample.
   const ranges = cases.map((item) => item.diffArgs.join(".."));
-  assert.equal(new Set(ranges).size, ranges.length, `review cases share a diff: ${ranges.join(", ")}`);
+  assert.equal(
+    new Set(ranges).size,
+    ranges.length,
+    `review cases share a diff: ${ranges.join(", ")}`,
+  );
 
   const clean = cases.find((item) => item.id === "clean-fix-not-flagged");
   assert.ok(clean, "the clean-fix case is missing");
@@ -177,7 +181,11 @@ test("scoreCase scores prose for expectations and the whole answer for phantoms"
     "```",
   ].join("\n");
   const echoed = await scoreCase(echoOnly, item);
-  assert.deepEqual(echoed.missing, ["clampPage"], "an identifier only in the pasted diff is not a finding");
+  assert.deepEqual(
+    echoed.missing,
+    ["clampPage"],
+    "an identifier only in the pasted diff is not a finding",
+  );
   assert.equal(echoed.ok, false);
 
   const correct = [
@@ -211,10 +219,7 @@ test("an expectation group accepts equivalent phrasings", () => {
 test("a case fails when any citation is unverified", () => {
   const clean = { missing: [], phantom: [], badCitations: [] };
   assert.equal(casePassed(clean), true);
-  assert.equal(
-    casePassed({ ...clean, badCitations: [{ path: "src/ghost.js", line: 12 }] }),
-    false,
-  );
+  assert.equal(casePassed({ ...clean, badCitations: [{ path: "src/ghost.js", line: 12 }] }), false);
   assert.equal(casePassed({ ...clean, missing: ["extra page"] }), false);
   assert.equal(casePassed({ ...clean, phantom: ["lastPage - 1"] }), false);
 });
@@ -308,7 +313,10 @@ test("a recorded run re-scores offline, and a changed verdict is visible", async
   ];
 
   const scored = await rescoreRecord(entries, goldenById);
-  assert.deepEqual(scored.map((entry) => entry.ok), [true, false]);
+  assert.deepEqual(
+    scored.map((entry) => entry.ok),
+    [true, false],
+  );
   // Re-scoring explains the recorded run; it does not replace it.
   assert.equal(scored[0].answer, entries[0].answer);
   assert.equal(scored[0].prompt_sha256, entries[0].prompt_sha256);
@@ -317,9 +325,18 @@ test("a recorded run re-scores offline, and a changed verdict is visible", async
 // A re-score that only re-ran the stored verdict would pass a review citing a
 // file it invented. Citation checking is still part of the score.
 test("re-scoring verifies citations against the tree", async () => {
-  const goldenById = indexGoldenCases([{ suite: "qa", cases: [{ id: "ghost", expect: ["clampPage"] }] }]);
+  const goldenById = indexGoldenCases([
+    { suite: "qa", cases: [{ id: "ghost", expect: ["clampPage"] }] },
+  ]);
   const [scored] = await rescoreRecord(
-    [{ suite: "qa", id: "ghost", seconds: 1, answer: "clampPage is defined in src/ghost-rescore.js:9." }],
+    [
+      {
+        suite: "qa",
+        id: "ghost",
+        seconds: 1,
+        answer: "clampPage is defined in src/ghost-rescore.js:9.",
+      },
+    ],
     goldenById,
   );
   assert.equal(scored.ok, false);

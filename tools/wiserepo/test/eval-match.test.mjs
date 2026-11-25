@@ -59,9 +59,7 @@ test("unexpectedMentions accepts removed text called removed", () => {
     [],
   );
   assert.deepEqual(
-    unexpectedMentions("clampPage now returns lastPage instead of lastPage - 1.", [
-      "lastPage - 1",
-    ]),
+    unexpectedMentions("clampPage now returns lastPage instead of lastPage - 1.", ["lastPage - 1"]),
     [],
   );
   assert.deepEqual(

@@ -4,20 +4,48 @@
 
 const task = process.argv.slice(2).join(" ").trim();
 if (!task) {
-  console.error("Usage: node tools/model-router/route.mjs \"task description\"");
+  console.error('Usage: node tools/model-router/route.mjs "task description"');
   process.exit(1);
 }
 
 const lower = task.toLowerCase();
-const sensitive = /crypto|cryptograph|hash|signature|key material|secret|auth(?:entication|orization)?|permission|scope|proof|zk|snark|smt|migration|security|vulnerab|ledger|redaction/.test(lower);
-const implementation = /implement|change|fix|refactor|write|patch|debug|test|build|modify/.test(lower);
+const sensitive =
+  /crypto|cryptograph|hash|signature|key material|secret|auth(?:entication|orization)?|permission|scope|proof|zk|snark|smt|migration|security|vulnerab|ledger|redaction/.test(
+    lower,
+  );
+const implementation = /implement|change|fix|refactor|write|patch|debug|test|build|modify/.test(
+  lower,
+);
 const review = /review|audit|threat model|second opinion|independent|check this diff/.test(lower);
 
 function heuristic() {
-  if (sensitive) return { route: "codex", reasoning: "high", review: "claude", basis: "security-sensitive repository rule" };
-  if (review) return { route: "claude", reasoning: "high", review: "codex", basis: "independent review request" };
-  if (implementation) return { route: "codex", reasoning: "medium", review: "optional", basis: "implementation task" };
-  return { route: "ollama", reasoning: "low", review: "none", basis: "local discovery or explanation" };
+  if (sensitive)
+    return {
+      route: "codex",
+      reasoning: "high",
+      review: "claude",
+      basis: "security-sensitive repository rule",
+    };
+  if (review)
+    return {
+      route: "claude",
+      reasoning: "high",
+      review: "codex",
+      basis: "independent review request",
+    };
+  if (implementation)
+    return {
+      route: "codex",
+      reasoning: "medium",
+      review: "optional",
+      basis: "implementation task",
+    };
+  return {
+    route: "ollama",
+    reasoning: "low",
+    review: "none",
+    basis: "local discovery or explanation",
+  };
 }
 
 const fallback = heuristic();
@@ -32,7 +60,11 @@ try {
       stream: false,
       format: "json",
       messages: [
-        { role: "system", content: "You are a conservative local task router. Never route security-sensitive work to Ollama." },
+        {
+          role: "system",
+          content:
+            "You are a conservative local task router. Never route security-sensitive work to Ollama.",
+        },
         { role: "user", content: prompt },
       ],
       options: { temperature: 0, num_predict: 80 },
@@ -76,5 +108,11 @@ try {
     ),
   );
 } catch {
-  console.log(JSON.stringify({ task, ...fallback, basis: `${fallback.basis}; Ollama unavailable`, ollama: "unavailable" }, null, 2));
+  console.log(
+    JSON.stringify(
+      { task, ...fallback, basis: `${fallback.basis}; Ollama unavailable`, ollama: "unavailable" },
+      null,
+      2,
+    ),
+  );
 }
