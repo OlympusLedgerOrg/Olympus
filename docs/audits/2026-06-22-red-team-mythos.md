@@ -50,7 +50,7 @@ Two independent multi-agent waves, ~310 subagent invocations, ~16M tokens of ana
 
 **Correction (2026-11-24 audit):** the OLY-H2 row above previously read "✅ Landed (stop-gap)". That was inaccurate: `origin/main` at `8d16465` had no fail-closed arm, and an executed repro returned `{"valid":true,"circuit":"non_existence"}` for a proof over a self-chosen Poseidon root. The arm now fails closed on `main` with a regression test; the row records that status and where it still has to travel.
 
-**Net:** 5 of 6 P0 fixes are on `main` and verified on this host, including OLY-H2, which the earlier status claim had wrongly recorded as landed. OLY-H1 (the highest-leverage single finding) is code-ready but must be applied *atomically with* a ceremony-manifest regeneration (`proofs/setup_circuits.sh` / `generate_manifest`, run in the Linux/docker `zk-setup` container per `docs`/the repo's ZK-artifact workflow), so it is staged rather than half-applied.
+**Net:** 5 of 6 P0 fixes are on `main`, including OLY-H2 (whose fail-closed arm now has a regression test that passes on this host) — the earlier status claim had wrongly recorded it as landed when it was not. OLY-H1 (the highest-leverage single finding) is code-ready but must be applied *atomically with* a ceremony-manifest regeneration (`proofs/setup_circuits.sh` / `generate_manifest`, run in the Linux/docker `zk-setup` container per `docs`/the repo's ZK-artifact workflow), so it is staged rather than half-applied.
 
 ---
 
