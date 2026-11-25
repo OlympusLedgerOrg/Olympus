@@ -12,6 +12,7 @@ import {
   boolEnv,
   callModel,
   effectiveNumCtx,
+  modelProvenance,
   modelForTool,
   DEFAULT_OLLAMA_MODEL,
   ollamaBaseUrl,
@@ -333,6 +334,50 @@ test("effectiveNumCtx falls back to the configured window when the daemon cannot
     () => effectiveNumCtx("clamp-test:offline"),
   );
   assert.equal(result, DEFAULT_NUM_CTX);
+});
+
+// /api/show has the window but this daemon omits the digest; /api/tags lists it.
+// The digest is the only thing that tells a re-pull from the same tag, so a
+// baseline that loses it silently cannot prove which weights produced a score.
+test("modelProvenance takes the digest from /api/tags when /api/show omits it", async () => {
+  const { result } = await withStubbedFetch(
+    (entry) => {
+      if (entry.url.endsWith("/api/show")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ model_info: { "qwen2.context_length": 32_768 } }),
+        };
+      }
+      if (entry.url.endsWith("/api/tags")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            models: [
+              { name: "digest-test:1b", model: "digest-test:1b", digest: "sha256:abc123" },
+            ],
+          }),
+        };
+      }
+      throw new Error(`unexpected request ${entry.url}`);
+    },
+    () => modelProvenance("digest-test:1b"),
+  );
+  // The declared 32K is the ceiling, not the value: the configured window wins
+  // when it is smaller, which is what the truncation budget is sized from.
+  assert.deepEqual(result, { digest: "sha256:abc123", num_ctx: DEFAULT_NUM_CTX });
+});
+
+// Unknown must stay unknown: inventing a digest would make every baseline look
+// like it was recorded against the same weights.
+test("modelProvenance reports an unknown digest as null rather than guessing", async () => {
+  const { result } = await withStubbedFetch(
+    () => ({ ok: true, status: 200, json: async () => ({ model_info: {} }) }),
+    () => modelProvenance("digest-test:missing"),
+  );
+  assert.equal(result.digest, null);
+  assert.equal(result.num_ctx, DEFAULT_NUM_CTX);
 });
 
 // Ollama's cap is options.num_predict, NOT max_tokens (that's the OpenAI

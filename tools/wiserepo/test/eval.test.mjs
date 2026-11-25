@@ -5,7 +5,18 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { casePassed, parseArgs, scoreCase } from "../bin/eval.mjs";
+import {
+  buildBaselineRecord,
+  buildRunRecord,
+  casePassed,
+  indexGoldenCases,
+  parseArgs,
+  promptSha256,
+  provenanceDiffs,
+  rescoreRecord,
+  scoreCase,
+  suiteScores,
+} from "../bin/eval.mjs";
 import { missingExpectations } from "../src/eval-match.mjs";
 
 const fixture = (name) =>
@@ -20,6 +31,7 @@ test("parseArgs defaults to every suite with no limit", () => {
   assert.deepEqual(parseArgs([]), {
     limit: Infinity,
     model: undefined,
+    rescore: undefined,
     showAnswers: false,
     task: "all",
     writeBaseline: false,
@@ -205,4 +217,148 @@ test("a case fails when any citation is unverified", () => {
   );
   assert.equal(casePassed({ ...clean, missing: ["extra page"] }), false);
   assert.equal(casePassed({ ...clean, phantom: ["lastPage - 1"] }), false);
+});
+
+test("parseArgs accepts --rescore and refuses to combine it with --write-baseline", () => {
+  assert.equal(parseArgs(["--rescore", "eval/runs/r.json"]).rescore, "eval/runs/r.json");
+  assert.equal(parseArgs(["--rescore=eval/runs/r.json"]).rescore, "eval/runs/r.json");
+  assert.throws(() => parseArgs(["--rescore"]), /--rescore needs a value/);
+  assert.throws(() => parseArgs(["--rescore="]), /--rescore needs a value/);
+  assert.throws(
+    () => parseArgs(["--rescore", "eval/runs/r.json", "--write-baseline"]),
+    /cannot also --write-baseline/,
+  );
+});
+
+// A hash of the user message alone would call two materially different review
+// prompts identical: the review prompt is mostly AGENTS.md plus its framing.
+test("the prompt hash covers the system prompt and the user prompt separately", () => {
+  const digest = promptSha256({ system: "standards", prompt: "diff" });
+  assert.match(digest, /^[0-9a-f]{64}$/);
+  assert.equal(promptSha256({ system: "standards", prompt: "diff" }), digest);
+  assert.notEqual(promptSha256({ system: "other standards", prompt: "diff" }), digest);
+  // Concatenating the two without a separator would hash these the same.
+  assert.notEqual(
+    promptSha256({ system: "ab", prompt: "c" }),
+    promptSha256({ system: "a", prompt: "bc" }),
+  );
+});
+
+// The baseline is the comparison point, so it must not quietly become a second
+// copy of the transcript: scores are derived from the cases, and the answers
+// live in the run file the baseline points at.
+test("the run record derives suite scores from the stored cases", () => {
+  const cases = [
+    { suite: "qa", id: "a", seconds: 2, ok: true },
+    { suite: "qa", id: "b", seconds: 3, ok: false },
+    { suite: "review", id: "c", seconds: 1, ok: true },
+  ];
+  assert.deepEqual(suiteScores(cases), {
+    qa: { passed: 1, total: 2, seconds: 5 },
+    review: { passed: 1, total: 1, seconds: 1 },
+  });
+
+  const record = buildRunRecord({
+    recordedAt: "2026-01-01T00:00:00.000Z",
+    model: "qwen2.5-coder:7b-instruct",
+    provenance: {
+      git_sha: "a".repeat(40),
+      git_dirty: false,
+      prompt_sha256: "b".repeat(64),
+      models: {},
+    },
+    cases,
+  });
+  assert.equal(record.cases.length, 3);
+  assert.equal(record.suites.qa.total, 2);
+
+  const baseline = buildBaselineRecord(record, "runs/2026-01-01.json");
+  assert.deepEqual(baseline.suites, record.suites);
+  assert.equal(baseline.provenance, record.provenance);
+  assert.equal(baseline.answers, "runs/2026-01-01.json");
+  assert.equal(
+    "cases" in baseline,
+    false,
+    "the baseline points at the answers instead of copying them",
+  );
+});
+
+// The point of recording raw answers: a scoring change can be checked against
+// real answers without paying for the model call again.
+test("a recorded run re-scores offline, and a changed verdict is visible", async () => {
+  const item = { id: "phantom-case", expect: ["clampPage"], expect_absent: ["lastPage - 1"] };
+  const goldenById = indexGoldenCases([{ suite: "review", cases: [item] }]);
+  const entries = [
+    {
+      suite: "review",
+      id: "phantom-case",
+      model: "test-model:1b",
+      seconds: 4,
+      prompt_sha256: "a".repeat(64),
+      answer: "clampPage no longer returns `lastPage - 1`; the diff removes it.",
+    },
+    {
+      suite: "review",
+      id: "phantom-case",
+      model: "test-model:1b",
+      seconds: 4,
+      prompt_sha256: "a".repeat(64),
+      answer: "clampPage still returns `lastPage - 1`.",
+    },
+  ];
+
+  const scored = await rescoreRecord(entries, goldenById);
+  assert.deepEqual(scored.map((entry) => entry.ok), [true, false]);
+  // Re-scoring explains the recorded run; it does not replace it.
+  assert.equal(scored[0].answer, entries[0].answer);
+  assert.equal(scored[0].prompt_sha256, entries[0].prompt_sha256);
+});
+
+// A re-score that only re-ran the stored verdict would pass a review citing a
+// file it invented. Citation checking is still part of the score.
+test("re-scoring verifies citations against the tree", async () => {
+  const goldenById = indexGoldenCases([{ suite: "qa", cases: [{ id: "ghost", expect: ["clampPage"] }] }]);
+  const [scored] = await rescoreRecord(
+    [{ suite: "qa", id: "ghost", seconds: 1, answer: "clampPage is defined in src/ghost-rescore.js:9." }],
+    goldenById,
+  );
+  assert.equal(scored.ok, false);
+  assert.equal(scored.verdict.badCitations.length, 1);
+});
+
+// A record outliving the case it names must say so, not score it as a pass.
+test("a run record naming a case the golden files no longer have is a hard error", async () => {
+  await assert.rejects(
+    rescoreRecord([{ suite: "qa", id: "gone", answer: "x" }], new Map()),
+    /not a golden case/,
+  );
+});
+
+// Without this, a prompt edit plus a re-pulled model reads exactly like a prompt
+// regression and gets blamed on whichever changed last.
+test("provenance diffs name every change that makes a comparison unlike-for-like", () => {
+  const before = {
+    git_sha: "a".repeat(40),
+    git_dirty: false,
+    prompt_sha256: "b".repeat(64),
+    models: { "m:1": { digest: "sha256:1111", num_ctx: 16384 } },
+  };
+  assert.deepEqual(provenanceDiffs(before, structuredClone(before)), []);
+
+  const after = {
+    git_sha: "c".repeat(40),
+    git_dirty: true,
+    prompt_sha256: "d".repeat(64),
+    models: { "m:1": { digest: "sha256:2222", num_ctx: 8192 } },
+  };
+  assert.deepEqual(provenanceDiffs(before, after), [
+    `git ${"a".repeat(12)} -> ${"c".repeat(12)}`,
+    "worktree clean -> dirty",
+    `prompt ${"b".repeat(12)} -> ${"d".repeat(12)}`,
+    "m:1 weights sha256:1111 -> sha256:2222",
+    "m:1 num_ctx 16384 -> 8192",
+  ]);
+
+  // A baseline recorded before provenance existed is "unknown", not "equal".
+  assert.equal(provenanceDiffs({}, before).length, 5);
 });

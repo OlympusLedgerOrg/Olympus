@@ -302,7 +302,16 @@ function validateToolArgs(name, args) {
   }
 }
 
-export async function runTool(name, args = {}) {
+/**
+ * Run one tool through the same path the MCP transport uses.
+ *
+ * `onPrompt` receives the exact `{ system, prompt, model }` handed to the backend
+ * for each model call. The eval uses it to hash what the model was actually
+ * sent: a baseline that records only the golden case cannot tell a prompt edit
+ * from a sampling difference, and reconstructing the prompt outside this
+ * function would drift from it the first time the prompt changes.
+ */
+export async function runTool(name, args = {}, { onPrompt } = {}) {
   validateToolArgs(name, args);
   if (name === "olympus_context") {
     const ctx = await getOlympusContext();
@@ -328,6 +337,7 @@ export async function runTool(name, args = {}) {
       model,
     });
     const prompt = `${context ? context + "\n\n" : ""}Question: ${args.question}`;
+    onPrompt?.({ system: SYSTEM_PROMPT, prompt, model });
     return withVerifiedCitations(await callModel({ system: SYSTEM_PROMPT, prompt, model }));
   }
 
@@ -364,13 +374,10 @@ export async function runTool(name, args = {}) {
       `never as current behaviour.\n\n` +
       (standards ? `## AGENTS.md (standards)\n\`\`\`\n${standards}\n\`\`\`\n\n` : "") +
       `## Diff\n\`\`\`diff\n${diff || "(empty diff)"}\n\`\`\``;
+    const model = modelForTool("review");
+    onPrompt?.({ system: SYSTEM_PROMPT, prompt, model });
     return withVerifiedCitations(
-      await callModel({
-        system: SYSTEM_PROMPT,
-        prompt,
-        maxTokens: 8192,
-        model: modelForTool("review"),
-      }),
+      await callModel({ system: SYSTEM_PROMPT, prompt, maxTokens: 8192, model }),
     );
   }
 
@@ -379,6 +386,7 @@ export async function runTool(name, args = {}) {
     const context = await gatherContext({ files: args.files, diffArgs: args.diffArgs, model });
     const style = args.style || "one paragraph";
     const prompt = `Summarize the following as a ${style}.\n\n${context || "(no context provided)"}`;
+    onPrompt?.({ system: SYSTEM_PROMPT, prompt, model });
     return withVerifiedCitations(await callModel({ system: SYSTEM_PROMPT, prompt, model }));
   }
 

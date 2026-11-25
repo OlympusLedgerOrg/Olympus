@@ -396,13 +396,32 @@ async function readCompletion(res, provider, onProgress) {
 }
 
 // The daemon reports the model's real window in /api/show as
-// "<architecture>.context_length". Cached per model: it cannot change without
-// the tag being re-pulled, and this must not add a round trip per call.
-const contextLengthCache = new Map();
+// "<architecture>.context_length", and the digest of the weights it has loaded
+// for that tag. Cached per model: neither can change without the tag being
+// re-pulled, and this must not add a round trip per call.
+const modelInfoCache = new Map();
 
-async function declaredContextLength(model) {
-  if (contextLengthCache.has(model)) return contextLengthCache.get(model);
-  let declared = null;
+// /api/show carries the window but not always the digest (the daemon here
+// omits it); /api/tags lists every pulled tag with one. Separate request, only
+// made when show had nothing, and only once per model thanks to the cache.
+async function digestFromTags(model) {
+  try {
+    const res = await fetch(`${ollamaBaseUrl().replace(/\/+$/, "")}/api/tags`, {
+      dispatcher: MODEL_DISPATCHER,
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) return null;
+    const models = (await res.json())?.models ?? [];
+    const match = models.find((entry) => entry?.name === model || entry?.model === model);
+    return typeof match?.digest === "string" ? match.digest : null;
+  } catch {
+    return null;
+  }
+}
+
+async function showModel(model) {
+  if (modelInfoCache.has(model)) return modelInfoCache.get(model);
+  let info = { digest: null, declaredContextLength: null };
   try {
     const res = await fetch(`${ollamaBaseUrl().replace(/\/+$/, "")}/api/show`, {
       method: "POST",
@@ -412,21 +431,43 @@ async function declaredContextLength(model) {
       signal: AbortSignal.timeout(10_000),
     });
     if (res.ok) {
-      const info = (await res.json())?.model_info ?? {};
-      for (const [key, value] of Object.entries(info)) {
+      const body = await res.json();
+      let declared = null;
+      for (const [key, value] of Object.entries(body?.model_info ?? {})) {
         if (key.endsWith(".context_length") && typeof value === "number" && value > 0) {
           declared = value;
           break;
         }
       }
+      info = {
+        digest: typeof body?.digest === "string" ? body.digest : await digestFromTags(model),
+        declaredContextLength: declared,
+      };
     }
   } catch {
     // Daemon down or old enough to lack /api/show: fall back to the configured
     // value rather than failing the call over metadata.
-    declared = null;
   }
-  contextLengthCache.set(model, declared);
-  return declared;
+  modelInfoCache.set(model, info);
+  return info;
+}
+
+/**
+ * What an eval baseline has to record about the model behind a score: which
+ * weights answered (the digest, not just the tag — a re-pull can change the
+ * weights under an unchanged tag) and the window the prompt was truncated to.
+ *
+ * null digest means the daemon could not report one; recording it as null is
+ * honest, and the eval prints it as unknown rather than inventing a value.
+ */
+export async function modelProvenance(model = DEFAULT_OLLAMA_MODEL) {
+  const { digest, declaredContextLength } = await showModel(model);
+  return {
+    digest,
+    num_ctx: declaredContextLength
+      ? Math.min(DEFAULT_NUM_CTX, declaredContextLength)
+      : DEFAULT_NUM_CTX,
+  };
 }
 
 /**
@@ -436,8 +477,7 @@ async function declaredContextLength(model) {
  * silently truncated by the server.
  */
 export async function effectiveNumCtx(model = DEFAULT_OLLAMA_MODEL) {
-  const declared = await declaredContextLength(model);
-  return declared ? Math.min(DEFAULT_NUM_CTX, declared) : DEFAULT_NUM_CTX;
+  return (await modelProvenance(model)).num_ctx;
 }
 
 /**

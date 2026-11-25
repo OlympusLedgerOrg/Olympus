@@ -300,6 +300,7 @@ node bin/eval.mjs --limit 2                  # first 2 cases per suite
 node bin/eval.mjs --model qwen2.5-coder:3b   # compare tags on the same cases
 node bin/eval.mjs --write-baseline           # record eval/baseline.json
 node bin/eval.mjs --show-answers             # print each raw answer under its verdict
+node bin/eval.mjs --rescore eval/runs/<stamp>.json   # re-score recorded answers, no model call
 ```
 
 It prints PASS/FAIL per case, the number of unverified citations (any nonzero
@@ -312,11 +313,36 @@ unavailable. Runs are slow: one case is one full model call, so `--limit`
 exists for smoke tests and `--task qa` for a model-only check that needs no
 fixture repo.
 
+Every run also writes its answers to `eval/runs/<timestamp>.json` (gitignored),
+and `eval/baseline.json` points at the run that produced it via `answers`. Along
+with the scores, the record carries the provenance needed to tell whether two
+runs are comparable at all:
+
+| field | what it fixes in place |
+| --- | --- |
+| `provenance.git_sha` / `git_dirty` | which commit the `qa` cases ran against, and whether the eval's own files still matched it |
+| `provenance.models.<tag>.digest` | which weights answered — a re-pull changes the digest under an unchanged tag |
+| `provenance.models.<tag>.num_ctx` | the window the prompt was actually truncated to |
+| `provenance.prompt_sha256` | a hash of the exact system + user text each call was sent, so an `AGENTS.md` or prompt edit shows up in the record |
+
+A run prints any provenance difference from the baseline before its scores,
+because a number that moved alongside a prompt or weight change is not evidence
+about either. A `null` digest means the daemon could not report one; it is
+printed as `unknown` rather than filled in.
+
+`--rescore <run file>` scores the stored answers again — against the current
+matchers, golden cases and tree — with no Ollama call, and marks each case whose
+verdict changed since it was recorded. That is how a scoring change is checked
+against real answers, and how two recorded runs are compared later. Citations
+are verified against the current tree, so re-score a run from another commit on
+that commit (`git checkout <provenance.git_sha>`); otherwise a recorded
+`src/pager.js` citation resolves nowhere in this repo.
+
 The baseline is what makes prompt changes measurable: record one with
 `--write-baseline` against the prompt you are about to change, then re-run
-without the flag and read the comparison. Do not edit `eval/baseline.json` by
-hand — it stores `recorded_at`, the model tag, and per-suite `passed`/`total`/
-`seconds` so a later run is comparable.
+without the flag and read the comparison. Do not edit `eval/baseline.json` or a
+run file by hand — the scores are derived from the recorded cases, and editing
+one side would only make them disagree.
 - `WISEREPO_TIMEOUT_MS` — default `300000` (5 min). Much larger than a
   cloud-backed tool would need: local generation on a 30B model is far
   slower per token, and `review_diff` / AGENTS.md regeneration can emit
@@ -479,7 +505,7 @@ cd tools/wiserepo
 npm test
 ```
 
-114 tests covering the places a bug is silent rather than loud:
+144 tests covering the places a bug is silent rather than loud:
 
 - `resolveInRepo` path-traversal guard, including the sibling-prefix case
   (`Olympus-evil` must not count as inside `Olympus`) — and
