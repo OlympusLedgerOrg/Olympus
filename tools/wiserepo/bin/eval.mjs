@@ -239,6 +239,22 @@ async function loadCases(fileName, limit) {
 }
 
 /**
+ * The answer without fenced code blocks.
+ *
+ * Expectations ask what the answer CONCLUDED; a pasted diff or file excerpt is
+ * input, not a conclusion. Without this the phantom case passed on a review
+ * that only discussed `pageCount`, because the `clampPage` identifier it is
+ * scored on appeared in the diff the review copied back — the echo the case
+ * exists to rule out. Phantom scanning still sees the whole answer (see
+ * eval-match.mjs): showing a removed line as live is a failure wherever it is.
+ *
+ * Exported so the rule is testable without a model call.
+ */
+export function proseOnly(answer) {
+  return String(answer ?? "").replace(/```[\s\S]*?```/g, "\n");
+}
+
+/**
  * A case passes only when the answer says everything it must, asserts no removed
  * text as current, AND every cited path resolves.
  *
@@ -268,7 +284,7 @@ async function runSuite(name, options) {
     const seconds = Math.round((Date.now() - started) / 1000);
     secondsTotal += seconds;
 
-    const missing = missingExpectations(answer, item.expect);
+    const missing = missingExpectations(proseOnly(answer), item.expect);
     const phantom = unexpectedMentions(answer, item.expect_absent);
     const { missing: badCitations } = await verifyCitations(answer);
     const ok = casePassed({ missing, phantom, badCitations });

@@ -5,7 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { casePassed, parseArgs } from "../bin/eval.mjs";
+import { casePassed, parseArgs, proseOnly } from "../bin/eval.mjs";
 import { missingExpectations } from "../src/eval-match.mjs";
 
 const fixture = (name) =>
@@ -109,6 +109,24 @@ test("every review case requires the review to address the diff", async () => {
   const consequence = planted.expect.find(Array.isArray);
   assert.ok(consequence, "the planted-bug case has no consequence group");
   assert.ok(consequence.includes("extra page"));
+});
+
+// REGRESSION: a review that only discussed one hunk PASSED the phantom case
+// because the other function's identifier appeared in the diff it pasted back.
+// Expectations score the conclusion, so fenced blocks do not count.
+test("expectations ignore pasted code blocks", () => {
+  const answer = [
+    "### Finding: pageCount",
+    "It adds an extra page.",
+    "```diff",
+    " export function clampPage(page, lastPage) {",
+    "-  if (page > lastPage) return lastPage - 1;",
+    "+  if (page > lastPage) return lastPage;",
+    "```",
+  ].join("\n");
+  assert.equal(proseOnly(answer).includes("clampPage"), false);
+  assert.equal(missingExpectations(proseOnly(answer), ["pageCount"]).length, 0);
+  assert.deepEqual(missingExpectations(proseOnly(answer), ["clampPage"]), ["clampPage"]);
 });
 
 // A correct review may phrase the same finding differently; the case scores the

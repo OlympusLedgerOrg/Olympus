@@ -261,6 +261,13 @@ scores all three model-backed tools against golden cases in `eval/`:
 | `review` | `eval/golden-review.json` | two cases: the review names the **planted bug** in `eval/fixtures/pager.after.js` by its consequence (any of several accepted phrasings of `extra page`, never the `+ 1` token the hunk literally shows), and it does **not** state the removed line (`lastPage - 1`) as current behaviour — naming it as removed passes |
 | `summarize` | `eval/golden-summarize.json` | the summary names the surface it summarized |
 
+Expectations are matched against the answer's **prose**: fenced code blocks are
+stripped first, because a pasted diff or file excerpt is input, not a conclusion.
+Without that, a review that discussed only one hunk passed the phantom case on
+the other function's identifier appearing in the diff it copied back. Phantom
+scanning still reads the whole answer — showing a removed line as live is a
+failure wherever it appears.
+
 Every case in every suite additionally fails if the answer cites a `path` or
 `path:line` that does not resolve in the tree being scored. Citation checking is
 not a separate suite: an invented path is a false claim, and a benchmark that

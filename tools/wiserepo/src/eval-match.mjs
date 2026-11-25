@@ -71,6 +71,11 @@ const ATTRIBUTION = [
   "->",
 ];
 
+// A unified-diff body line IS the attribution: `-  code` says the code is gone,
+// `+  code` says it is new. Two spaces (or a tab) after the marker is what
+// separates that from a Markdown bullet, which is a live claim and still scores.
+const DIFF_LINE = /^[-+]\s{2,}|^[-+]\t/;
+
 // Present-tense markers that beat an attribution in the same sentence: "the diff
 // removes a guard, so `clampPage` STILL returns `lastPage - 1`" is a phantom even
 // though "removes" is right there.
@@ -102,7 +107,9 @@ export function unexpectedMentions(answer, absent) {
   const phantoms = new Set();
   for (const sentence of sentencesOf(answer)) {
     const haystack = normaliseForExpect(sentence);
-    const attributed = ATTRIBUTION.some((marker) => haystack.includes(marker));
+    const attributed =
+      DIFF_LINE.test(sentence.trimStart()) ||
+      ATTRIBUTION.some((marker) => haystack.includes(marker));
     const override = CURRENT_OVERRIDES.some((marker) => haystack.includes(marker));
     for (const [original, needle] of needles) {
       if (!needle || phantoms.has(original)) continue;

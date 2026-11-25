@@ -95,6 +95,17 @@ test("unexpectedMentions still flags a live claim beside a removal word", () => 
   );
 });
 
+// A review's own example diff quotes the removed line with git's `-` marker; that
+// is the removal stated, not a claim that the line is live. A Markdown bullet
+// with a single space is still a claim, so the two do not blur together.
+test("unexpectedMentions reads a unified-diff line as attribution", () => {
+  assert.deepEqual(unexpectedMentions("-  return lastPage - 1;", ["lastPage - 1"]), []);
+  assert.deepEqual(unexpectedMentions("+\treturn lastPage - 1;", ["lastPage - 1"]), []);
+  assert.deepEqual(unexpectedMentions("- clampPage returns lastPage - 1", ["lastPage - 1"]), [
+    "lastPage - 1",
+  ]);
+});
+
 test("normaliseForExpect folds case, spaces, hyphens and underscores only", () => {
   assert.equal(normaliseForExpect(" Qwen2.5-Coder:7b-Instruct "), "qwen2.5coder:7binstruct");
   assert.equal(normaliseForExpect(null), "");
