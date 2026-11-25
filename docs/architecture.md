@@ -247,7 +247,7 @@ Three core Circom circuits compile to Groth16 over BN254, with
 | Circuit | Purpose |
 |---|---|
 | `document_existence` | proves a document hash is in the Merkle root |
-| `non_existence` | proves a key is absent from the SMT |
+| `non_existence` | proves a key is absent from a *caller-supplied* SMT root; no endpoint serves it until absence is anchored to the signed ledger (OLY-H2) |
 | `unified_canonicalization_inclusion_root_sign` | historical artifact stem for structured section commitment + Merkle inclusion + ledger-root SMT inclusion; it proves neither canonicalization nor signatures |
 
 The public `unified_canonicalization_inclusion_root` protocol composes a RISC

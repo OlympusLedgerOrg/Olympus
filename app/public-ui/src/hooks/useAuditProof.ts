@@ -6,10 +6,8 @@
  * determine validity.  Covers both circuits in the Groth16 registry (redaction
  * excluded — see below):
  *   - document_existence  → "leaf X is in Merkle root Y at index N"
- *   - non_existence       → parsed for compatibility, but the server now fails
- *                           the verify arm closed with 501 (OLY-H2): the
- *                           proof's root is caller-supplied and unanchored, so
- *                           it is not an authenticated absence claim.
+ *   - non_existence       → parsed for compatibility; the server refuses it 501
+ *                           on both prove and verify (OLY-H2)
  *
  * Redaction is no longer a Groth16 circuit (ADR-0030 V3 is signed-Merkle); the
  * Redaction tab verifies V3 bundles in-app via `verifyRedactionBundleV3`.

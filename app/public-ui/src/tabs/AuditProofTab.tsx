@@ -5,12 +5,10 @@
  * verification against the embedded vkey for the named circuit.  No file
  * needed — the bundle's public signals fully determine validity.
  *
- * Parses bundles for both Groth16 circuits in the registry:
- *   - document_existence — verified server-side.
- *   - non_existence — parsed, but POST /zk/verify rejects it 501 (OLY-H2: the
- *     circuit's root is caller-supplied and unbound to a signed checkpoint), so
- *     a green verdict cannot come back for one. Anchored absence is the BLAKE3
- *     shard-root proof path instead.
+ * Parses bundles for both Groth16 circuits in the registry. `non_existence` is
+ * parsed for compatibility only: both /zk/prove and /zk/verify reject it 501
+ * (OLY-H2 — its root is caller-supplied and unbound to a signed checkpoint), so
+ * no green verdict can come back for one.
  *
  * Redaction (ADR-0030 V3) is signed-Merkle, not a Groth16 circuit — it is
  * verified in-app from the delivered artifact + bundle in the Redaction tab.

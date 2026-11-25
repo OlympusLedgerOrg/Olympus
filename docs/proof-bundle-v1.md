@@ -21,14 +21,11 @@ and is not authenticated by `olympus verify`. The `signed_fields` member names
 exactly the fields that digest consumes, so keep it to that set: listing a
 field there asserts a check that does not exist.
 
-A historical snapshot with no `signed_at` uses the legacy V1 digest, which is
-the same fold over a disjoint Poseidon domain with no timestamp element.
-Because the domains are disjoint, stripping `signed_at` cannot downgrade a V2
-snapshot into verifying under V1. Do not confuse this signature with
-`olympus_crypto::persist_message` (`OLY:SNAPSHOT:PERSIST:V1`), the separate
-domain-separated BLAKE3 digest used by a checkpoint's `TransitionAttestation`
-over `original_root → snapshot_root` and `snapshot_size`; this bundle does not
-carry that signature.
+A snapshot with no `signed_at` uses the legacy V1 digest: the same fold over a
+disjoint Poseidon domain with no timestamp element, so stripping the field
+cannot downgrade a V2 snapshot into verifying under V1. This bundle does not
+carry the checkpoint `TransitionAttestation` or its `persist_message` BLAKE3
+digest, which are a different signature over a different message.
 
 A future schema that signs the complete exported artifact MUST change the
 schema identifier and define the signing envelope before doing so.

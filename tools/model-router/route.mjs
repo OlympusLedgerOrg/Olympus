@@ -74,25 +74,16 @@ try {
   if (!response.ok) throw new Error(`Ollama HTTP ${response.status}`);
   const body = await response.json();
   const recommendation = JSON.parse(body.message?.content || "{}");
-  const wellFormed =
-    ["ollama", "codex", "claude"].includes(recommendation.route) &&
-    ["low", "medium", "high"].includes(recommendation.reasoning) &&
-    typeof recommendation.review === "string";
-  // A local model never gets to decide that security-sensitive work is a job
-  // for itself; the repository rule wins regardless of what it answered.
-  if (!wellFormed || (sensitive && recommendation.route === "ollama")) {
+  if (sensitive || !["ollama", "codex", "claude"].includes(recommendation.route))
     throw new Error("unsafe or invalid recommendation");
-  }
   // Do not let a local model spend a hosted allowance on routine work.
   if (!sensitive && !implementation && !review) {
     recommendation.route = "ollama";
     recommendation.reasoning = "low";
     recommendation.review = "none";
   }
-  // Name the three fields explicitly instead of spreading the model's object:
-  // `{ task, ...recommendation }` lets a recommendation carrying its own `task`
-  // rewrite the reported one (JSON.stringify keeps the last duplicate key) and
-  // lets any other key through unvalidated.
+  // Name the fields explicitly: spreading the model's object would let a reply
+  // carrying its own `task` rewrite the reported one.
   console.log(
     JSON.stringify(
       {
