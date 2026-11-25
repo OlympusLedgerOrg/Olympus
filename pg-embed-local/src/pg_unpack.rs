@@ -220,7 +220,11 @@ fn read_postgres_tar_snapshot(archive_snapshot: &[u8]) -> Result<Vec<u8>> {
             .by_index(i)
             .map_err(|_| Error::InvalidPgPackage)?;
 
-        if file.name().ends_with(".txz") || file.name().ends_with(".xz") {
+        let name = file
+            .name()
+            .map_err(|_| Error::InvalidPgPackage)?
+            .into_owned();
+        if name.ends_with(".txz") || name.ends_with(".xz") {
             let mut xz_content = Vec::with_capacity(file.compressed_size() as usize);
             file.read_to_end(&mut xz_content)
                 .map_err(|e| Error::ReadFileError(e.to_string()))?;

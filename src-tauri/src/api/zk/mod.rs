@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use crate::api::middleware::auth::{AuthenticatedKey, RateLimit};
 use crate::state::AppState;
 use crate::zk::proof::parse_signals_slice;
-use crate::zk::verify::{existence_verifier, non_existence_verifier, unified_verifier};
+use crate::zk::verify::{existence_verifier, unified_verifier};
 
 #[cfg(feature = "federation")]
 const MAX_CONCURRENT_PUBLIC_VERIFICATIONS: usize = 4;
@@ -308,15 +308,22 @@ async fn verify_request(
                     .verify(&proof_json, &signals)
                     .map_err(|_| err(StatusCode::BAD_REQUEST, "proof encoding is invalid"))?
             }
-            "non_existence" => non_existence_verifier()
-                .map_err(|_| {
-                    err(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "verification key is unavailable",
-                    )
-                })?
-                .verify(&proof_json, &signals)
-                .map_err(|_| err(StatusCode::BAD_REQUEST, "proof encoding is invalid"))?,
+            "non_existence" => {
+                // OLY-H2: the circuit proves absence from a *caller-supplied*
+                // Poseidon SMT root (`root` is a public input). Nothing binds
+                // that root to the signed BLAKE3 ledger, so a valid proof only
+                // establishes "this key is absent from some tree the prover
+                // chose", not absence from the authoritative ledger. Fail
+                // closed until an anchored-root attestation exists; anchored
+                // absence is served by the BLAKE3 shard-root proof path
+                // (`api::monitor::proof_blake3`).
+                return Err(err(
+                    StatusCode::NOT_IMPLEMENTED,
+                    "non_existence proofs are not an authenticated absence claim: \
+                     the circuit root is caller-supplied and is not bound to a signed \
+                     ledger checkpoint; use the anchored BLAKE3 shard-root proof",
+                ));
+            }
             RETIRED_UNIFIED_CANONICALIZATION_ID => {
                 return Err(retired_unified_canonicalization_error())
             }
@@ -927,6 +934,21 @@ mod tests {
         assert!(verify_source_commitment(&expected.to_uppercase(), &actual).is_err());
         assert!(verify_source_commitment(&expected[..62], &actual).is_err());
         assert!(verify_source_commitment(&"00".repeat(32), &actual).is_err());
+    }
+
+    #[tokio::test]
+    async fn non_existence_verification_fails_closed_as_unanchored() {
+        let request = verification_request("non_existence", 2);
+        let error = match verify_request(request, None).await {
+            Ok(_) => panic!("a caller-supplied root must never be accepted as absence"),
+            Err(error) => error,
+        };
+        assert_eq!(error.0, StatusCode::NOT_IMPLEMENTED);
+        assert!(
+            api_error_detail(&error).contains("not an authenticated absence claim"),
+            "detail must explain why the proof is rejected: {}",
+            api_error_detail(&error)
+        );
     }
 
     #[tokio::test]

@@ -448,7 +448,15 @@ async function showModel(model) {
     // Daemon down or old enough to lack /api/show: fall back to the configured
     // value rather than failing the call over metadata.
   }
-  modelInfoCache.set(model, info);
+  // Cache only a real answer. When the probe learned neither the window nor
+  // the digest — daemon down, model not pulled yet, /api/show too old to carry
+  // the field — `info` means "could not find out", not "the model declares
+  // nothing". Caching that pins the fallback for the whole process lifetime,
+  // so a model pulled (or a daemon restarted) a minute later would keep getting
+  // the wrong budget and the wrong num_ctx clamp.
+  if (info.digest !== null || info.declaredContextLength !== null) {
+    modelInfoCache.set(model, info);
+  }
   return info;
 }
 

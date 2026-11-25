@@ -79,6 +79,17 @@ function needTask(value) {
   return value;
 }
 
+// Shared by `--limit N` and `--limit=N`. Only the spaced form used to be
+// validated, so `--limit=abc` stored NaN and `slice(0, NaN)` ran zero questions
+// while the report still printed a score.
+function parseLimit(raw) {
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1) {
+    throw new Error("--limit needs a positive integer");
+  }
+  return value;
+}
+
 // Covers both `--model` with no following argument and the empty `--model=`
 // form. Validating where the value is read is the only place that can tell
 // those apart from a tag; a later `argv.includes("--model")` re-check
@@ -105,15 +116,9 @@ export function parseArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--limit") {
-      const value = Number(argv[++i]);
-      if (!Number.isInteger(value) || value < 1)
-        throw new Error("--limit needs a positive integer");
-      options.limit = value;
+      options.limit = parseLimit(argv[++i]);
     } else if (arg.startsWith("--limit=")) {
-      const value = Number(arg.slice("--limit=".length));
-      if (!Number.isInteger(value) || value < 1)
-        throw new Error("--limit needs a positive integer");
-      options.limit = value;
+      options.limit = parseLimit(arg.slice("--limit=".length));
     } else if (arg === "--model") {
       options.model = needModel(argv[++i]);
     } else if (arg.startsWith("--model=")) {

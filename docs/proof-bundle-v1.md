@@ -9,12 +9,29 @@ UTF-8 bytes of the compact JSON serialization of the bundle **without** the
 arrays retain their order; no insignificant whitespace is emitted. This rule
 is intentionally independent of pretty-printed download formatting.
 
-The persisted `signature` is the BJJ EdDSA-Poseidon signature over the Olympus
-ledger-snapshot payload (`content_hash`, snapshot root/index/size and the
-authenticated signing time), not a signature over the browser-generated
-`bundle_hash`. The `signed_fields` member therefore names the ledger fields it
-attests to. A future schema that signs the complete exported artifact MUST
-change the schema identifier and define the signing envelope before doing so.
+The persisted `signature` is the BJJ EdDSA-Poseidon signature over the
+ledger-snapshot signing digest
+(`olympus_crypto::ledger_snapshot::signing_digest_v2`), which folds the snapshot
+root (`merkle_root`), `tree.leaf_index`, `tree.tree_size`, `content_hash`,
+`original_root`, and the authority's `signed_at` timestamp. It is **not** a
+signature over the browser-generated `bundle_hash`. Everything else here —
+`ledger_entry_hash`, `committed_at`, `record_id`, `shard_id`, `proof_id`,
+`merkle_proof`, `issuer` and the remaining metadata — is displayed by the panel
+and is not authenticated by `olympus verify`. The `signed_fields` member names
+exactly the fields that digest consumes, so keep it to that set: listing a
+field there asserts a check that does not exist.
+
+A historical snapshot with no `signed_at` uses the legacy V1 digest, which is
+the same fold over a disjoint Poseidon domain with no timestamp element.
+Because the domains are disjoint, stripping `signed_at` cannot downgrade a V2
+snapshot into verifying under V1. Do not confuse this signature with
+`olympus_crypto::persist_message` (`OLY:SNAPSHOT:PERSIST:V1`), the separate
+domain-separated BLAKE3 digest used by a checkpoint's `TransitionAttestation`
+over `original_root → snapshot_root` and `snapshot_size`; this bundle does not
+carry that signature.
+
+A future schema that signs the complete exported artifact MUST change the
+schema identifier and define the signing envelope before doing so.
 
 Snapshot path entries use `position: "left"` when the record is the left
 child at that level and `position: "right"` otherwise. `tree.leaf_index` is

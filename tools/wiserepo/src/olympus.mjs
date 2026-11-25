@@ -5,9 +5,9 @@
 // These return structured data about the repo state WITHOUT calling the model —
 // they are fast, deterministic, and work offline.
 
-import { readFile, readdir, stat } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
-import { repoRoot, resolveInRepo, gitGrep } from "./repo.mjs";
+import { repoRoot, resolveInRepoFollowingSymlinks, gitGrep } from "./repo.mjs";
 
 // ---------------------------------------------------------------------------
 // olympus_context — machine-readable project facts from context.json
@@ -18,10 +18,11 @@ import { repoRoot, resolveInRepo, gitGrep } from "./repo.mjs";
  * Falls back to a minimal hardcoded summary if the file is missing.
  */
 export async function getOlympusContext() {
-  const root = repoRoot();
-  const contextPath = path.join(root, "context.json");
   try {
-    const raw = await readFile(contextPath, "utf8");
+    // Confine the read AFTER resolving symlinks: a repo-tracked `context.json`
+    // can lexically sit at the repo root while pointing at any file the process
+    // can read, and this data is returned verbatim to the MCP client.
+    const raw = await readFile(await resolveInRepoFollowingSymlinks("context.json"), "utf8");
     return { source: "context.json", data: JSON.parse(raw) };
   } catch (err) {
     if (err.code === "ENOENT") {
@@ -99,7 +100,11 @@ export async function getCircuitStatus() {
     const manifest = await fileStatus(path.join(manifestsDir, `${circuit}_manifest.json`));
 
     const anyPlaceholder = [wasm, r1cs, arkzkey, vkey, manifest].some((f) => f.isPlaceholder);
-    const allPresent = [wasm, r1cs, arkzkey].every((f) => f.exists);
+    // Readiness is the same five artifacts the runtime gates on. Measuring it
+    // over only wasm/r1cs/ark.zkey reported `ready: true` for a circuit whose
+    // vkey or signed ceremony manifest was still absent — exactly the shape the
+    // runtime's production gate refuses to start on.
+    const allPresent = [wasm, r1cs, arkzkey, vkey, manifest].every((f) => f.exists);
 
     results[circuit] = {
       wasm: wasm.exists ? (wasm.isPlaceholder ? "placeholder" : "ok") : "missing",

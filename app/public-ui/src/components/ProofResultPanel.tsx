@@ -262,7 +262,22 @@ export default function ProofResultPanel({ verdict }: { verdict: VerdictState })
     committed_at: committedAt,
     merkle_proof: result.merkle_proof ?? {},
     signature: result.signature ?? null,
-    signed_fields: ["content_hash", "merkle_root", "ledger_entry_hash"],
+    // Exactly the inputs of the ledger-snapshot signing digest that
+    // `olympus verify` re-folds (`olympus_crypto::ledger_snapshot::
+    // signing_digest_v2`): snapshot root, leaf index, tree size, content hash,
+    // original root. `signature.signed_at` participates only when present; its
+    // absence selects the legacy V1 digest (same fold, disjoint Poseidon
+    // domain). `ledger_entry_hash` and the remaining metadata are NOT
+    // authenticated by this signature — naming one here asserts a check the
+    // offline verifier does not perform.
+    signed_fields: [
+      "content_hash",
+      "merkle_root",
+      "original_root",
+      "tree.leaf_index",
+      "tree.tree_size",
+      "signature.signed_at",
+    ],
     signature_public_key: result.signature_public_key ?? null,
     issuer: result.issuer ?? "Olympus",
     merkle_proof_valid: result.merkle_proof_valid ?? null,

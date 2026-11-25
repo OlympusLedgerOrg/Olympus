@@ -78,7 +78,7 @@ ed25519-dalek = { version = "2", features = [ "rand_core" ], optional = true }
 # Canonical Stored-ZIP writer for OOXML redaction artifacts. Only compiled with
 # the `container` feature; the ADR-0040 canonicalization guest does not enable it,
 # so the pinned guest ELF/ImageID is unaffected.
-zip = { version = "8", default-features = false, optional = true }
+zip = { version = "9", default-features = false, optional = true }
 
 # Examples import the feature-gated `smt` module. Declaring `required-features`
 # keeps them out of a default `cargo test --workspace` / `--all-targets` build
