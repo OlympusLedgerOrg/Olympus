@@ -1,21 +1,33 @@
 {
-  "recorded_at": "2026-11-25T04:44:25.309Z",
+  "recorded_at": "2026-11-25T13:42:53.223Z",
   "model": "qwen2.5-coder:7b-instruct",
+  "provenance": {
+    "git_sha": "2f93aee50d8a17d6d3f3bf54d29226b7cb540287",
+    "git_dirty": false,
+    "prompt_sha256": "bff12c105251f4c02fb4159cc1ff29bff28e3a6652adf2fdeec6ea55f5f5a0fd",
+    "models": {
+      "qwen2.5-coder:7b-instruct": {
+        "digest": "dae161e27b0e90dd1856c8bb3209201fd6736d8eb66298e75ed87571486f4364",
+        "num_ctx": 16384
+      }
+    }
+  },
   "suites": {
     "qa": {
       "passed": 5,
       "total": 5,
-      "seconds": 65
+      "seconds": 64
     },
     "review": {
       "passed": 1,
       "total": 3,
-      "seconds": 49
+      "seconds": 72
     },
     "summarize": {
       "passed": 1,
       "total": 1,
       "seconds": 14
     }
-  }
+  },
+  "answers": "runs/2026-11-25T13-42-53-223Z.json"
 }
