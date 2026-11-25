@@ -5,11 +5,19 @@ one state per commit, so every case scores a real two-revision diff of the kind
 `review_diff` is used on. `review` and `summarize` both run inside that single
 repo, so both suites score the same checkout.
 
-| revision | file | state | case that diffs it |
-| --- | --- | --- | --- |
-| `HEAD~2` | `pager.before.js` | correct `pageCount`, off-by-one `clampPage` | — |
-| `HEAD~1` | `pager.after.js` | planted bug, `clampPage` fixed | `HEAD~2..HEAD~1` (bug + fix) |
-| `HEAD` | `pager.fixed.js` | both changes correct | `HEAD~1..HEAD` (clean fix) |
+| revision | file | state |
+| --- | --- | --- |
+| `HEAD~2` | `pager.before.js` | correct `pageCount`, off-by-one `clampPage` |
+| `HEAD~1` | `pager.after.js` | planted bug, `clampPage` fixed |
+| `HEAD` | `pager.fixed.js` | both changes correct |
+
+Each golden case diffs a different pair, so no two cases send the same prompt:
+
+| case | range | what that diff contains |
+| --- | --- | --- |
+| `planted-off-by-one` | `HEAD~2..HEAD~1` | the bug, plus the `clampPage` fix |
+| `no-phantom-removed-line` | `HEAD~2..HEAD` | the `clampPage` fix alone |
+| `clean-fix-not-flagged` | `HEAD~1..HEAD` | the `pageCount` fix alone |
 
 Both states are committed on purpose. The two files are the same byte length,
 so an *uncommitted* overwrite can land inside git's racy-clean window: `git
@@ -46,6 +54,11 @@ the planted `+ 1`, so the only change in that range is correct. The
 `clean-fix-not-flagged` case scores precision there — a review that calls the fix
 a defect fails on the same attribution rule (the removed `+ 1` stated as current),
 and `expect: pageCount` keeps a review that ignores the range from passing.
+
+Distinct ranges matter for the score itself, not just for variety: two cases
+diffing the same pair send a byte-identical prompt, and at temperature 0 the
+second call returns the first answer verbatim, so the suite would be scoring one
+sample twice. `test/eval.test.mjs` asserts the ranges are distinct.
 
 The phantom case scores *attribution*, not mention: "the diff removes
 `lastPage - 1`" is the reading this fixture is meant to reward and passes, while

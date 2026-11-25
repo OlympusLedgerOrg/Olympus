@@ -134,6 +134,12 @@ test("every review case requires the review to address the diff", async () => {
   // A clean range whose only change is a correct fix: the review must not turn
   // the removed `+ 1` into a live defect. Without `expect` it would pass on a
   // review that never looked.
+  // Two cases on the same range send the same prompt, so the second scores a
+  // replay of the first answer (at temperature 0, verbatim) instead of an
+  // independent sample.
+  const ranges = cases.map((item) => item.diffArgs.join(".."));
+  assert.equal(new Set(ranges).size, ranges.length, `review cases share a diff: ${ranges.join(", ")}`);
+
   const clean = cases.find((item) => item.id === "clean-fix-not-flagged");
   assert.ok(clean, "the clean-fix case is missing");
   assert.deepEqual(clean.diffArgs, ["HEAD~1", "HEAD"]);

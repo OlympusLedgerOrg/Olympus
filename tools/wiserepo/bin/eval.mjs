@@ -136,8 +136,14 @@ export function parseArgs(argv) {
  * Three states, so a case can score a correct change as well as a broken one:
  *
  *   HEAD~2  pager.before.js   correct pageCount, off-by-one clampPage
- *   HEAD~1  pager.after.js    planted bug, clampPage fixed   (bug + fix)
- *   HEAD    pager.fixed.js    planted bug also fixed          (clean diff)
+ *   HEAD~1  pager.after.js    planted bug, clampPage fixed
+ *   HEAD    pager.fixed.js    both changes correct
+ *
+ * Three states, three distinct ranges, one per golden case — so no two review
+ * cases send the same prompt (`HEAD~2..HEAD~1` bug + fix, `HEAD~2..HEAD` clamp
+ * fix only, `HEAD~1..HEAD` pageCount fix only). Two cases sharing a range scored
+ * one answer twice: at temperature 0 the second call returned the first
+ * verbatim.
  */
 async function withFixtureRepo(fn) {
   const dir = await mkdtemp(path.join(os.tmpdir(), "wiserepo-eval-"));
@@ -203,6 +209,7 @@ async function withFixtureRepo(fn) {
     // golden case actually diffs.
     for (const range of [
       ["HEAD~2", "HEAD~1"],
+      ["HEAD~2", "HEAD"],
       ["HEAD~1", "HEAD"],
     ]) {
       if (!(await gitDiff(range)).trim()) {
