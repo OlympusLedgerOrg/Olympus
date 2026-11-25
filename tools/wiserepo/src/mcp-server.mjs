@@ -10,6 +10,14 @@ import { callModel, effectiveNumCtx, modelForTool, DEFAULT_OLLAMA_MODEL } from "
 import { verifyCitations, formatMissingCitations } from "./citations.mjs";
 import { readRepoFile, gitDiff, gitGrep, truncateText, wouldTruncate } from "./repo.mjs";
 import { getOlympusContext, getCircuitStatus, checkInvariants } from "./olympus.mjs";
+// The same module the router and the Qwen wrapper use. The local model never
+// gets to decide what it may read, so this is enforced here, at the one point
+// where content becomes a prompt, rather than in each entry point.
+import {
+  assertPathsAllowed,
+  extractDiffPaths,
+  extractGrepPaths,
+} from "../../agent-policy/policy.mjs";
 
 // Total context budget across every file/diff/grep a single tool call pulls
 // in, independent of the per-piece truncation each helper already applies.
@@ -164,7 +172,21 @@ export function orderFilesForQuestion(files, question) {
     .map((entry) => entry.file);
 }
 
-export async function gatherContext({ files = [], grep, diffArgs, question, model } = {}) {
+export async function gatherContext({
+  files = [],
+  grep,
+  diffArgs,
+  question,
+  model,
+  taskClass,
+} = {}) {
+  if (!taskClass) {
+    throw new Error("gatherContext requires a taskClass so the agent policy can be applied");
+  }
+  // Before the budget is derived (which probes the backend) and before any
+  // file is read: a refused path must cost nothing and must not be opened.
+  assertPathsAllowed(files, taskClass);
+
   if (files.length > MAX_FILES_PER_REQUEST) {
     throw new Error(
       `Requested ${files.length} files, wiserepo's per-request cap is ${MAX_FILES_PER_REQUEST} — narrow the list`,
@@ -178,12 +200,17 @@ export async function gatherContext({ files = [], grep, diffArgs, question, mode
 
   if (grep) {
     const hits = await gitGrep(grep);
+    // Grep hits carry their own paths, so an empty `files` list is not an
+    // empty request: without this, matching a denied file's contents would
+    // still put those lines in the prompt.
+    assertPathsAllowed(extractGrepPaths(hits), taskClass);
     const part = `## git grep "${grep}"\n\`\`\`\n${hits || "(no matches)"}\n\`\`\``;
     parts.push(part);
     runningChars += part.length;
   }
   if (diffArgs) {
     const diff = await gitDiff(diffArgs);
+    assertPathsAllowed(extractDiffPaths(diff), taskClass);
     const part = `## git diff ${diffArgs.join(" ")}\n\`\`\`diff\n${diff || "(empty diff)"}\n\`\`\``;
     parts.push(part);
     runningChars += part.length;
@@ -335,6 +362,7 @@ export async function runTool(name, args = {}, { onPrompt } = {}) {
       grep: args.grep,
       question: args.question,
       model,
+      taskClass: "qa",
     });
     const prompt = `${context ? context + "\n\n" : ""}Question: ${args.question}`;
     onPrompt?.({ system: SYSTEM_PROMPT, prompt, model });
@@ -344,6 +372,7 @@ export async function runTool(name, args = {}, { onPrompt } = {}) {
   if (name === "review_diff") {
     const diffArgs = args.diffArgs?.length ? args.diffArgs : ["HEAD"];
     const diff = await gitDiff(diffArgs);
+    assertPathsAllowed(extractDiffPaths(diff), "review");
     let standards = "";
     try {
       standards = await readRepoFile(AGENTS_MD);
@@ -383,7 +412,12 @@ export async function runTool(name, args = {}, { onPrompt } = {}) {
 
   if (name === "summarize") {
     const model = modelForTool("summarize");
-    const context = await gatherContext({ files: args.files, diffArgs: args.diffArgs, model });
+    const context = await gatherContext({
+      files: args.files,
+      diffArgs: args.diffArgs,
+      model,
+      taskClass: "summarize",
+    });
     const style = args.style || "one paragraph";
     const prompt = `Summarize the following as a ${style}.\n\n${context || "(no context provided)"}`;
     onPrompt?.({ system: SYSTEM_PROMPT, prompt, model });

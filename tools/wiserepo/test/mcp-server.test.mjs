@@ -16,24 +16,30 @@ import {
 // inspection. Importing this module does not hang on stdio — see the
 // import.meta.url-guarded bootstrap at the bottom of mcp-server.mjs.
 
+// A real, allowlisted, tens-of-KB file. The agent policy refuses AGENTS.md
+// along with everything else outside the prose/UI allowlist, so the budget
+// tests need a fixture the local model may actually be shown.
+const BIG_ALLOWED_FILE = "docs/court-evidence.md";
+const SUMMARIZE = { taskClass: "summarize" };
+
 test("gatherContext rejects a files array over the per-request cap", async () => {
-  const files = Array.from({ length: 41 }, () => "AGENTS.md");
-  await assert.rejects(() => gatherContext({ files }), /per-request cap is 40/);
+  const files = Array.from({ length: 41 }, () => BIG_ALLOWED_FILE);
+  await assert.rejects(() => gatherContext({ files, ...SUMMARIZE }), /per-request cap is 40/);
 });
 
 test("gatherContext accepts a files array at the cap", async () => {
-  const files = Array.from({ length: 40 }, () => "AGENTS.md");
-  // Should not throw the cap error; content is real AGENTS.md repeated 40x,
+  const files = Array.from({ length: 40 }, () => BIG_ALLOWED_FILE);
+  // Should not throw the cap error; the content is a real file repeated 40x,
   // so this also exercises the budget-truncation path below.
-  const result = await gatherContext({ files });
+  const result = await gatherContext({ files, ...SUMMARIZE });
   assert.equal(typeof result, "string");
 });
 
 test("gatherContext notes when the combined context budget is exceeded", async () => {
-  // AGENTS.md is tens of KB; repeating it is the cheapest way to blow past
+  // The fixture is tens of KB; repeating it is the cheapest way to blow past
   // the combined budget without needing a synthetic huge fixture file.
-  const files = Array.from({ length: 40 }, () => "AGENTS.md");
-  const result = await gatherContext({ files });
+  const files = Array.from({ length: 40 }, () => BIG_ALLOWED_FILE);
+  const result = await gatherContext({ files, ...SUMMARIZE });
   // Asserted as a shape, not a literal: the budget is derived from the model's
   // effective window, so a hardcoded number here would encode one machine's
   // model and fail on any other.
@@ -43,14 +49,18 @@ test("gatherContext notes when the combined context budget is exceeded", async (
 // The files that lost out used to vanish silently — the model answered from a
 // partial view and the caller had no way to know which file it never saw.
 test("gatherContext names the files it dropped for budget", async () => {
-  const files = Array.from({ length: 40 }, () => "AGENTS.md");
-  const result = await gatherContext({ files });
+  const files = Array.from({ length: 40 }, () => BIG_ALLOWED_FILE);
+  const result = await gatherContext({ files, ...SUMMARIZE });
   assert.match(result, /dropped \d+ file\(s\) that did not fit: /);
 });
 
 test("gatherContext with no files/grep/diffArgs returns an empty string, not an error", async () => {
-  const result = await gatherContext({});
+  const result = await gatherContext(SUMMARIZE);
   assert.equal(result, "");
+});
+
+test("gatherContext refuses to run without a task class", async () => {
+  await assert.rejects(() => gatherContext({}), /requires a taskClass/);
 });
 
 // The budget must leave room for the answer inside the same window; if it ever
