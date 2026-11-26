@@ -430,4 +430,4 @@ Climb only as far as the job needs, and stop at the first tier that can do it:
 - **`mid`** — implementation, debugging, test changes, ordinary review.
 - **`top`** — security, cryptography, hash/layout, migrations, authn/authz, proof verification, or a failed attempt at `mid`; the Critical Invariants decide what never leaves `top`.
 
-Local output is a draft until the repo's gates confirm it: run the checks for the packages you touched, and treat any behavioural claim as unverified until a direct read or a test confirms it. Escalate on the first failure at a tier instead of re-prompting it, and do not spend a paid call on what `git grep`, `graphify query`, or wiserepo has already answered.
+Local output is a draft until the repo's gates confirm it: `node tools/verify-gate/verify.mjs` runs the checks for whatever a change touched and stops at the first failure. Treat any behavioural claim as unverified until a direct read or a test confirms it. Escalate on the first failure at a tier instead of re-prompting it, and do not spend a paid call on what `git grep`, `graphify query`, or wiserepo has already answered.
