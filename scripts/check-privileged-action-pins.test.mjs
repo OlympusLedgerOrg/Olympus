@@ -95,7 +95,7 @@ steps:
   - run: rustup toolchain install nightly
 `;
   assert.deepEqual(mutableToolchainInputs(floating), [
-    "actions/setup-node must select exact reviewed Node.js 22.19.0",
+    "actions/setup-node must select exact reviewed Node.js 22.19.0 (or a documented per-job exception)",
     "dtolnay/rust-toolchain must select exact reviewed Rust 1.95.0",
     "taiki-e tool must include an exact version: cargo-llvm-cov",
     "cargo install must include --version: cargo install cargo-audit --locked",
@@ -190,6 +190,121 @@ test("recursively resolves local actions outside .github/actions with cycle prot
     assert.deepEqual(checkPrivilegedWorkflows(root), [
       "ci/action-b/action.yaml:4: vendor/action@main",
     ]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+const PINNED_NODE_ACTION = "actions/setup-node@0123456789abcdef0123456789abcdef01234567";
+
+const nodeJob = (nodeVersion) =>
+  [
+    "    steps:",
+    `      - uses: ${PINNED_NODE_ACTION}`,
+    "        with:",
+    `          node-version: "${nodeVersion}"`,
+    "",
+  ].join("\n");
+
+const NODE_EXCEPTION = {
+  workflow: ".github/workflows/tauri-release.yml",
+  job: "bundle-linux",
+  version: "20.19.0",
+  reason: "The bundled updater plugin needs Node 20 until #1234 lands.",
+};
+
+test("a per-job exception allows exactly one alternative Node version", () => {
+  const contents = `jobs:\n  bundle-linux:\n${nodeJob("20.19.0")}`;
+  const used = new Set();
+  assert.deepEqual(
+    mutableToolchainInputs(contents, {
+      workflow: NODE_EXCEPTION.workflow,
+      exceptions: [NODE_EXCEPTION],
+      used,
+    }),
+    [],
+  );
+  assert.equal(used.size, 1);
+});
+
+test("an exception does not leak to a sibling job or another workflow", () => {
+  const contents = `jobs:\n  bundle-linux:\n${nodeJob("20.19.0")}  bundle-windows:\n${nodeJob("20.19.0")}`;
+  const sameWorkflow = mutableToolchainInputs(contents, {
+    workflow: NODE_EXCEPTION.workflow,
+    exceptions: [NODE_EXCEPTION],
+  });
+  assert.equal(sameWorkflow.length, 1);
+  assert.match(sameWorkflow[0], /^job bundle-windows: /);
+  assert.match(sameWorkflow[0], /per-job exception/);
+
+  const otherWorkflow = mutableToolchainInputs(contents, {
+    workflow: ".github/workflows/ci.yml",
+    exceptions: [NODE_EXCEPTION],
+  });
+  assert.equal(otherWorkflow.length, 2);
+});
+
+test("an exception only permits its own exact version", () => {
+  const contents = `jobs:\n  bundle-linux:\n${nodeJob("20.18.0")}`;
+  const violations = mutableToolchainInputs(contents, {
+    workflow: NODE_EXCEPTION.workflow,
+    exceptions: [NODE_EXCEPTION],
+  });
+  assert.equal(violations.length, 1);
+});
+
+test("exceptions must name a workflow, a job, an exact version and a reason", () => {
+  const root = mkdtempSync(path.join(tmpdir(), "olympus-action-pins-"));
+  try {
+    mkdirSync(path.join(root, ".github/workflows"), { recursive: true });
+    writeFileSync(path.join(root, ".github/workflows/tauri-release.yml"), "jobs: {}\n");
+
+    const violations = checkPrivilegedWorkflows(root, {
+      exceptions: [
+        { ...NODE_EXCEPTION, reason: "because" },
+        { ...NODE_EXCEPTION, version: "20" },
+        { ...NODE_EXCEPTION, job: "  " },
+        { ...NODE_EXCEPTION, workflow: "../escape.yml" },
+      ],
+    });
+
+    assert.equal(violations.length, 4);
+    assert.ok(violations.some((violation) => /must state a reason/.test(violation)));
+    assert.ok(violations.some((violation) => /exact x\.y\.z version/.test(violation)));
+    assert.ok(violations.some((violation) => /must name a job id/.test(violation)));
+    assert.ok(violations.some((violation) => /must name a \.github\/workflows/.test(violation)));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("an exception whose job no longer diverges is a violation", () => {
+  const root = mkdtempSync(path.join(tmpdir(), "olympus-action-pins-"));
+  try {
+    mkdirSync(path.join(root, ".github/workflows"), { recursive: true });
+    writeFileSync(
+      path.join(root, ".github/workflows/tauri-release.yml"),
+      `jobs:\n  bundle-linux:\n${nodeJob("22.19.0")}`,
+    );
+
+    assert.deepEqual(checkPrivilegedWorkflows(root, { exceptions: [NODE_EXCEPTION] }), [
+      ".github/workflows/tauri-release.yml: node-version exception for job bundle-linux (20.19.0) no longer applies — that job is gone or pins 22.19.0",
+    ]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a matching exception passes the whole check", () => {
+  const root = mkdtempSync(path.join(tmpdir(), "olympus-action-pins-"));
+  try {
+    mkdirSync(path.join(root, ".github/workflows"), { recursive: true });
+    writeFileSync(
+      path.join(root, ".github/workflows/tauri-release.yml"),
+      `permissions:\n  contents: read\njobs:\n  bundle-linux:\n${nodeJob("20.19.0")}`,
+    );
+
+    assert.deepEqual(checkPrivilegedWorkflows(root, { exceptions: [NODE_EXCEPTION] }), []);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
