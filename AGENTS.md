@@ -192,9 +192,8 @@ implementation-critical conclusions against the source, tests and gates.
   symbol-scoped edits. No tier and no paid tokens, but it answers *where* a thing is
   defined and *who* references it, never whether the change is correct: confirm
   security-sensitive conclusions against the source, tests and gates like any other
-  aid. `.mcp.json` starts it through `tools/serena/bin/mcp-launcher.mjs`, which pins
-  the cwd to this checkout so `--project-from-cwd` cannot activate the wrong tree;
-  set `SERENA_BIN` when `serena` is not on the client's PATH.
+  aid. Installation, the launcher's cwd pinning, the `SERENA_BIN`/`SERENA_NODE`
+  knobs and the test's skip rule: `tools/serena/README.md`.
 
 `node tools/model-router/route.mjs "<task>" [--paths <path>]` names the tier and
 model; mechanics live with the tools — deny-set and path rules in
