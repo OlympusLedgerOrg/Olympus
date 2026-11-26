@@ -175,8 +175,8 @@ follow the installed Graphify instructions first.
 
 ## Agent and model routing
 
-Use the least expensive capable tool without sacrificing correctness. Wiserepo/Qwen
-and Graphify are analysis aids: verify security-sensitive or
+Use the least expensive capable tool without sacrificing correctness. Wiserepo/Qwen,
+Graphify and Serena are analysis aids: verify security-sensitive or
 implementation-critical conclusions against the source, tests and gates.
 
 - **`local`** — wiserepo/Qwen (`repo_qa`, `summarize`, `git grep`): discovery and
@@ -187,6 +187,14 @@ implementation-critical conclusions against the source, tests and gates.
 - **`top`** — security, cryptography, hash/layout, migrations, authn/authz, proof
   verification, destructive operations, or a failed `mid`. Confirm by reading the
   source and running tests; never delegate the verdict to the local model or graph.
+- **Serena** (`mcp__serena__*`, LSP-backed, no model) — symbol-level navigation
+  (`find_symbol`, `find_referencing_symbols`, `get_diagnostics_for_file`) and
+  symbol-scoped edits. No tier and no paid tokens, but it answers *where* a thing is
+  defined and *who* references it, never whether the change is correct: confirm
+  security-sensitive conclusions against the source, tests and gates like any other
+  aid. `.mcp.json` starts it through `tools/serena/bin/mcp-launcher.mjs`, which pins
+  the cwd to this checkout so `--project-from-cwd` cannot activate the wrong tree;
+  set `SERENA_BIN` when `serena` is not on the client's PATH.
 
 `node tools/model-router/route.mjs "<task>" [--paths <path>]` names the tier and
 model; mechanics live with the tools — deny-set and path rules in

@@ -4,6 +4,11 @@
       "type": "stdio",
       "command": "${WISEREPO_NODE:-node}",
       "args": ["tools/wiserepo/bin/mcp-launcher.mjs"]
+    },
+    "serena": {
+      "type": "stdio",
+      "command": "${SERENA_NODE:-node}",
+      "args": ["tools/serena/bin/mcp-launcher.mjs"]
     }
   }
 }
