@@ -2,6 +2,11 @@
 
 This file provides guidance to AI coding agents when working with code in this repository.
 
+`AGENTS.md` is the only agent-instructions document here. `CLAUDE.md` and
+`.github/copilot-instructions.md` are pointer stubs to it, and `context.json`
+holds machine-readable project facts rather than guidance — put new instructions
+in this file, never in a second copy.
+
 Current version: **v0.10.0** (June 2026).
 
 ## Repository analysis tooling

@@ -102,6 +102,7 @@ jobs:
             agent-docs:
               - 'AGENTS.md'
               - 'CLAUDE.md'
+              - '.github/copilot-instructions.md'
               # Forbidden instruction files: the job below FAILS if any of these
               # exist. They must select the filter too, or a PR that adds only
               # CODEX.md never runs the check that rejects it.
@@ -228,7 +229,22 @@ jobs:
               exit 1
             fi
           done
-          echo "OK: one instructions document; CLAUDE.md is a 1-line bridge."
+          # Copilot's instruction file is a pointer too. It shipped as a
+          # ~150-line second copy that had drifted behind AGENTS.md (v0.9.5,
+          # retired Python verifier paths). Keep it short and naming the
+          # authority so it cannot regrow into a summary unnoticed.
+          copilot=.github/copilot-instructions.md
+          test -f "$copilot" || { echo "$copilot is missing: it is the Copilot pointer to AGENTS.md"; exit 1; }
+          if ! grep -q 'AGENTS\.md' "$copilot"; then
+            echo "$copilot must point at AGENTS.md; guidance belongs there, not here."
+            exit 1
+          fi
+          nonblank=$(grep -c '[^[:space:]]' "$copilot" || true)
+          if [ "$nonblank" -gt 10 ]; then
+            echo "$copilot has $nonblank non-blank lines: it must stay a pointer (max 10), not a second copy."
+            exit 1
+          fi
+          echo "OK: one instructions document; CLAUDE.md and Copilot instructions are pointers."
 
       - name: Set up Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
