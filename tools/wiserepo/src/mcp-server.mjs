@@ -378,6 +378,12 @@ export async function runTool(name, args = {}, { onPrompt } = {}) {
       0,
       budgetCharsFor(await effectiveNumCtx(model)) - standards.length,
     );
+    if (diff.length > 0 && promptBudget === 0) {
+      throw new Error(
+        "review_diff has no context budget left for the diff; reduce AGENTS.md or request a narrower diff",
+      );
+    }
+    const diffWasTruncated = wouldTruncate(diff, promptBudget);
     const boundedDiff = truncateText(diff, promptBudget, "diff");
     const prompt =
       `Review this diff against the project's engineering standards below. ` +
@@ -397,11 +403,16 @@ export async function runTool(name, args = {}, { onPrompt } = {}) {
       `fix. Judge the code as it stands after the diff, and describe removed code as removed, ` +
       `never as current behaviour.\n\n` +
       (standards ? `## AGENTS.md (standards)\n\`\`\`\n${standards}\n\`\`\`\n\n` : "") +
-      `## Diff\n\`\`\`diff\n${boundedDiff || "(empty diff)"}\n\`\`\``;
+      `## Diff\n\`\`\`diff\n${boundedDiff || "(empty diff)"}\n\`\`\`` +
+      (diffWasTruncated
+        ? "\n\n[wiserepo: diff content was truncated to fit the model context; review only the supplied prefix or request a narrower diff]"
+        : "");
     onPrompt?.({ system: SYSTEM_PROMPT, prompt, model });
-    return withVerifiedCitations(
-      await callModel({ system: SYSTEM_PROMPT, prompt, maxTokens: 8192, model }),
-    );
+    const answer = await callModel({ system: SYSTEM_PROMPT, prompt, maxTokens: 8192, model });
+    const truncationNote = diffWasTruncated
+      ? "\n\n[wiserepo: diff content was truncated before model review; request a narrower diff for complete coverage]"
+      : "";
+    return withVerifiedCitations(answer + truncationNote);
   }
 
   if (name === "summarize") {
