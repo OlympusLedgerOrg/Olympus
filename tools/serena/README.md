@@ -32,11 +32,12 @@ to <repo>\.serena\project.yml`). `.serena/` is gitignored here.
 
 ## Knobs
 
-| Variable              | Default          | Meaning                                                                                       |
-| --------------------- | ---------------- | --------------------------------------------------------------------------------------------- |
-| `SERENA_BIN`          | `serena` on PATH | the Serena executable the launcher spawns                                                     |
-| `SERENA_NODE`         | `node`           | interpreter for the launcher; set it when a client's PATH lacks node (same as `WISEREPO_NODE`) |
-| `SERENA_PROJECT_ROOT` | this checkout    | overrides the pinned cwd; a relative value resolves against the caller's cwd                   |
+| Variable                   | Default          | Meaning                                                                                                 |
+| -------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------- |
+| `SERENA_BIN`               | `serena` on PATH | the Serena executable the launcher spawns                                                               |
+| `SERENA_NODE`              | `node`           | interpreter for the launcher; set it when a client's PATH lacks node (same as `WISEREPO_NODE`)          |
+| `SERENA_PROJECT_ROOT`      | this checkout    | overrides the pinned cwd; a relative value resolves against the caller's cwd                            |
+| `SERENA_REQUIRE_HANDSHAKE` | unset            | when set (any value but `0`/`false`), a run without `SERENA_BIN` fails instead of skipping; CI sets `1` |
 
 ## Why the launcher pins the cwd
 
@@ -67,5 +68,6 @@ argv, root-resolution and missing-binary tests always run. The live handshake
 test skips unless `SERENA_BIN` points at an installed Serena, so locally it
 runs only for a developer who has one. CI does not skip it: the
 `serena-handshake` job in `.github/workflows/ci.yml` installs `serena-agent`
-into a throwaway venv, exports `SERENA_BIN`, and runs this suite, so the
-handshake cannot rot behind a skip.
+into a throwaway venv, exports `SERENA_BIN`, sets `SERENA_REQUIRE_HANDSHAKE=1`,
+and runs this suite — so a job whose install went missing fails instead of
+reporting green with the handshake silently skipped.

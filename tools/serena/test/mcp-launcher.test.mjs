@@ -6,9 +6,10 @@
 // cwd-based project detection), the working directory it runs in, and the
 // failure mode when Serena is not installed.
 //
-// The handshake test is skipped unless SERENA_BIN points at a real executable,
-// because CI has no Python Serena install; the argv/cwd/error tests are not,
-// since they are the part that can silently regress.
+// The handshake test is skipped unless SERENA_BIN points at a real executable.
+// SERENA_REQUIRE_HANDSHAKE turns that skip into a failure; CI sets it, so a job
+// whose Serena install silently went missing cannot report a green suite that
+// never exercised the handshake. The argv/cwd/error tests never skip.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -23,6 +24,12 @@ import { resolveLaunchRoot, serenaArgs } from "../bin/mcp-launcher.mjs";
 
 const LAUNCHER = fileURLToPath(new URL("../bin/mcp-launcher.mjs", import.meta.url));
 const REPO_ROOT = path.resolve(fileURLToPath(new URL("../../..", import.meta.url)));
+const SERENA_BIN = process.env.SERENA_BIN;
+// Any value but empty/0/false requires the handshake, so a typo in the CI job's
+// "1" still demands it rather than quietly restoring the skip.
+const HANDSHAKE_REQUIRED = !["", "0", "false"].includes(
+  (process.env.SERENA_REQUIRE_HANDSHAKE ?? "").trim().toLowerCase(),
+);
 
 /**
  * Stop the launched server whether or not it is still running.
@@ -165,15 +172,60 @@ test(
 );
 
 test(
+  "a required handshake fails rather than skips when Serena is absent",
+  { timeout: 90_000 },
+  async () => {
+    // The CI job sets SERENA_REQUIRE_HANDSHAKE=1 precisely so a green run cannot
+    // mean "skipped". Prove the flag does that: run this file the way CI would,
+    // but with SERENA_BIN removed, and require a failing exit.
+    const env = { ...process.env, SERENA_REQUIRE_HANDSHAKE: "1" };
+    delete env.SERENA_BIN;
+    // Inherited from the runner running this very file: without removing it the
+    // child believes it is itself a test-runner child, refuses to run files and
+    // exits 0, which would make this check pass for the wrong reason.
+    delete env.NODE_TEST_CONTEXT;
+
+    const child = spawn(
+      process.execPath,
+      [
+        "--test",
+        "--test-name-pattern=launcher handshakes",
+        "tools/serena/test/mcp-launcher.test.mjs",
+      ],
+      { cwd: REPO_ROOT, env, stdio: ["ignore", "pipe", "pipe"] },
+    );
+    let output = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => (output += chunk));
+    child.stderr.on("data", (chunk) => (output += chunk));
+    const code = await new Promise((resolve, reject) => {
+      child.once("error", reject);
+      child.once("exit", resolve);
+    });
+
+    assert.equal(code, 1, `expected a failing run without Serena, got ${code}:\n${output}`);
+    assert.match(output, /SERENA_REQUIRE_HANDSHAKE/);
+  },
+);
+
+test(
   "launcher handshakes from a foreign cwd and exposes symbol tools",
   {
     timeout: 180_000,
     skip:
-      !process.env.SERENA_BIN || !existsSync(process.env.SERENA_BIN)
-        ? "SERENA_BIN is not set to an installed Serena executable"
+      !SERENA_BIN || !existsSync(SERENA_BIN)
+        ? HANDSHAKE_REQUIRED
+          ? false
+          : "SERENA_BIN is not set to an installed Serena executable"
         : false,
   },
   async () => {
+    assert.ok(
+      SERENA_BIN && existsSync(SERENA_BIN),
+      "SERENA_REQUIRE_HANDSHAKE is set but SERENA_BIN does not name an installed Serena executable",
+    );
+
     const child = spawn(
       process.execPath,
       // Dashboard and GUI log window off. The handshake is the MCP contract, and
@@ -185,7 +237,7 @@ test(
         // Deliberately NOT the repo: this is the cwd bug the launcher exists to
         // absorb (a client spawns the command in its own directory).
         cwd: os.tmpdir(),
-        env: { ...process.env, SERENA_BIN: process.env.SERENA_BIN },
+        env: { ...process.env, SERENA_BIN },
         stdio: ["pipe", "pipe", "ignore"],
       },
     );

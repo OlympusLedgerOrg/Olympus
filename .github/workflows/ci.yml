@@ -388,6 +388,10 @@ jobs:
           & "$venv\Scripts\serena.exe" --version
 
       - name: Run the launcher suite against the real server
+        env:
+          # Without this a missing SERENA_BIN would skip the handshake and the
+          # job would report success without ever starting a server.
+          SERENA_REQUIRE_HANDSHAKE: "1"
         run: pnpm serena:test
 
   # ── Static analysis (Semgrep) ────────────────────────────────────────────────
