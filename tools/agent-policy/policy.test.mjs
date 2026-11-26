@@ -14,6 +14,7 @@ import {
   extractDiffPaths,
   extractGrepPaths,
   extractPathMentions,
+  isCriticalPath,
   loadPolicy,
   modelFor,
   normalizeRepoPath,
@@ -214,51 +215,62 @@ describe("decideTask", () => {
     });
     assert.equal(decision.qwenAllowed, true);
     assert.equal(decision.tier, "local");
-    assert.equal(decision.allowed, true);
     assert.deepEqual(decision.deniedPaths, []);
   });
 
   it("refuses a protected path named only in the prose", () => {
-    const decision = decideTask(
-      { taskClass: "summarize", text: "summarize src-tauri/src/api/zk/mod.rs", policy },
+    const decision = decideTask({
+      taskClass: "summarize",
+      text: "summarize src-tauri/src/api/zk/mod.rs",
       policy,
-    );
+    });
     assert.equal(decision.qwenAllowed, false);
     assert.equal(decision.tier, "top");
     assert.equal(decision.deniedPaths.length, 1);
   });
 
   it("sends a denied non-critical path to the mid tier", () => {
-    const decision = decideTask(
-      { taskClass: "qa", paths: ["docs/adr/ADR-0030-redaction.md"], policy },
+    const decision = decideTask({
+      taskClass: "qa",
+      paths: ["docs/adr/ADR-0030-redaction.md"],
       policy,
-    );
+    });
     assert.equal(decision.qwenAllowed, false);
     assert.equal(decision.tier, "mid");
   });
 
   it("escalates on a protected concern even with allowed paths", () => {
-    const decision = decideTask(
-      { taskClass: "qa", paths: ["docs/architecture.md"], text: "explain the hash chain", policy },
+    const decision = decideTask({
+      taskClass: "qa",
+      paths: ["docs/architecture.md"],
+      text: "explain the hash chain",
       policy,
-    );
+    });
     assert.equal(decision.qwenAllowed, false);
     assert.equal(decision.tier, "top");
   });
 
   it("treats implementation work as paid work, not local work", () => {
-    const decision = decideTask({ text: "add a settings page to the UI", policy }, policy);
+    const decision = decideTask({ text: "add a settings page to the UI", policy });
     assert.equal(decision.qwenAllowed, false);
     assert.equal(decision.tier, "mid");
   });
 
   it("never lets prose grant local access to an unknown class", () => {
-    const decision = decideTask(
-      { taskClass: "made-up", text: "summarize docs/architecture.md", policy },
+    const decision = decideTask({
+      taskClass: "made-up",
+      text: "summarize docs/architecture.md",
       policy,
-    );
+    });
     assert.equal(decision.qwenAllowed, false);
     assert.equal(decision.tier, "mid");
+  });
+
+  it("names critical prefixes once, for both the refusal and the gate", () => {
+    assert.equal(isCriticalPath("crates/olympus-crypto/src/lib.rs"), true);
+    assert.equal(isCriticalPath("SRC-TAURI/src/main.rs"), true);
+    assert.equal(isCriticalPath("app/public-ui/src/App.tsx"), false);
+    assert.equal(isCriticalPath("../../etc/passwd"), false);
   });
 
   it("maps capability labels to model ids per client", () => {

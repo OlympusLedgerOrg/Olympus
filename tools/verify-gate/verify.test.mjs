@@ -13,7 +13,7 @@ const commandsFor = (plan, id) =>
       scope.commands.map((command) => `${command.cmd} ${command.args.join(" ")}`),
     );
 
-test("a documentation-only change has no package checks", () => {
+test("a documentation-only change runs only the tooling checks", () => {
   const plan = planVerification(["docs/architecture.md", "CHANGELOG.md"]);
   assert.deepEqual(
     plan.scopes.map((scope) => scope.id),

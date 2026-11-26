@@ -18,10 +18,9 @@
  * destination is loopback. Reusing it keeps one place to be right about both.
  */
 
-import { readFileSync, realpathSync } from "node:fs";
-import path from "node:path";
+import { readFileSync } from "node:fs";
 import process from "node:process";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
 
 import { logUsage } from "../agent-policy/log.mjs";
 import {
@@ -30,9 +29,9 @@ import {
   loadPolicy,
   modelFor,
   normalizeRepoPath,
+  refusalMessage,
 } from "../agent-policy/policy.mjs";
-
-export const REPO_ROOT = path.resolve(fileURLToPath(new URL("../..", import.meta.url)));
+import { resolveInRepoFollowingSymlinks } from "../wiserepo/src/repo.mjs";
 
 // Prompt ceilings in characters, not tokens: the ratio varies by file, but a
 // cap in the units actually measured is honest about what it enforces. Every
@@ -87,26 +86,22 @@ async function loadBackend() {
 /**
  * Read one repo file, refusing anything that escapes the repository.
  *
- * `normalizeRepoPath` already refuses absolute paths and `..`, but it also
- * lower-cases, which would break a read on a case-sensitive filesystem — so the
- * original spelling is used for the read and the realpath containment check is
- * what stops a repo-tracked symlink pointing at `~/.ssh/id_rsa`.
+ * `normalizeRepoPath` refuses absolute paths and `..` but also lower-cases,
+ * which would break a read on a case-sensitive filesystem — so the original
+ * spelling goes to wiserepo's `resolveInRepoFollowingSymlinks`, the realpath
+ * confinement its own tools use. Keeping one implementation matters: this is
+ * the check that stops a repo-tracked symlink to `~/.ssh/id_rsa` being read as
+ * though it were a repo file.
  */
-export function readRepoFile(rawPath, root = REPO_ROOT) {
+export async function readRepoFile(rawPath) {
   if (normalizeRepoPath(rawPath) === null) {
     throw new ToolError(`refusing to read "${rawPath}": not a plain repo-relative path`);
   }
-  const rootReal = realpathSync(root);
   let real;
   try {
-    real = realpathSync(path.resolve(root, rawPath));
+    real = await resolveInRepoFollowingSymlinks(rawPath);
   } catch (error) {
-    throw new ToolError(`cannot read "${rawPath}": ${error.code ?? error.message}`, {
-      cause: error,
-    });
-  }
-  if (real !== rootReal && !real.startsWith(rootReal + path.sep)) {
-    throw new ToolError(`refusing to read "${rawPath}": it resolves outside the repository`);
+    throw new ToolError(`cannot read "${rawPath}": ${error.message}`, { cause: error });
   }
   try {
     return readFileSync(real, "utf8");
@@ -121,9 +116,8 @@ export function readRepoFile(rawPath, root = REPO_ROOT) {
  * Decide whether this request may reach the local model, and which model.
  *
  * Uses `decideTask`, the same entry wiserepo's tools use, so path denials,
- * prose escalation, and unknown task classes all behave identically here. The
- * refusal message repeats the policy's instruction — escalate and read the file
- * directly — because it is usually an agent that reads it.
+ * prose escalation, and unknown task classes all behave identically here, and
+ * `refusalMessage` prints the same instruction those tools print.
  */
 export function planAsk({ question, paths = [], taskClass = "qa", policy = loadPolicy() }) {
   if (typeof question !== "string" || question.trim() === "") {
@@ -139,14 +133,11 @@ export function planAsk({ question, paths = [], taskClass = "qa", policy = loadP
   }
   const decision = decideTask({ taskClass, paths, text: question, policy });
   if (!decision.qwenAllowed) {
-    const listed = decision.deniedPaths.map((entry) => `${entry.path} (${entry.reason})`);
-    const detail =
-      listed.length > 0 ? `the local model may not see ${listed.join(", ")}` : decision.reason;
-    throw new PolicyError(
-      `agent policy: ${detail}. Read the file directly and continue with a paid tier; ` +
-        `do not retry, rephrase, or narrow the request to get around this refusal.`,
-      { taskClass, denied: decision.deniedPaths },
-    );
+    // Same sentence wiserepo's tools print, from the same function.
+    throw new PolicyError(refusalMessage(decision.deniedPaths, decision.reason), {
+      taskClass,
+      denied: decision.deniedPaths,
+    });
   }
   return {
     taskClass,
@@ -201,7 +192,9 @@ export function buildPrompt(question, files) {
  */
 export async function ask({ question, paths = [], taskClass = "qa", backend, plan }) {
   const decided = plan ?? planAsk({ question, paths, taskClass });
-  const files = paths.map((rawPath) => ({ path: rawPath, text: readRepoFile(rawPath) }));
+  const files = await Promise.all(
+    paths.map(async (rawPath) => ({ path: rawPath, text: await readRepoFile(rawPath) })),
+  );
   const built = buildPrompt(question, files);
   if (files.length > 0 && built.includedPaths.length === 0) {
     throw new ToolError(

@@ -30,7 +30,7 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { loadPolicy } from "../agent-policy/policy.mjs";
+import { isCriticalPath, loadPolicy } from "../agent-policy/policy.mjs";
 
 export const REPO_ROOT = path.resolve(fileURLToPath(new URL("../..", import.meta.url)));
 
@@ -165,7 +165,9 @@ export function planVerification(changedFiles, { fast = false, root = REPO_ROOT 
         if (!fast) commands.push({ cmd: "cargo", args: ["test", "-p", pkg] });
       }
     }
-    add("rust", [...rustFiles, ...(workspaceWide ? ["Cargo.toml"] : [])], commands);
+    // A root-manifest change has no files of its own to report, so name the
+    // manifest that caused the scope.
+    add("rust", rustFiles.length > 0 ? rustFiles : ["Cargo.toml"], commands);
   }
 
   const verifierRust = files.filter((file) => under(file, "verifiers/rust"));
@@ -291,10 +293,7 @@ export function planVerification(changedFiles, { fast = false, root = REPO_ROOT 
  * a failure is that the tier that produced the change did not finish it.
  */
 export function escalationTier(files, policy = loadPolicy()) {
-  const critical = files.some((file) =>
-    policy.criticalPrefixes.some((prefix) => file.toLowerCase().startsWith(prefix)),
-  );
-  return critical ? "top" : "mid";
+  return files.some((file) => isCriticalPath(file, policy)) ? "top" : "mid";
 }
 
 const quote = (arg) => (/[\s"]/.test(arg) ? `"${arg.replace(/"/g, '\\"')}"` : arg);

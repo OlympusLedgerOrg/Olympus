@@ -102,7 +102,7 @@ test("OLYMPUS_ROUTE_LOG=0 disables writing", () => {
   assert.throws(() => readFileSync(file, "utf8"));
 });
 
-test("an explicit path wins over the default, and the default is gitignored state", () => {
+test("an explicit path wins over the default, and the default lives under .olympus-logs", () => {
   const file = tempLog();
   assert.equal(logPath({ OLYMPUS_ROUTE_LOG_PATH: file }), file);
   assert.match(logPath({}), /\.olympus-logs[\\/]route-report\.jsonl$/);

@@ -82,9 +82,22 @@ describe("routeTask", () => {
   });
 
   it("never consults a model to decide routing", () => {
-    const result = routeTask({ task: "summarize docs/architecture.md" });
-    assert.equal(typeof result?.then, "undefined");
-    assert.equal(result.fallback.basis, "local discovery or explanation");
+    // Proves it rather than asserting a comment: if any code path reached for
+    // the daemon, the stubbed fetch would record the call.
+    const realFetch = global.fetch;
+    let calls = 0;
+    global.fetch = async () => {
+      calls += 1;
+      throw new Error("routing must not touch the network");
+    };
+    try {
+      const result = routeTask({ task: "summarize docs/architecture.md" });
+      assert.equal(result.tier, "local");
+      assert.equal(result.fallback.basis, "local discovery or explanation");
+    } finally {
+      global.fetch = realFetch;
+    }
+    assert.equal(calls, 0);
   });
 
   it("rejects an empty task", () => {

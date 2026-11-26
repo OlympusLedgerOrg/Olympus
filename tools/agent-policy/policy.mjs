@@ -213,6 +213,22 @@ export function decidePaths(rawPaths, taskClass, policy = loadPolicy()) {
 }
 
 /**
+ * The sentence every refusal shows the caller.
+ *
+ * Kept in one place because four entry points (wiserepo's MCP tools, its CLI,
+ * the router's report and the qwen-local wrapper) surface it; three
+ * paraphrases of "do not retry" would drift into three different promises.
+ */
+export function refusalMessage(denied = [], reason = "") {
+  const listed = denied.map((entry) => `${entry.path} (${entry.reason})`).join(", ");
+  const detail = listed.length > 0 ? `the local model may not see ${listed}` : reason;
+  return (
+    `agent policy: ${detail}. Read the file directly and continue with a paid tier; ` +
+    `do not retry, rephrase, or narrow the request to get around this refusal.`
+  );
+}
+
+/**
  * Throw a `PolicyError` when any path is refused.
  *
  * The message is written for an agent to read: it says what to do next
@@ -222,13 +238,7 @@ export function decidePaths(rawPaths, taskClass, policy = loadPolicy()) {
 export function assertPathsAllowed(rawPaths, taskClass, policy = loadPolicy()) {
   const { denied } = decidePaths(rawPaths, taskClass, policy);
   if (denied.length === 0) return;
-  const listed = denied.map((entry) => `${entry.path} (${entry.reason})`).join(", ");
-  throw new PolicyError(
-    `agent policy: the local model may not see ${listed}. ` +
-      `Read the file directly and continue with a paid tier; do not retry, rephrase, ` +
-      `or narrow the request to get around this refusal.`,
-    { taskClass, denied },
-  );
+  throw new PolicyError(refusalMessage(denied), { taskClass, denied });
 }
 
 /** Skill/task text that matches a protected concern. */
@@ -241,6 +251,18 @@ export function textEscalates(text, policy = loadPolicy()) {
 export function textIsCritical(text, policy = loadPolicy()) {
   if (typeof text !== "string" || !text) return false;
   return policy.criticalRe ? policy.criticalRe.test(text) : false;
+}
+
+/**
+ * Whether a path belongs to a critical subsystem.
+ *
+ * The one definition of that rule: it decides which tier a refusal escalates
+ * to, both in `decideTask` and in the verification gate's verdict.
+ */
+export function isCriticalPath(rawPath, policy = loadPolicy()) {
+  const normalized = normalizeRepoPath(rawPath);
+  if (normalized === null) return false;
+  return policy.criticalPrefixes.some((prefix) => normalized.startsWith(prefix));
 }
 
 /**
@@ -341,16 +363,13 @@ export function decideTask({
   const checks = candidates.map((candidate) =>
     knownClass ? decidePath(candidate, taskClass, policy) : checkPath(candidate, policy),
   );
-  const allowed = checks.filter((entry) => entry.allowed).map((entry) => entry.path);
   const denied = checks
     .filter((entry) => !entry.allowed)
     .map((entry) => ({ path: entry.path, reason: entry.reason }));
 
   const escalatedByText = textEscalates(text, policy);
   const criticalByText = textIsCritical(text, policy);
-  const criticalByPath = denied.some((entry) =>
-    policy.criticalPrefixes.some((prefix) => entry.path.toLowerCase().startsWith(prefix)),
-  );
+  const criticalByPath = denied.some((entry) => isCriticalPath(entry.path, policy));
 
   let tier;
   let reason;
@@ -381,16 +400,7 @@ export function decideTask({
     reason = "allowlisted task class and paths";
   }
 
-  return {
-    taskClass,
-    qwenAllowed,
-    allowed: qwenAllowed,
-    tier,
-    reason,
-    deniedPaths: denied,
-    allowedPaths: allowed,
-    escalated: !qwenAllowed,
-  };
+  return { qwenAllowed, tier, reason, deniedPaths: denied };
 }
 
 /** Model id for a client and tier, from the policy table. */

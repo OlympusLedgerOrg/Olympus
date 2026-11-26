@@ -70,7 +70,10 @@ test("paths that are absolute or climb out are refused, not resolved", () => {
       () => planAsk({ question: "summarize this", paths: [path] }),
       (error) => {
         assert.ok(error instanceof PolicyError, `${path} must be a policy refusal`);
-        assert.match(error.message, /could not be normalized|denied|allowlist/);
+        // The reason, not just a refusal: an unrelated failure (a read error,
+        // a typo'd class) must not be able to satisfy this test.
+        assert.match(error.message, /could not be normalized/);
+        assert.equal(error.denied.length, 1);
         return true;
       },
     );
@@ -123,18 +126,20 @@ test("ask sends the file body and the question to the model it planned for", asy
   assert.match(request.prompt, /Question: what is this repo\?/);
 });
 
-test("ask refuses before reading anything when the policy says no", async () => {
+test("ask refuses on the policy before reading anything", async () => {
   const backend = stubBackend();
+  // The path deliberately does not exist: a read-first implementation would
+  // fail with ToolError ("cannot read"), so PolicyError proves the ordering.
   await assert.rejects(
-    () => ask({ question: "review this", paths: ["src-tauri/src/main.rs"], backend }),
+    () => ask({ question: "review this", paths: ["src-tauri/definitely-missing.rs"], backend }),
     PolicyError,
   );
   assert.equal(backend.calls.length, 0);
 });
 
-test("readRepoFile refuses a path outside the repo", () => {
-  assert.throws(() => readRepoFile("../../etc/passwd"), ToolError);
-  assert.throws(() => readRepoFile("/etc/passwd"), ToolError);
+test("readRepoFile refuses a path outside the repo", async () => {
+  await assert.rejects(() => readRepoFile("../../etc/passwd"), ToolError);
+  await assert.rejects(() => readRepoFile("/etc/passwd"), ToolError);
 });
 
 test("--check prints the plan and never calls the model", async () => {
