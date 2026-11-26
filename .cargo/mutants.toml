@@ -30,5 +30,5 @@
 # mutant is silently Unviable and the body-replacement / operator
 # mutants from those crates' own viable surface still cover them.
 error_values = [
-    "crate::zk::prove::ProveError::WitnessInvalid(String::from(\"mutated\"))",
+  "crate::zk::prove::ProveError::WitnessInvalid(String::from(\"mutated\"))",
 ]

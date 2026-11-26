@@ -7,8 +7,8 @@
     "format:check": "pnpm format:prettier:check && pnpm format:toml:check",
     "format:prettier": "prettier --write \"**/*.{js,mjs,cjs,ts,tsx,json,css,yml,yaml}\"",
     "format:prettier:check": "prettier --check \"**/*.{js,mjs,cjs,ts,tsx,json,css,yml,yaml}\"",
-    "format:toml": "taplo format",
-    "format:toml:check": "taplo format --check",
+    "format:toml": "node scripts/taplo.mjs format",
+    "format:toml:check": "node scripts/taplo.mjs format --check",
     "license:headers": "node scripts/check-license-headers.mjs",
     "license:headers:update-baseline": "node scripts/check-license-headers.mjs --update-baseline",
     "license:headers:test": "node --test scripts/check-license-headers.test.mjs",
@@ -27,7 +27,6 @@
     "tooling:check": "pnpm format:check && pnpm license:headers && pnpm license:headers:test && pnpm qwen-local:test && pnpm verify-gate:test && pnpm route-log:test && pnpm route-report:test && pnpm release-actions:check && pnpm release-actions:test && pnpm release-assets:test && pnpm preview-channel:check && pnpm preview-channel:test && pnpm hooks:test && pnpm pr-scope:test && pnpm gate-integrity:test"
   },
   "devDependencies": {
-    "@taplo/cli": "^0.7.0",
     "prettier": "^3.9.6",
     "eslint": "^9.39.5",
     "js-yaml": "^5.2.3"
