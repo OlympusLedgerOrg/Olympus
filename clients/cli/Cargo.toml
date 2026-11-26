@@ -25,7 +25,9 @@ server = [ "dep:reqwest" ]
 
 [dependencies]
 olympus-manifest = { path = "../../crates/olympus-manifest" }
-olympus-crypto = { path = "../../crates/olympus-crypto", features = ["snapshot"] }
+olympus-crypto = { path = "../../crates/olympus-crypto", features = [
+  "snapshot",
+] }
 blake3 = "1"
 hex = "0.4"
 serde = { version = "1", features = [ "derive" ] }

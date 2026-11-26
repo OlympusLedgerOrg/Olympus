@@ -13,7 +13,10 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = { version = "0.4", features = [ "arbitrary-derive" ] }
 arbitrary = { version = "1", features = [ "derive" ] }
-olympus-crypto = { path = "../crates/olympus-crypto", features = [ "smt", "signature-envelope" ] }
+olympus-crypto = { path = "../crates/olympus-crypto", features = [
+  "smt",
+  "signature-envelope",
+] }
 serde_json = "1"
 
 # libfuzzer needs to unwind on crashes (the workspace excludes this crate, so it

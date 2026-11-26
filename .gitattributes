@@ -30,4 +30,10 @@ proofs/zkvm/canonicalization/*.id text eol=lf
 *.json text eol=lf
 *.md text eol=lf
 *.css text eol=lf
+# TOML is normalised to LF on every platform. taplo emits LF, so a CRLF working
+# tree makes `taplo format --check` (format:toml:check) fail on bytes that are
+# identical in the index and on CI. Without this rule a Windows checkout hands
+# taplo CRLF files while a Linux checkout hands it LF ones, and the gate's
+# result depends on the platform rather than on the file.
+*.toml text eol=lf
 .gitattributes text eol=lf
