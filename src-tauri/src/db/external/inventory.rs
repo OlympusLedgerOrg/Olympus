@@ -57,11 +57,24 @@ use sqlx::postgres::PgConnection;
 /// `f4a75b468899d53e052916b79c160b03b64348388fd301740e00eca695cffb2d` (itself
 /// set by `0062_shards_checkpoint_quorum_threshold`, 683 -> 685; reproduced
 /// exactly against the pre-0063 migration set as the regeneration protocol's
-/// control run). Regenerated 2026-08-15 by applying the full migration set
-/// against a real PostgreSQL 16 database and running
-/// `regen_semantic_inventory_digest` — see the ignored maintenance test below.
+/// control run).
+///
+/// Regenerated 2026-11-26 with the documented helper against the verified
+/// **PostgreSQL 15.16** embedded package (`pg-embed-local`'s `PG_V15`):
+/// `OLYMPUS_INVENTORY_REGEN_URL=… cargo test -p olympus-desktop --lib
+/// regen_semantic_inventory_digest -- --ignored --nocapture` reported 747
+/// inventory rows and produced this value. 15 is the only major the runtime
+/// accepts: both `validate_external_pg_migration_maintenance_authority` and
+/// `validate_external_pg_session` require `150_000..160_000`. The 2026-08-15
+/// value, `8bf342fb06f1dfd29270d93b92ba70fa928b237cb93c15406ae9123b6985a668`,
+/// was regenerated on PostgreSQL 16, so a permitted PostgreSQL 15 deployment
+/// could never match it: `connect_external` failed the post-migration
+/// closed-catalog probe at startup, and `api_db external_pg_roles` failed the
+/// same probe on its embedded 15.16 fixture. The row count is unchanged at
+/// 747, which dates the difference to PostgreSQL-major catalog text rather
+/// than migration drift.
 const EXTERNAL_PG_SEMANTIC_INVENTORY_BLAKE3: &str =
-    "8bf342fb06f1dfd29270d93b92ba70fa928b237cb93c15406ae9123b6985a668";
+    "286d9af7c2a2f04c217070d900d55fb6afb08b9c505d990082c91894a4ebaf40";
 
 #[derive(Clone, Debug, PartialEq, Eq, sqlx::FromRow)]
 pub(super) struct ExternalPgTrustedBoundaryProbe {
