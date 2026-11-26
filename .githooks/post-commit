@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Keep the local Graphify knowledge graph current after each commit.
+# This hook is best-effort: graph maintenance must never make a completed
+# commit appear to fail.
+
+set -u
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+
+GRAPHIFY_BIN="$(command -v graphify 2>/dev/null || true)"
+if [ -z "$GRAPHIFY_BIN" ] && [ -x "$HOME/.local/bin/graphify.exe" ]; then
+    GRAPHIFY_BIN="$HOME/.local/bin/graphify.exe"
+fi
+
+if [ -z "$GRAPHIFY_BIN" ]; then
+    echo "[post-commit] graphify not found; graphify-out/ was not updated." >&2
+    exit 0
+fi
+
+if "$GRAPHIFY_BIN" update .; then
+    echo "[post-commit] Graphify graph updated."
+else
+    echo "[post-commit] Graphify update failed; commit was kept." >&2
+fi
+
+exit 0
