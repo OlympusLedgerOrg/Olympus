@@ -27,6 +27,7 @@ export const GATE_PATHS = [
   "scripts/check-gate-integrity.test.mjs",
   "scripts/check-pr-scope.mjs",
   "scripts/check-pr-scope.test.mjs",
+  "tools/agent-policy/policy.json",
 ];
 
 export const REQUIRED_LABEL = "gate-change-approved";
