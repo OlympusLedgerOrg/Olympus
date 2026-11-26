@@ -60,6 +60,23 @@ costs one escalation, while a false allow is the failure this file exists to
 prevent. Add a narrower `allow` entry only if a real file is blocked and is
 provably not crypto-adjacent.
 
+## Logging
+
+`log.mjs` appends one JSON object per line to `.olympus-logs/route-report.jsonl`
+(gitignored): a `route` record for each decision `route.mjs` makes, and a
+`usage` record for each local call, carrying Ollama's own `prompt_eval_count` /
+`eval_count`. A hosted model's billing is not visible from here, so the log
+records which tier was chosen rather than inventing a token count for it.
+
+```bash
+python tools/agent-policy/route_report.py          # counts per tier, local tokens
+python tools/agent-policy/route_report.py --json
+```
+
+`OLYMPUS_ROUTE_LOG=0` disables writing; `OLYMPUS_ROUTE_LOG_PATH` overrides the
+file, which is what the tests use. A failed write is a warning on stderr, never
+a failed task.
+
 ## Model table
 
 `models` maps the client-agnostic tier (`local`, `mid`, `top`) to the model id

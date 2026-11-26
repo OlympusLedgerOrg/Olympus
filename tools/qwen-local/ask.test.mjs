@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import assert from "node:assert/strict";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import test from "node:test";
 
 import { PolicyError } from "../agent-policy/policy.mjs";
@@ -152,6 +155,47 @@ test("--check prints the plan and never calls the model", async () => {
   const plan = JSON.parse(printed);
   assert.equal(plan.allowed, true);
   assert.equal(plan.tier, "local");
+});
+
+test("ask reports the token counts the backend forwarded", async () => {
+  const backend = {
+    callModel: async ({ onStats }) => {
+      onStats({ promptTokens: 120, completionTokens: 7, doneReason: "stop" });
+      return "ok";
+    },
+  };
+  const result = await ask({ question: "what is this repo?", paths: ["README.md"], backend });
+  assert.deepEqual(result.tokens, { promptTokens: 120, completionTokens: 7, doneReason: "stop" });
+  assert.equal(typeof result.durationMs, "number");
+});
+
+test("a successful call appends one usage record", async () => {
+  const logFile = path.join(mkdtempSync(path.join(tmpdir(), "qwen-log-")), "log.jsonl");
+  const previous = process.env.OLYMPUS_ROUTE_LOG_PATH;
+  process.env.OLYMPUS_ROUTE_LOG_PATH = logFile;
+  const backend = {
+    callModel: async ({ onStats }) => {
+      onStats({ promptTokens: 10, completionTokens: 2, doneReason: "stop" });
+      return "answer";
+    },
+  };
+  const original = process.stdout.write;
+  process.stdout.write = () => true;
+  try {
+    assert.equal(await main(["-f", "README.md", "what is this repo?"], { backend }), 0);
+  } finally {
+    process.stdout.write = original;
+    if (previous === undefined) delete process.env.OLYMPUS_ROUTE_LOG_PATH;
+    else process.env.OLYMPUS_ROUTE_LOG_PATH = previous;
+  }
+  const records = readFileSync(logFile, "utf8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  assert.equal(records.length, 1);
+  assert.equal(records[0].kind, "usage");
+  assert.equal(records[0].promptTokens, 10);
+  assert.deepEqual(records[0].files, ["README.md"]);
 });
 
 test("a refusal exits 3 so a caller can tell it apart from a crash", async () => {

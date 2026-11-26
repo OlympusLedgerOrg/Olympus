@@ -349,6 +349,21 @@ function extractCompletion(data) {
   return text;
 }
 
+// Ollama reports the token counts itself, on the final stream event (or the
+// single body when stream:false). Passing them out is what makes a local call
+// measurable: without this, "the local tier spent 1,200 prompt tokens" would be
+// an estimate derived from character counts, and an estimate in a cost log is
+// indistinguishable from a measurement once it is written down.
+const tokenCount = (value) => (Number.isInteger(value) && value >= 0 ? value : null);
+
+function statsFromEvent(event) {
+  return {
+    promptTokens: tokenCount(event?.prompt_eval_count),
+    completionTokens: tokenCount(event?.eval_count),
+    doneReason: typeof event?.done_reason === "string" ? event.done_reason : null,
+  };
+}
+
 /**
  * Turn an NDJSON completion into text.
  *
@@ -358,10 +373,11 @@ function extractCompletion(data) {
  * fetch stub in tests has no `body` stream, so that case falls back to parsing
  * a single JSON object — the same shape the daemon returns for stream:false.
  */
-async function readCompletion(res, provider, onProgress) {
+async function readCompletion(res, provider, onProgress, onStats) {
   if (!res.body) {
-    const text = await res.text();
-    return extractCompletion(parseJsonBody(text, provider));
+    const parsed = parseJsonBody(await res.text(), provider);
+    onStats?.(statsFromEvent(parsed));
+    return extractCompletion(parsed);
   }
 
   const decoder = new TextDecoder();
@@ -378,7 +394,11 @@ async function readCompletion(res, provider, onProgress) {
       content += piece;
       onProgress?.(content.length);
     }
-    return event.done === true;
+    if (event.done === true) {
+      onStats?.(statsFromEvent(event));
+      return true;
+    }
+    return false;
   };
 
   for await (const chunk of res.body) {
@@ -490,7 +510,9 @@ export async function effectiveNumCtx(model = DEFAULT_OLLAMA_MODEL) {
 
 /**
  * @param {{ system?: string, prompt: string, maxTokens?: number, temperature?: number,
- *           timeoutMs?: number, model?: string, onProgress?: (chars: number) => void }} args
+ *           timeoutMs?: number, model?: string, onProgress?: (chars: number) => void,
+ *           onStats?: (stats: {promptTokens: number|null, completionTokens: number|null,
+ *                               doneReason: string|null}) => void }} args
  * @returns {Promise<string>}
  */
 export async function callModel({
@@ -501,6 +523,7 @@ export async function callModel({
   timeoutMs,
   model = DEFAULT_OLLAMA_MODEL,
   onProgress = defaultProgressReporter(),
+  onStats,
 }) {
   const url = `${ollamaBaseUrl().replace(/\/+$/, "")}/api/chat`;
   const options = {
@@ -537,7 +560,7 @@ export async function callModel({
       if (!res.ok) {
         throw classifyHttpFailure(res.status, await res.text(), { model });
       }
-      return readCompletion(res, "Ollama", onProgress);
+      return readCompletion(res, "Ollama", onProgress, onStats);
     },
   );
 }

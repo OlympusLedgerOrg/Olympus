@@ -23,6 +23,7 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import { logUsage } from "../agent-policy/log.mjs";
 import {
   PolicyError,
   decideTask,
@@ -209,16 +210,25 @@ export async function ask({ question, paths = [], taskClass = "qa", backend, pla
     );
   }
   const client = backend ?? (await loadBackend());
+  const startedAt = Date.now();
+  // Ollama reports the token counts on its final event; the backend forwards
+  // them here so a call can be recorded as measured, not estimated.
+  let tokens = null;
   const answer = await client.callModel({
     system: SYSTEM_PROMPT,
     prompt: built.prompt,
     model: decided.model,
+    onStats: (stats) => {
+      tokens = stats;
+    },
   });
   return {
     ...decided,
     answer,
     includedPaths: built.includedPaths,
     droppedPaths: built.droppedPaths,
+    tokens,
+    durationMs: Date.now() - startedAt,
   };
 }
 
@@ -281,6 +291,19 @@ export async function main(argv = process.argv.slice(2), { backend } = {}) {
       );
     } else {
       process.stdout.write(result.answer.endsWith("\n") ? result.answer : `${result.answer}\n`);
+    }
+    try {
+      logUsage({
+        model: result.model,
+        taskClass: result.taskClass,
+        files: result.includedPaths,
+        promptTokens: result.tokens?.promptTokens ?? null,
+        completionTokens: result.tokens?.completionTokens ?? null,
+        durationMs: result.durationMs,
+      });
+    } catch (error) {
+      // A full disk must not discard an answer that already cost minutes.
+      process.stderr.write(`qwen-local: could not write the usage log: ${error.message}\n`);
     }
     return 0;
   } catch (error) {

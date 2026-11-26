@@ -23,6 +23,7 @@
 
 import { pathToFileURL } from "node:url";
 
+import { logRoute } from "../agent-policy/log.mjs";
 import { decideTask, extractPathMentions, loadPolicy, modelFor } from "../agent-policy/policy.mjs";
 
 export const USAGE = `Usage: node tools/model-router/route.mjs [options] "task description"
@@ -250,6 +251,12 @@ async function main() {
     return 1;
   }
   if (options.probe) result.ollama = await probeLocalModel();
+  // A failed write must not fail the routing decision the caller asked for.
+  try {
+    logRoute(result);
+  } catch (error) {
+    process.stderr.write(`model-router: could not write the route log: ${error.message}\n`);
+  }
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   return 0;
 }

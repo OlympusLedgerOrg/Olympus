@@ -431,3 +431,5 @@ Climb only as far as the job needs, and stop at the first tier that can do it:
 - **`top`** — security, cryptography, hash/layout, migrations, authn/authz, proof verification, or a failed attempt at `mid`; the Critical Invariants decide what never leaves `top`.
 
 Local output is a draft until the repo's gates confirm it: `node tools/verify-gate/verify.mjs` runs the checks for whatever a change touched and stops at the first failure. Treat any behavioural claim as unverified until a direct read or a test confirms it. Escalate on the first failure at a tier instead of re-prompting it, and do not spend a paid call on what `git grep`, `graphify query`, or wiserepo has already answered.
+
+`tools/agent-policy/log.mjs` appends one JSON line per routing decision and per local call to `.olympus-logs/route-report.jsonl` (gitignored), and `python tools/agent-policy/route_report.py` reads it back. It records the tier that was chosen and the local model's measured token counts; a hosted model's billing is not visible from this repo, so no token number is invented for it.

@@ -258,6 +258,37 @@ test("callModel POSTs the documented Ollama /api/chat request shape", async () =
   assert.equal(sent.options.temperature, 0);
 });
 
+test("callModel reports Ollama's token counts to onStats", async () => {
+  const seen = [];
+  const streaming = () => ({
+    ok: true,
+    status: 200,
+    text: async () => "",
+    body: (async function* () {
+      yield Buffer.from(JSON.stringify({ message: { content: "he" }, done: false }) + "\n");
+      yield Buffer.from(
+        JSON.stringify({
+          message: { content: "llo" },
+          done: true,
+          prompt_eval_count: 1234,
+          eval_count: 56,
+          done_reason: "stop",
+        }) + "\n",
+      );
+    })(),
+  });
+  const { result } = await withStubbedFetch(
+    (entry) =>
+      entry.url.endsWith("/api/chat")
+        ? streaming()
+        : { ok: false, status: 500, text: async () => "" },
+    () => callModel({ prompt: "p", onStats: (stats) => seen.push(stats) }),
+  );
+
+  assert.equal(result, "hello");
+  assert.deepEqual(seen, [{ promptTokens: 1234, completionTokens: 56, doneReason: "stop" }]);
+});
+
 test("callModel keeps the model resident between calls", async () => {
   const { calls } = await withStubbedFetch(okResponse({ message: { content: "x" } }), () =>
     callModel({ prompt: "p" }),
