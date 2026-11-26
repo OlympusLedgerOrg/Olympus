@@ -191,7 +191,7 @@ will drift. Mitigate three ways:
    `preflight` a `workflow_call` target and invoke it — not to copy its steps.
 2. **Extract two composite actions** used by both workflows, so the shared setup
    cannot drift: `.github/actions/setup-build-toolchain` (Rust 1.95.0 + pnpm +
-   Node 22.14.0 + Linux deps + Windows OpenSSL) and
+   Node 22.19.0 + Linux deps + Windows OpenSSL) and
    `.github/actions/generate-sboms` (cargo-cyclonedx + pnpm sbom + the `jq -e`
    shape check). Both are lifted verbatim from `tauri-release.yml`; adopting them
    there is a **separate, later, no-behaviour-change PR** so the preview work

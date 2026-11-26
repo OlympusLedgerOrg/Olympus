@@ -233,11 +233,12 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          # 22.19.0, not the 22.14.0 the other jobs pin: tools/wiserepo's
-          # engines field requires >=22.19.0 and undici@8.13.1 calls
-          # zstd.createZstdDecompress (added in 22.15). On 22.14 every test
-          # file that imports backend.mjs dies at import with
+          # tools/wiserepo's engines field requires >=22.19.0 and undici@8.13.1
+          # calls zstd.createZstdDecompress (added in 22.15). On 22.14 every
+          # test file that imports backend.mjs dies at import with
           # "TypeError: Cannot read properties of undefined (reading 'bind')".
+          # That is why 22.19.0 is the reviewed pin for every job, not just
+          # this one — the rest of the repo used to sit on 22.14.0.
           node-version: "22.19.0"
           cache: npm
           cache-dependency-path: tools/wiserepo/package-lock.json
@@ -267,7 +268,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "22.14.0"
+          node-version: "22.19.0"
           cache: pnpm
 
       - name: Install dependencies
@@ -562,7 +563,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "22.14.0"
+          node-version: "22.19.0"
 
       - name: Install + run JS verifier conformance tests
         working-directory: verifiers/javascript
@@ -670,7 +671,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "22.14.0"
+          node-version: "22.19.0"
           cache: npm
           cache-dependency-path: proofs/package-lock.json
 
@@ -1198,7 +1199,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "22.14.0"
+          node-version: "22.19.0"
           cache: npm
           cache-dependency-path: proofs/package-lock.json
 
@@ -1375,7 +1376,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "22.14.0"
+          node-version: "22.19.0"
 
       # pnpm is the source-of-truth package manager for the app/public-ui
       # workspace; `pnpm audit` (below) reads pnpm-lock.yaml + the
@@ -1763,7 +1764,7 @@ jobs:
       - name: Set up Node.js (for ceremony npm tooling)
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "22.14.0"
+          node-version: "22.19.0"
 
       - name: ZK ceremony artifacts (cached)
         uses: ./.github/actions/zk-ceremony-artifacts
@@ -1943,7 +1944,7 @@ jobs:
       - name: Set up Node.js (for ceremony npm tooling)
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "22.14.0"
+          node-version: "22.19.0"
 
       - name: ZK ceremony artifacts (cached)
         uses: ./.github/actions/zk-ceremony-artifacts
@@ -2005,7 +2006,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "22.14.0"
+          node-version: "22.19.0"
           cache: pnpm
 
       - name: Install dependencies
