@@ -216,15 +216,29 @@ test("review_diff reports omitted input even when the model does not mention it"
     );
   });
 
-  const review = () => runTool("review_diff", { diffArgs: ["--cached"] });
+  let reviewPrompt;
+  const review = () =>
+    runTool(
+      "review_diff",
+      { diffArgs: ["--cached"] },
+      {
+        onPrompt: ({ prompt }) => {
+          reviewPrompt = prompt;
+        },
+      },
+    );
   stage("Small change\n");
   assert.equal(await review(), "Model answer");
+  assert.doesNotMatch(reviewPrompt, /partial diff/);
 
   stage("Start of diff\n" + "Long line for the fixture\n".repeat(1000) + "End of diff\n");
   assert.match(
     await review(),
     /^\[wiserepo: partial review .*omitted \d+ of \d+ diff chars.*\]\n\nModel answer$/,
   );
+
+  assert.match(reviewPrompt, /partial diff; review only the supplied prefix/);
+  assert.doesNotMatch(reviewPrompt, /End of diff/);
 
   writeFileSync(join(root, "AGENTS.md"), "Standards\n".repeat(2000));
   await assert.rejects(review, /No diff content fits in the model context/);

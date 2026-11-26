@@ -400,21 +400,30 @@ export async function runTool(name, args = {}, { onPrompt } = {}) {
       `are code it ADDS, and a \`-\`/\`+\` pair at one position is a single change to read as a ` +
       `fix. Judge the code as it stands after the diff, and describe removed code as removed, ` +
       `never as current behaviour.\n\n` +
-      (standards ? `## AGENTS.md (standards)\n\`\`\`\n${standards}\n\`\`\`\n\n` : "") +
-      "## Diff\n```diff\n";
-    const promptEnd = "\n```";
-    const diffBudget = Math.min(
-      DEFAULT_DIFF_MAX_CHARS,
+      (standards ? `## AGENTS.md (standards)\n\`\`\`\n${standards}\n\`\`\`\n\n` : "");
+    const diffStart = "## Diff\n```diff\n";
+    const diffEnd = "\n```";
+    const contextBudget =
       budgetCharsFor(await effectiveNumCtx(model)) -
-        SYSTEM_PROMPT.length -
-        promptStart.length -
-        promptEnd.length,
-    );
+      SYSTEM_PROMPT.length -
+      promptStart.length -
+      diffStart.length -
+      diffEnd.length;
+    const partialNote = wouldTruncate(
+      diff,
+      Math.max(0, Math.min(DEFAULT_DIFF_MAX_CHARS, contextBudget)),
+    )
+      ? "[wiserepo: partial diff; review only the supplied prefix]\n\n"
+      : "";
+    const diffBudget = Math.min(DEFAULT_DIFF_MAX_CHARS, contextBudget - partialNote.length);
     if (diff && diffBudget <= 0) {
-      throw new Error("No diff content fits in the model context; use a larger context window");
+      throw new Error(
+        "No diff content fits in the model context; use a larger context window or shorten AGENTS.md",
+      );
     }
     const boundedDiff = diff.slice(0, Math.max(0, diffBudget));
-    const prompt = promptStart + (boundedDiff || "(empty diff)") + promptEnd;
+    const prompt =
+      promptStart + partialNote + diffStart + (boundedDiff || "(empty diff)") + diffEnd;
     onPrompt?.({ system: SYSTEM_PROMPT, prompt, model });
     const answer = await withVerifiedCitations(
       await callModel({ system: SYSTEM_PROMPT, prompt, maxTokens: 8192, model }),
