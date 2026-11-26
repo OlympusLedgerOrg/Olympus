@@ -418,3 +418,16 @@ Use the least expensive capable tool, but do not sacrifice correctness on securi
 - If a task can be completed with local tools, do that before using a metered hosted model. If the task requires implementation or high-confidence review, say why Codex or Claude is warranted.
 - Subscription access and API access are separate. A ChatGPT/Codex subscription does not automatically provide an OpenAI API key, and an Anthropic subscription does not automatically provide an Anthropic API key. Do not configure paid API usage or credits without explicit user authorization.
 - When a task-routing recommendation is useful, run `node tools/model-router/route.mjs "<task>"`. Treat its output as a recommendation: the hard-coded safety rules take precedence, and the user may override the suggested provider.
+- Orient with wiserepo before spending paid tokens: `repo_qa` / `summarize` on allowlisted paths answer "where is this" and "what does this do", `git grep` answers an exact symbol or string. Read the file itself once the code has to change or be judged — a summary is a lead, not the lines you are editing.
+- The MCP tools and `bin/wiserepo.mjs` share one guard (`tools/agent-policy/policy.mjs`), and one deny-set or off-allowlist path refuses the **whole** request. That refusal is final: read the file yourself on the paid tier it implies. Do not retry with other paths or wording, and do not hand the same request to another tool to route around the guard.
+- A refusal escalates rather than blocks — `node tools/model-router/route.mjs "<task>" --paths <path>` names the tier (`local` / `mid` / `top`) and the model that owns the work.
+
+### Token budget
+
+Climb only as far as the job needs, and stop at the first tier that can do it:
+
+- **`local`** — wiserepo orientation and first-pass context: no paid tokens, no authority.
+- **`mid`** — implementation, debugging, test changes, ordinary review.
+- **`top`** — security, cryptography, hash/layout, migrations, authn/authz, proof verification, or a failed attempt at `mid`; the Critical Invariants decide what never leaves `top`.
+
+Local output is a draft until the repo's gates confirm it: run the checks for the packages you touched, and treat any behavioural claim as unverified until a direct read or a test confirms it. Escalate on the first failure at a tier instead of re-prompting it, and do not spend a paid call on what `git grep`, `graphify query`, or wiserepo has already answered.
