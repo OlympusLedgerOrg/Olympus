@@ -34,7 +34,7 @@ const REPO_ROOT = path.resolve(fileURLToPath(new URL("../../..", import.meta.url
  * register the exit listener before signalling so an exit in between is not
  * missed.
  */
-const stopServer = async (child) => {
+export const stopServer = async (child) => {
   const hasExited = () => child.exitCode !== null || child.signalCode !== null;
 
   child.stdin.destroy();
@@ -134,6 +134,33 @@ test(
     assert.equal(code, 1);
     assert.match(stderr, /cannot start/);
     assert.match(stderr, /SERENA_BIN/);
+  },
+);
+
+test(
+  "stopServer returns at once for a child that already exited",
+  { timeout: 30_000 },
+  async () => {
+    // A launcher that dies on startup (bad argv, crashed interpreter) leaves the
+    // handshake's teardown holding a dead child. Drive that state directly: the
+    // old teardown ended stdin, killed, and waited for an `exit` that had already
+    // fired, so a failure turned into a 10 s hang or a stream error.
+    const child = spawn(process.execPath, ["-e", ""], { stdio: ["pipe", "pipe", "ignore"] });
+    await new Promise((resolve, reject) => {
+      child.once("error", reject);
+      child.once("exit", resolve);
+    });
+
+    assert.equal(typeof child.exitCode, "number", "the child must have exited before teardown");
+
+    const started = Date.now();
+    await stopServer(child);
+    const elapsed = Date.now() - started;
+
+    // Well under the 10 s kill window: a wait here means the already-exited
+    // branch was not taken and the helper is still blocking on a dead child.
+    assert.ok(elapsed < 2_000, `teardown took ${elapsed}ms for an already-exited child`);
+    assert.equal(child.stdout.destroyed, true);
   },
 );
 
