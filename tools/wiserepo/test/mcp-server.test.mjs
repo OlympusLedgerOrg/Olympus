@@ -191,9 +191,17 @@ test("review_diff reports omitted input even when the model does not mention it"
   const root = mkdtempSync(join(tmpdir(), "wiserepo-review-"));
   const previousRoot = process.env.WISEREPO_ROOT;
   process.env.WISEREPO_ROOT = root;
+  // backend.mjs caches /api/show answers per model name for the process. An
+  // earlier test can reach a real local Ollama and cache the default model's
+  // real window (32768 for qwen2.5-coder:7b-instruct), which never truncates
+  // this fixture. A model name no other test uses forces the mocked 8192.
+  const previousModel = process.env.WISEREPO_MODEL_REVIEW;
+  process.env.WISEREPO_MODEL_REVIEW = "wiserepo-test-review-truncation";
   t.after(() => {
     if (previousRoot === undefined) delete process.env.WISEREPO_ROOT;
     else process.env.WISEREPO_ROOT = previousRoot;
+    if (previousModel === undefined) delete process.env.WISEREPO_MODEL_REVIEW;
+    else process.env.WISEREPO_MODEL_REVIEW = previousModel;
     rmSync(root, { recursive: true, force: true });
   });
 
