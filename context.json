@@ -17,7 +17,7 @@
   },
 
   "workspace": {
-    "primary": "Cargo.toml (src-tauri, crates/olympus-crypto, crates/light-poseidon, crates/babyjubjub-permissive)",
+    "primary": "Cargo.toml (src-tauri, crates/olympus-crypto, crates/olympus-manifest, crates/light-poseidon, crates/babyjubjub-permissive)",
     "excluded": [
       "verifiers/rust (separate workspace — needs --manifest-path)",
       "verifiers/rust/fuzz",

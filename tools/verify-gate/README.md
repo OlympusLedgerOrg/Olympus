@@ -36,7 +36,13 @@ wrong in four different ways without seeing an error. This encodes that table.
 | `app/public-ui/`                 | from inside the directory: `tsc -b`, `eslint . --max-warnings 0`, `vitest run` (local binaries, not `pnpm exec`)               |
 | `verifiers/javascript/`          | `npm test` from inside the directory                                                                                           |
 | `pg-embed-local/`                | its library tests only, as the CI job does                                                                                     |
+| `proofs/`                        | nothing more than the first row — the ZK circuit gates are manual and listed in AGENTS.md                                        |
 | `tools/<name>/`                  | that tool's own `*.test.mjs` files                                                                                             |
+
+`pg-embed-local/` is a path dependency of `src-tauri`, not a workspace member:
+its test targets spawn a PostgreSQL cluster, so `cargo test --workspace` must not
+reach them. Only its library tests run, and its manifest is `--locked` in CI —
+regenerate `pg-embed-local/Cargo.lock` in the same commit as any manifest change.
 
 `--fast` keeps the compile, lint and type checks and drops the test suites. It
 catches a broken build, not a broken behaviour — not a substitute for a full run

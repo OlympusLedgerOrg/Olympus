@@ -1,19 +1,11 @@
 # AGENTS.md
 
-This file provides guidance to AI coding agents when working with code in this repository.
-
-`AGENTS.md` is the only agent-instructions document here. `CLAUDE.md` and
-`.github/copilot-instructions.md` are pointer stubs to it, and `context.json`
-holds machine-readable project facts rather than guidance — put new instructions
-in this file, never in a second copy.
+`AGENTS.md` is the only agent-instructions document here; `CLAUDE.md` and
+`.github/copilot-instructions.md` point to it, and `context.json` holds
+machine-readable facts, not guidance — put new instructions here, never in a
+second copy.
 
 Current version: **v0.10.0** (June 2026).
-
-## Repository analysis tooling
-
-- Use Wiserepo for repository-aware indexing, search, and context reduction when it is available and relevant. Wiserepo uses the local Qwen model for its repository analysis; Qwen is not a separate required analysis path.
-- Use Graphify separately when call-graph, dependency-graph, or structural relationship analysis would materially improve the task.
-- Treat Wiserepo/Qwen and Graphify results as analysis aids. Verify security-sensitive or implementation-critical conclusions against the source code, tests, and required project gates.
 
 ## Absolute Upstream Boundary
 
@@ -30,240 +22,47 @@ This is a permanent, non-negotiable owner policy.
 ## Commands
 
 ```bash
-# Desktop app (primary)
-cargo tauri dev                # Dev build with hot-reload frontend
-cargo tauri build              # Production Tauri binary + bundled installers
-
-# Rust
-cargo check --workspace        # Fast type/lint check
-cargo test --workspace         # All Rust unit tests
-cargo test -p olympus-crypto   # One crate's tests
-cargo test -p olympus-desktop <name>   # Single test by name substring (src-tauri package is `olympus-desktop`)
-cargo test -p olympus-desktop <name> -- --nocapture  # …with stdout shown
-cargo clippy --workspace       # Lints
-
-# Regenerate SSMF golden vectors after any leaf/SMT hash change (see Critical Invariants)
-cargo run -p olympus-crypto --example gen_ssmf_vectors --features smt
-
-# Frontend
-pnpm install                   # Install JS deps
-pnpm --filter public-ui build  # Production frontend build
-pnpm --filter public-ui dev    # Vite dev server (standalone)
-
-# Database migrations (sqlx, applied by Tauri on startup)
-# Migration files live in migrations/ — sqlx applies them automatically.
-
-# ZK setup (run once before cargo tauri build)
-cd proofs && bash setup_circuits.sh        # compile circuits + Groth16 setup + ceremony manifests
-# The script auto-runs export_ark_zkey AND generate_manifest per circuit, so a
-# single invocation produces every artifact the runtime checks at startup:
-#   proofs/keys/<circuit>.{wasm,r1cs,ark.zkey}
-#   proofs/keys/verification_keys/<circuit>_vkey.json
-#   proofs/keys/manifests/<circuit>_manifest.json   (audit CEREMONY_INTEGRITY.md)
-
-# To regenerate the manifest for one circuit only (e.g. after a vkey hand-fix):
-cargo run --release --bin generate_manifest -- \
-    --circuit <name> --keys-dir proofs/keys --build-dir proofs/build \
-    --ceremony-id <id> --contributor-id <name> \
-    --out proofs/keys/manifests/<name>_manifest.json
-
-# Verifiers (offline / cross-impl conformance)
-cd verifiers/rust && cargo test
-cd verifiers/javascript && npm test
-
-# Circuit verification + dynamic ZK tests (see proofs/FORMAL_VERIFICATION.md)
-cargo install circomspect                  # once
-bash proofs/circomspect.sh                 # static analysis gate (strict; diffs proofs/circomspect_baseline.txt)
-bash proofs/circomspect.sh --update-baseline   # accept current findings after an intentional circuit change
-bash proofs/formal_verify.sh --circomspect # witness checks + static analysis (advisory)
-cargo test -p olympus-desktop --features prover,zk-test-utils --test zk_soundness  # adversarial verifier soundness
-cargo test -p olympus-desktop --test zk_witness_proptest        # property-based witness validators (lean job)
+cargo tauri dev                        # dev build, hot-reload frontend (primary)
+cargo tauri build                      # production binary + installers
+cargo check --workspace                # fast type/lint check
+cargo test --workspace                 # all Rust unit tests
+cargo test -p olympus-desktop <name>   # one test (src-tauri's package is `olympus-desktop`)
+pnpm install                           # JS deps
+pnpm --filter public-ui build          # production frontend build
 ```
+
+`docs/development.md` owns the rest (nextest, doctests, fmt, clippy,
+`scripts/dev.py`, feature-gated runs); `docs/quickstart.md` owns
+first-time setup, including the one-time `cd proofs && bash setup_circuits.sh`
+that must precede `cargo tauri build`. Migrations in `migrations/` apply on
+startup — there is no migrate command. Both hash-vector commands are named in
+Critical Invariants rather than here.
 
 ## Architecture
 
-### Language Ownership — Hard Boundaries
+`docs/architecture.md` owns the component map and `context.json` the workspace
+layout (`olympus_context` serves it without a model call).
 
-```text
-Rust       → Tauri app, Axum HTTP server, cryptographic hot path: BLAKE3, Ed25519, Poseidon, SMT,
-             canonicalization, embedded PostgreSQL (pg_embed), all DB operations,
-             SBT issue/verify/revoke, anchoring (RFC 3161 / Rekor / OTS)
-TypeScript → React frontend (app/public-ui/)
-Python     → verify-only client SDK (clients/python/) — NOT a service. See below.
-```
+**Language ownership.** Rust: Tauri app, embedded Axum server, the cryptographic
+hot path (BLAKE3, Ed25519, Poseidon, SMT, canonicalization), `pg_embed`, every DB
+operation, SBTs, anchoring. TypeScript: `app/public-ui/` only. Python:
+`clients/python/`, a verify-only SDK — not a service. Go and server-side Python are
+retired; `verifiers/` (Rust + JavaScript) holds the reference implementations and
+`clients/python` re-implements the leaf hash, so a hash change touches all four.
 
-Go is retired, and so is **server-side** Python: the Python FastAPI server and
-the Go sequencer were replaced by the Tauri + Axum desktop in v0.9.0; the former
-Go/Python offline verifiers were replaced by the independent Rust/JavaScript
-verifiers in `verifiers/`, which remain the offline reference implementations. There are zero tracked `.go` files.
+**Layout.** `src-tauri/` (`startup.rs`, `server/mod.rs`), `crates/olympus-crypto` (the
+authoritative hash and SMT constants), `proofs/`,
+`verifiers/`, `clients/python/`, `app/public-ui/`, `migrations/` — five workspace
+members, and six other Cargo workspaces that need `--manifest-path`
+(`context.json.workspace`).
 
-Python is **not** fully gone, and the distinction matters when changing hashes:
-`clients/python/` is a live, CI-tested, verify-only client SDK
-(`olympus_manifest`) that **independently re-implements** the ADR-0005 leaf
-hash and the SMT existence/non-existence verifiers — it hardcodes its own copy
-of `OLY_STRUCT_MARKER`, `OLY_NAMESPACE`, `LEAF_OBJECT_TYPE`, `LEAF_VERSION`,
-`LEAF_BODY_FIELD_COUNT`, `NODE_PREFIX`, `EMPTY_LEAF_PREFIX`, and `KEY_PREFIX`
-in `clients/python/src/olympus_manifest/hashing.py`. It is a fourth
-implementation to keep in step, alongside `olympus-crypto` and the two offline
-verifiers. Its parity vectors are generated from Rust
-(`cargo run -p olympus-manifest --example gen_python_vectors`) and CI diffs the
-committed `clients/python/tests/vectors.json` against a fresh generation, so a
-drifting constant fails CI rather than shipping silently.
-
-### Deployment
-
-- **Desktop app (primary)**: Tauri 2 binary with embedded Axum HTTP server + pg_embed PostgreSQL.
-  - Windows: install the MSI or NSIS bundle produced by `cargo tauri build`.
-  - Linux: install the deb / rpm / AppImage bundle.
-  - macOS: bundle is produced but not yet code-signed for distribution.
-- No external Python, Go, Node, or Docker required at runtime.
-
-### Tauri App (`src-tauri/`)
-
-Axum HTTP server embedded in the Tauri process. Handles all API requests. Runs
-pg_embed for an embedded PostgreSQL instance. sqlx migrations in `migrations/`
-are applied on startup (both `init_embedded` and `connect_external` paths).
-
-Key files:
-
-- `src-tauri/src/main.rs` — Tauri entry point; module wiring only, the substantive startup logic below lives in `startup.rs`
-- `src-tauri/src/startup.rs` — `resolve_proofs_dir`, the placeholder-artifact gate (`detect_placeholder_artifacts`), `verify_ceremony_manifests`, and `run_server_bringup` (the async server-bringup sequence spawned from `main.rs`)
-- `src-tauri/src/commands/` — Tauri IPC command handlers, split by domain (`files`, `keychain`, `secrets`, `server_state`)
-- `src-tauri/src/server/mod.rs` — Axum router setup
-- `src-tauri/src/api/` — Axum route handlers (`ingest`, `ledger`, `redaction`, `admin`, `admin_users`, `keys`, `zk`, `user_auth`, `credentials`, `shards`, `trusted_issuers`)
-- `src-tauri/src/api/shards.rs` — shard registry + `authorize_write` gate (operator-controlled shard creation; see Critical Invariants)
-- `src-tauri/src/api/trusted_issuers.rs` — multi-entry BJJ trusted-issuer set for SBT scope resolution (audit M-3); loaded at startup from bootstrap key + `OLYMPUS_BJJ_TRUSTED_ISSUERS_JSON`
-- `src-tauri/src/smt/backend.rs` — transaction-bound SMT storage contract plus PostgreSQL, SQLite, and in-memory implementations; see the writer-serialisation invariant below
-- `src-tauri/src/routes/public_stats.rs` — public ledger statistics endpoint
-- `src-tauri/src/api/zk/` — `/zk/verify`, `/zk/prove` (scope-gated)
-- `src-tauri/src/api/credentials/` — Olympus-native SBTs (issue / list / revoke / verify); optional M-of-N federation quorum (`quorum: true`)
-- `src-tauri/src/quorum/` — M-of-N quorum signer set + domain-separated co-sign digest + offline verifier (always compiled, not feature-gated); see `docs/federation-quorum-credentials.md`
-- `src-tauri/src/api/middleware/auth.rs` — `AuthenticatedKey`, `RateLimit`, `derive_api_key_from_bjj`, SBT-driven scope resolver
-- `src-tauri/src/state.rs` — `AppState` (pool, BJJ keys, `proofs_dir`, …)
-- `src-tauri/src/federation/` — Tor hidden service + checkpoint gossip + quorum co-sign for SBT credentials (`cosign.rs`, `OLY:SBT:QUORUM:V2`) and for checkpoint roots (`checkpoint_cosign.rs`, `OLY:CHECKPOINT:QUORUM:V2`, ADR-0033) (feature-gated)
-- `src-tauri/src/anchoring/` — external anchors (RFC 3161 / Sigstore Rekor / OpenTimestamps); see `docs/court-evidence.md`
-- `src-tauri/src/bin/export_ark_zkey.rs` — snarkjs `.zkey` → arkworks `.ark.zkey`
-- `src-tauri/src/bin/generate_manifest.rs` — writes per-circuit signed ceremony manifest (audit CEREMONY_INTEGRITY.md)
-- `src-tauri/src/zk/manifest.rs` — `CeremonyManifest` schema + verify helpers (blake3, contribution-chain, BJJ-EdDSA coordinator signature)
-- `src-tauri/build.rs` — placeholder shim + compile-time check #1 (manifest.vkey.blake3 vs blake3(vkey.json))
-- `src-tauri/Cargo.toml` — dependencies (arkworks 0.6, ark-circom 0.6, vendored light-poseidon)
-
-### Workspace Crates (`crates/`)
-
-Virtual Cargo workspace (`members = ["src-tauri", "crates/olympus-crypto",
-"crates/light-poseidon", "crates/babyjubjub-permissive"]`). `verifiers/rust`
-and `fuzz` are intentionally **excluded** (separate build/coverage scopes), as
-are the vendored trees `crates/glib-0.18.5-patched` and
-`crates/ppv-lite86-patched` (wired in only via `[patch.crates-io]`) and
-`pg-embed-local` (path dep of `src-tauri`; excluded so `cargo test
---workspace` doesn't run its own Postgres-spawning test targets, which flake
-with `PgTimedOutError` on Windows). That crate's **library** unit tests spawn
-no cluster and are gated separately: the `vendored pg_embed unit tests` CI job
-runs `cargo test --locked --manifest-path pg-embed-local/Cargo.toml --lib
---no-default-features --features rt_tokio` against the committed
-`pg-embed-local/Cargo.lock`. Note that job uses `cargo test`, not nextest, so
-its tests share one process — which is deliberate: the executable-cache lease
-registry's intra-process behaviour is only observable that way. Keep that lock in step when its manifest changes
-(`cargo generate-lockfile --manifest-path pg-embed-local/Cargo.toml`) — the job
-is `--locked`, and the supply-chain job audits every tracked lockfile.
-
-- `crates/olympus-crypto` — the canonical shared crypto: BLAKE3 domain
-  prefixes, `leaf_hash`/SMT (feature `smt`), Poseidon, canonicalization, the
-  ADR-0005 constants. The former `olympus-core` PyO3 extension was removed;
-  shared crypto now lives here only. The `src-tauri` package (Cargo name
-  `olympus-desktop`) consumes it as a workspace dep.
-- `crates/light-poseidon`, `crates/babyjubjub-permissive` — vendored/patched
-  ZK primitives used by the prover and BJJ-EdDSA signing.
-
-### ZK Proof Layer (`proofs/`)
-
-Four Circom circuit artifacts (three production, one feature-gated):
-`document_existence`, `non_existence`, the historical artifact stem
-`unified_canonicalization_inclusion_root_sign` (requires PTAU power 20), and
-`federation_quorum` (gated behind `quorum-circuit` feature). The live API exposes
-the unified R1CS's narrower statement as
-`unified_section_commitment_inclusion_root`; it proves neither canonicalization
-nor a signature. The public `unified_canonicalization_inclusion_root` protocol
-composes that Groth16 proof with a verified fixed-image RISC Zero
-canonicalization receipt. The historical `_sign` API identifier returns 410
-Gone. The three production Circom artifacts are compiled by
-`setup_circuits.sh`. The unified Groth16 vkey is produced by the trusted setup
-and gitignored until then; the other two vkeys (`document_existence`,
-`non_existence`) are committed in `proofs/keys/verification_keys/`.
-
-**Redaction is no longer a SNARK (ADR-0030 "the flip").** The Groth16
-`redaction_validity` circuit was removed (commit #1271). Redaction now uses a
-**signed Merkle fold** — an Ed25519 signature (the ingest signing key) over a
-**variable-depth Poseidon root** of the per-segment hiding leaves (the V3
-signed-Merkle bundle), not a zero-knowledge proof. The commitment is one Poseidon
-leaf per hiding unit; redaction zero-fills selected units in place so non-redacted
-units stay byte-identical.
-
-The hiding units come from a **format-agnostic
-`Segmenter`** (ADR-0026 §2, `src-tauri/src/zk/segment.rs`): the
-bundle/verifiers consume opaque hiding leaves, so only _extraction_ +
-_redaction-application_ are per-format. Live segmenters: traditional-xref PDF
-(`pdf_objects.rs::PdfSegmenter`), **text/Markdown** line-blocks
-(`segment/text.rs`, ADR-0026 Phase 2), **OOXML** `.docx/.xlsx/.pptx` package
-parts (`segment/ooxml.rs`, canonical Stored-zip repackage), and **modern PDFs**
-with cross-reference streams + object streams (`segment/pdf_xref.rs`, ADR-0028 —
-FlateDecode + PNG predictor + ObjStm, redaction rebuilds to a traditional-xref
-PDF). Ingest routes via `segment::segment_document` (PDF tries traditional then
-modern, else chunk fallback → committed but not object-redactable). The persisted
-`redaction_segment_manifests.format` tag (`pdf-object` / `pdf-xref-stream` /
-`text-line` / `ooxml-part`) drives `apply_redaction` dispatch; the leaf key is
-`segment_id` big-endian for every format. The deprecated 16-chunk raw-byte scheme
-(`src-tauri/src/zk/chunk.rs`) is retained only for existing sealed records and as
-the un-segmentable-format fallback commitment.
-
-`src-tauri/build.rs` drops ~60-byte `PLACEHOLDER` stubs for all four
-circuits (artifacts + vkey JSONs + ceremony manifests) into `proofs/keys/`
-so Tauri's resource glob and `include_str!` resolve pre-setup;
-`proofs/setup_circuits.sh` overwrites them with real artifacts. With
-`OLYMPUS_ENV=production`, startup refuses (`exit 2`) if any artifact is
-still a placeholder OR if any ceremony manifest fails its coordinator-
-signature / `.ark.zkey` blake3 check. Dev mode logs warnings + continues.
-
-Runtime artifacts (`.wasm`, `.r1cs`, `.ark.zkey`) are staged into
-`proofs/keys/` by the setup pipeline. Per-circuit signed ceremony manifests
-are staged into `proofs/keys/manifests/<circuit>_manifest.json`.
-
-- `proofs/setup_circuits.sh` — dev / single-contributor all-in-one path
-  (compile → Groth16 setup → export `.ark.zkey` → generate signed manifest)
-- `proofs/phase2_ceremony.sh` — multi-contributor Phase 2 (`prepare` / `contribute` / `verify` / `finalize`) for v1.0 release ceremonies
-- `proofs/CEREMONY_INTEGRITY.md` — operational protocol for ceremony
-  bundles + the four runtime checks the desktop binary enforces
-- Both setup scripts share the Hermez Phase 1 ptau
-  (`proofs/keys/powersOfTau28_hez_final_20.ptau`) and produce the same
-  `.ark.zkey` + manifest pair the runtime consumes.
-
-#### Ceremony Integrity (runtime checks — audit CEREMONY_INTEGRITY.md)
-
-Three checks run automatically:
-
-1. **build.rs**: asserts `blake3(vkey.json) == manifest.artifacts.vkey.blake3`. `cargo build` fails on mismatch.
-2. **`load_proving_key_with_manifest`**: re-hashes `.ark.zkey` from disk and asserts match against manifest before `deserialize_uncompressed_unchecked`. Returns `ZkeyError::ManifestMismatch` on tamper.
-3. **`startup.rs::verify_ceremony_manifests`**: at startup, recomputes the contribution chain hash from `manifest.contributions[]` and verifies the coordinator BJJ-EdDSA signature against `state.bjj_trusted_issuers` (audit M-3). Production: any failure is `exit(2)`. Dev: `tracing::error!` + continue.
-
-For production: set `OLYMPUS_CEREMONY_COORDINATOR_KEY` when running setup scripts; add the coordinator pubkey to consumer machines' `OLYMPUS_BJJ_TRUSTED_ISSUERS_JSON`.
-
-### Frontend (`app/public-ui/`)
-
-React + TypeScript + Vite + Tailwind + React Query. API client in
-`app/public-ui/src/lib/api/` (split by domain; `index.ts` is the facade every
-import site resolves through). Notable v0.9.x components:
-
-- `InitialSecretsModal.tsx` — one-shot bootstrap dialog surfacing the API key + BJJ key on first launch
-- `StartupErrorScreen.tsx` — production startup-error landing page
-- `WhoAmIChip.tsx` — current-user / scope chip in the header
-- `CredentialsPage.tsx` — SBT issue / list / revoke / verify UI
-- `AdminUsersPage.tsx` — admin Users page (mint keys, edit scopes, promote roles)
-
-### Cross-Language Verifiers (`verifiers/`)
-
-Reference implementations in Rust and JavaScript — used for differential
-fuzzing and offline proof verification. Test vectors in
-`verifiers/test_vectors/vectors.json`.
+**Two names that mislead.** Redaction is not a SNARK (ADR-0030): an Ed25519
+signature over a variable-depth Poseidon fold of hiding leaves, zero-filled in
+place by format-specific `Segmenter`s (`zk/segment/`) so non-redacted units stay
+byte-identical. `unified_canonicalization_inclusion_root_sign` is a historical
+stem: its live R1CS proves section-commitment inclusion over the root only — the
+public protocol composes that with a RISC Zero receipt — and the `_sign` API
+returns 410 Gone.
 
 ## Critical Invariants
 
@@ -284,160 +83,117 @@ fuzzing and offline proof verification. Test vectors in
 
 ## Before every `git push`
 
-Two checks. Both exist because skipping them shipped real defects in this repo,
-not as generic hygiene.
+Two checks. Both exist because skipping them shipped real defects here, not as
+generic hygiene.
 
 ### 1. Do the claims match the code?
 
-Prose here is load-bearing — RFCs and ADRs are the record a future auditor reads,
-and doc comments are what a reviewer trusts instead of re-deriving the logic. A
-claim that outruns the implementation is worse than no claim, because it stops
-anyone from looking.
+Prose is load-bearing: ADRs and RFCs are what a future auditor reads, and a claim
+that outruns the implementation stops anyone from looking. Re-read every behaviour
+claim you touched:
 
-Re-read every sentence you wrote or touched that asserts behaviour, and confirm
-the code does it:
-
-- **Does a "the verifier checks X" claim correspond to a check that exists?**
-  RFC-0001 said the verifier recomputes `/Length` and rejects a mismatch. It was
-  written twice — RFC and doc comment — and implemented in neither verifier. The
-  value is _elided from the commitment by design_, so that sentence was the only
-  thing standing behind it. Rated Critical in review.
-- **Does a "same X — all reused" claim survive checking?** ADR-0029 said "same
-  offline verifiers — all reused". Both verifiers _refused_ the format outright.
-- **Does a test prove what its name says?** A container-leaf test that recomputes
-  the preimage with the same code that produced it proves _agreement_, not
-  _binding_ — it would pass if the function returned a constant. Prove the
-  negative direction too: mutate a byte the leaf claims to cover and assert the
-  leaf breaks.
-- **Do negative tests assert _why_ they rejected?** `assert!(x.is_err())` and
-  `assert.throws(fn, Error)` pass on any failure, including an unrelated early
-  parse error. Name the expected rejection reason.
-- **Does the PR body still describe the diff?** Claims drift across review
-  rounds. The `pdfjs-dist` licence (Apache-2.0, not MIT) and a since-removed
-  `isEvalSupported` option both survived into a merged description.
+- "the verifier checks X" needs a check that exists — RFC-0001's `/Length`
+  recomputation was written twice, implemented in neither verifier, and the value
+  is _elided from the commitment by design_;
+- "same X — all reused" must survive checking: ADR-0029 claimed it and both
+  verifiers _refused_ the format;
+- a test must prove what its name says — a preimage recomputed by the code that
+  produced it proves _agreement_, not _binding_, so mutate a covered byte, and make
+  negative tests say _why_ they rejected;
+- the PR body must still describe the diff (`pdfjs-dist` is Apache-2.0, not MIT).
 
 ### 2. Have the gates run in _every_ scope?
 
-Several directories are outside the default scope, so a repo-root invocation
-silently skips them and CI fails on work that looked clean:
+The invocation per scope drifts, so do not re-derive it: `tools/verify-gate/README.md`
+owns the table and why a repo-root command is not equivalent. The gate runs the
+checks for whatever the diff touched and stops at the first failure (`--fast`
+drops the tests). Warnings are errors (`-D warnings`, `--max-warnings 0`) and must
+not be filtered out.
 
-| gate                        | correct invocation                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Rust fmt/clippy             | workspace **and** `verifiers/rust` (excluded from the workspace — `cargo fmt --all` at the root does **not** reach it) and `--manifest-path verifiers/rust/fuzz/Cargo.toml`                                                                                                                                                                                                                                                                                                                                                                                                        |
-| Standalone Cargo workspaces | The repo has **seven** Cargo workspaces; root `--workspace` reaches only one. The others each need `--manifest-path`: `verifiers/rust`, `verifiers/rust/fuzz`, `pg-embed-local`, `clients/cli`, `proofs/zkvm/canonicalization/guest` (pinned zkVM toolchain — built by `proofs/zkvm/build_canonicalization_guest.sh`, not ordinary Cargo), `proofs/zkvm/canonicalization/host-tools`. CI covers `clients/cli` in its own job (`cargo nextest run --locked --manifest-path clients/cli/Cargo.toml --all-features`, plus fmt and clippy)                                             |
-| Python client SDK           | `python -m pip install -e "./clients/python[dev]" && python -m pytest -q clients/python/tests`. No Cargo/pnpm command reaches it. If you touched leaf/SMT hashing, also re-run the vector generator and confirm no diff (CI does exactly this)                                                                                                                                                                                                                                                                                                                                     |
-| Feature-gated code          | clippy **with and without** the feature. A target importing a gated module needs `required-features`, or `--all-targets` fails in the default configuration                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| Frontend lint               | `pnpm exec eslint . --max-warnings 0` **from inside `app/public-ui`** — from the repo root it silently ignores the directory and reports success. The flag is load-bearing: without it eslint exits 0 on warnings                                                                                                                                                                                                                                                                                                                                                                  |
-| Frontend types              | `pnpm exec tsc -b` (what the build runs), not `tsc --noEmit`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| Frontend build              | `pnpm --filter public-ui build` — the pnpm package is named **`public-ui`**, not `app/public-ui`. A path-style filter matches no projects and still **exits 0**, so the build silently never runs. A path filter needs the `./` form (`--filter ./app/public-ui`)                                                                                                                                                                                                                                                                                                                  |
-| JS verifier tests           | `npm ci && npm test` **from inside `verifiers/javascript`** — it is not a pnpm workspace member (`pnpm-workspace.yaml` lists only `app/public-ui` and `proofs`), so a root `pnpm install` never installs its deps and `npm test` dies on a missing module                                                                                                                                                                                                                                                                                                                          |
-| Prettier / TOML / headers   | `pnpm tooling:check` at the repo root — covers `verifiers/javascript` too. On Windows the whole chain runs natively: `#1566` made `tooling:check` green there, and `release-assets:test` needs only Git Bash's `bash` on `PATH` (it runs `bash scripts/verify-release.sh`, not the `.sh` directly). The `spawnSync … EFTYPE` failure this row used to warn about no longer reproduces. CI runs this job on `ubuntu-latest`. `format:toml:check` runs the pinned native taplo (`scripts/taplo.mjs`) over a git-enumerated file list, so it stays fast on Windows and under WSL even on `/mnt/c`. `lockfile:check` runs first and rejects any `pnpm-lock.yaml` that `--frozen-lockfile` would refuse; because pnpm's `--lockfile-only` comparison only checks specifiers, the script also resolves every importer edge, snapshot edge and peer suffix itself — which is where a stale internal pointer (a peer naming `vite@8.2.0` after `8.2.1` was resolved) otherwise slips through and fails every CI job at once. |
+```bash
+node tools/verify-gate/verify.mjs
+```
 
-Warnings are errors: `-D warnings` for clippy, `--max-warnings 0` for eslint. Do
-not filter them out of local output — an ignored warning is how three of this
-repo's CI failures started.
+**`proofs/` is its blind spot.** A circuit change matches only the `anything` row,
+so run CI's ZK checks yourself:
+
+```bash
+bash proofs/circomspect.sh      # blocking; --advisory / --update-baseline
+bash proofs/formal_verify.sh --circomspect
+cargo test -p olympus-desktop --test zk_witness_proptest
+cargo test -p olympus-desktop --features prover,zk-test-utils --test zk_soundness   # feature-gated; skipped otherwise
+```
 
 ## Environment
 
-Key `.env` variables:
+`.env.example` owns the variables, defaults and each flag's production rule;
+`context.json` the short form for tooling. What neither states:
 
-- `OLYMPUS_API_PORT` — HTTP port for the embedded Axum server (default ephemeral; tests pin to 3737)
-- `OLYMPUS_INGEST_SIGNING_KEY` — persistent Ed25519 key (production); use `OLYMPUS_DEV_SIGNING_KEY=true` for dev auto-generation
-- `OLYMPUS_BJJ_AUTHORITY_KEY` — persistent Baby Jubjub authority key (32-byte hex); auto-generated by bootstrap if absent
-- `OLYMPUS_REDACTION_BLIND_SECRET` — 32-byte hex server secret for object-level redaction blindings (ADR-0026). Optional: defaults to a domain-separated BLAKE3 derivation from the persisted BJJ authority key (stable across restarts, so re-ingest reproduces the same object root); set explicitly to decouple it from the BJJ key. Resolved once at startup into `AppState.redaction_blind_secret`.
-- `OLYMPUS_PROOFS_DIR` — override the resolved ZK artifacts directory (precedence: env > Tauri resource_dir > exe-relative > cwd `proofs/keys` > **debug-only** `CARGO_MANIFEST_DIR`-relative `../proofs/keys`). The debug-only fallback lets `cargo tauri dev` (cwd = `src-tauri/`) resolve artifacts with no env var; release/`cargo tauri build` keeps the first four candidates only.
-- `OLYMPUS_INGEST_PARSER_ID` / `INGEST_PARSER_CANONICAL_VERSION` / `OLYMPUS_INGEST_MODEL_HASH` — parser provenance stamped onto every leaf the ingest path commits into the parser-bound SMT (ADR-0003 / ADR-0004). Defaults: `fallback@1.0.0` / `v1` / `none`. Blank values fall back to defaults (the triple is always non-empty). Resolved once at startup into `AppState.ingest_provenance`.
-- `OLYMPUS_ENV=production` — refuse to start with `exit 2` if any ZK artifact is a `PLACEHOLDER` stub OR if any ceremony-manifest check fails
-- `OLYMPUS_BJJ_TRUSTED_ISSUERS_JSON` — extra trusted-issuer entries (audit M-3): JSON array of `{"x":"...","y":"...","valid_from":<unix?>,"valid_until":<unix?>}`. Bootstrap pubkey is always entry 0; this adds rotation-window or coordinator-key entries.
-- `OLYMPUS_CEREMONY_COORDINATOR_KEY` — preferred 32-byte hex key for `generate_manifest`; falls back to `OLYMPUS_BJJ_AUTHORITY_KEY` then to a fixed dev key
-- `OLYMPUS_CEREMONY_ID` / `OLYMPUS_CEREMONY_CONTRIBUTOR` — optional metadata fields embedded into generated manifests
-- `OLYMPUS_CEREMONY_TRUSTED_CONTRIBUTORS_JSON` — **required in production**. The authenticated contributor allowlist enforced by the ceremony-manifest gate (`src-tauri/src/zk/manifest.rs`, red-team A-2/A-4). Under `OLYMPUS_ENV=production` a missing _or_ malformed value makes every per-circuit manifest check fail, which is an `exit(2)` at startup — so an operator who sets only the other ceremony variables gets a fatal, self-inflicted startup refusal. Ignored (treated as an empty list) outside production.
-- `OLYMPUS_FEDERATION_QUORUM_THRESHOLD` — default M for M-of-N quorum credentials (config clamp `≥ 1`); per-request `quorum_threshold` overrides it. The clamp is **not** the issuance policy: [`validate_quorum_params`](src-tauri/src/api/credentials/quorum.rs) then requires `2 ≤ M ≤ N` with `N ≥ 2`, so a 1-of-N credential (one key satisfying its own quorum) is rejected `422` even when the env var is `1`.
-- `OLYMPUS_ADMIN_KEY` — separate header `x-admin-key` required by `/key/admin/generate`, `/key/admin/reload-keys`, and shard registration (`POST /admin/shards`). Shard registration also accepts an `admin`-role + `admin`-scope API key via the shared `require_admin_auth` gate.
-- `OLYMPUS_ANCHOR_RFC3161_URL` — RFC 3161 TSA endpoint (e.g. `https://freetsa.org/tsr`); enables RFC 3161 anchoring
-- `OLYMPUS_ANCHOR_REKOR_URL` — Sigstore Rekor URL (e.g. `https://rekor.sigstore.dev`); enables Rekor anchoring
-- `OLYMPUS_ANCHOR_OTS_CALENDARS` — comma-separated OpenTimestamps calendar URLs; enables OTS anchoring
-- `OLYMPUS_ANCHOR_OTS_BITCOIN_HEADERS` — path to an operator-pinned Bitcoin mainnet block-header manifest (see `docs/court-evidence.md` §1.1). Required for the OTS upgrade cron to run at all: without it a calendar's claimed height/root is unverified, so receipts stay pending instead of being marked `verified_at`
-- `OLYMPUS_ANCHOR_SIGN_KEY` — Ed25519 hex key for Rekor signatures (falls back to `OLYMPUS_INGEST_SIGNING_KEY`)
-- `DATABASE_URL` — external PostgreSQL runtime URL. Production requires explicit connection components, `sslmode=verify-full`, and the exact table/column ACL contract; URL session/target overrides are forbidden.
-- `OLYMPUS_DATABASE_MIGRATION_URL` — distinct migration role on the same database. Under the exclusive form of a database-scoped lifecycle lock Olympus revokes runtime `CONNECT`, proves quiescence, hardens before and after migrations, verifies the closed catalog, and restores runtime access last. It then performs a gap-free handoff to shared locks held once by every physical runtime connection and re-attested on checkout, so a second starter fails before maintenance mutation. The database has a neutral `NOLOGIN` owner; the migrator directly owns the sole application schema and objects. See `docs/external-postgresql-roles.md`.
-- PostgreSQL client environment variables (`PGHOST`, `PGHOSTADDR`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD`, `PGPASSFILE`, `PGSSLMODE`, `PGSSLROOTCERT`, `PGSSLCERT`, `PGSSLKEY`, `PGAPPNAME`, `PGOPTIONS`) must be unset.
-- `OLYMPUS_DEV_ALLOW_SINGLE_DATABASE_URL=true` — explicit local/CI compatibility mode that reuses `DATABASE_URL`; refused in production.
-- `CORS_ORIGINS` — explicit comma-separated origins (no wildcards)
+- `OLYMPUS_INGEST_PARSER_ID` / `INGEST_PARSER_CANONICAL_VERSION` /
+  `OLYMPUS_INGEST_MODEL_HASH` — parser provenance on every ingested leaf
+  (ADR-0003/0004); defaults `fallback@1.0.0` / `v1` / `none`, blanks fall back.
+- `OLYMPUS_CEREMONY_TRUSTED_CONTRIBUTORS_JSON` — **required in production**: the
+  allowlist `zk/manifest.rs` enforces (red-team A-2/A-4); missing or malformed
+  there fails every manifest check, i.e. `exit(2)`. Its siblings
+  `OLYMPUS_CEREMONY_ID` / `_CONTRIBUTOR` / `_COORDINATOR_KEY` are signing metadata
+  (falling back to `OLYMPUS_BJJ_AUTHORITY_KEY`, then a dev key).
+- `OLYMPUS_FEDERATION_QUORUM_THRESHOLD` — the default M only:
+  `validate_quorum_params` still requires `2 ≤ M ≤ N`, so 1-of-N is `422`.
+- `CORS_ORIGINS` — explicit origins, no wildcards.
+- `WISEREPO_*` / `OLYMPUS_PROOFS_DIR` — tooling and proof-artifact lookup, owned by
+  `tools/wiserepo/README.md` and `docs/development.md` (precedence, the debug-only
+  fallback).
 
 ## PR review etiquette
 
-Unlike the rest of this file, the specifics below describe a **third-party
-service's** behaviour, observed from outside. Nothing in this tree implements or
-verifies them — the only part of it this repo controls is `.coderabbit.yaml`.
-Read them as accurate-as-observed rather than as invariants, and confirm against
-CodeRabbit's dashboard or docs when one of them is load-bearing for a decision.
+Third-party service behaviour, observed from outside: nothing here implements or
+verifies it, and the only part this repo controls is `.coderabbit.yaml`.
+Accurate-as-observed, not invariants.
 
-- Always reply to CodeRabbit findings by mentioning `@coderabbitai` in the
-  response (fix confirmations and declines alike) — replies feed its
-  learnings database, so decisions persist across future reviews.
-- **CodeRabbit allows 10 PR reviews per developer per hour** on this plan
-  (Pro Plus), as a rolling window rather than an hourly reset — but read that as
-  a ceiling, not a budget. Its rate-limit notice describes *adaptive* limits for
-  sustained high-volume activity: past roughly the 95th percentile of user
-  activity, further reviews return more gradually as earlier ones age out. On
-  #1657 the limit landed after four pushes in the hour, not ten. What spends the
-  budget is **pushing**, not commenting: an eligible push triggers an automatic
-  review whenever `auto_review.auto_incremental_review` is on and the
-  `auto_pause_after_reviewed_commits` threshold has not yet paused the branch.
-  This repo sets that threshold to `50` (`.coderabbit.yaml`), so the pause
-  effectively never arrives first and every push does cost a review — a run of
-  small fix-up commits exhausts the budget silently.
-  - Batch fixes into fewer pushes when a review round is in flight.
-  - Recognise the failure shape: the bot answers "Review triggered", then
-    *edits* that comment into the rate-limit warning. The acknowledgement is
-    not confirmation a review started; only the absence of that edit is.
-  - Being rate-limited is a no-op, not a penalty: per CodeRabbit's own docs a
-    blocked push consumes no allowance and does not delay when capacity
-    returns. Re-triggering before then simply does nothing, so ask
-    `@coderabbitai rate limit` for remaining capacity rather than guessing.
-  - The escape hatch is the usage-based add-on (Billing → Subscription,
-    org-admin only; priced per reviewed file, read the current rate there
-    rather than from here). Enabled with credits available,
-    over-limit reviews proceed; disabled, or enabled but out of credits, they
-    stop until an admin enables it or tops up.
+- Reply to every finding by mentioning `@coderabbitai` — replies feed its learnings
+  database.
+- **About 10 reviews per developer per hour** (Pro Plus), rolling and *adaptive* — a
+  ceiling, not a budget; **pushing** spends it, so batch fixes into one push per
+  round (`auto_pause_after_reviewed_commits: 50`).
+- "Review triggered" is not confirmation — the bot *edits* it into the rate-limit
+  warning. Ask `@coderabbitai rate limit`; a blocked push costs nothing.
 
 ## graphify
 
-Use the knowledge graph in `graphify-out/` for structural navigation when available. When the user types `/graphify`, use the installed Graphify instructions first.
+Use `graphify-out/` for structural navigation; when the user types `/graphify`,
+follow the installed Graphify instructions first.
 
-Rules:
-- When `graphify-out/graph.json` exists, run `graphify query "<question>"` before raw source search. Use `graphify path` for relationships and `graphify explain` or `graphify section` for focused concepts.
-- Dirty graphify-out/ files are expected after hooks or incremental updates; dirty graph files are not a reason to skip graphify. Only skip graphify if the task is about stale or incorrect graph output, or the user explicitly says not to use it.
-- `graphify-out/graph.json` is local generated state. It is modified by `graphify update .`, configured Git hooks, or incremental Graphify updates—not merely by opening a chat.
-- Use `graphify-out/wiki/index.md` for broad navigation and `GRAPH_REPORT.md` only when focused queries are insufficient.
-- After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).
-- `graphify-out/` is gitignored local state; never stage or commit it.
+- `graphify query "<question>"` before raw source search when
+  `graphify-out/graph.json` exists; `graphify path` / `explain` / `section` for
+  relationships and focused concepts.
+- There is **no `graphify-out/wiki/index.md`** — do not send a reader to one.
+  `GRAPH_REPORT.md` is the only generated prose report, ~111 KB (≈28k tokens):
+  never read it whole, `rg` the section you need.
+- Dirty `graphify-out/` is expected after hooks or incremental updates; only stale
+  or wrong output is a reason to skip graphify. It is gitignored: never commit it.
+  `graphify update .` keeps it current (AST-only, no API cost).
 
 ## Agent and model routing
 
-Use the least expensive capable tool without sacrificing correctness. Recommend the path briefly when it is not obvious.
+Use the least expensive capable tool without sacrificing correctness. Wiserepo/Qwen
+and Graphify are analysis aids: verify security-sensitive or
+implementation-critical conclusions against the source, tests and gates.
 
-- Use local Qwen through Wiserepo for discovery, file finding, summaries, and first-pass context. It is advisory, not authoritative.
-- Use Graphify for structural navigation: callers, dependencies, paths, hubs, and change-impact exploration. Graphify is a map, not a substitute for reading the cited code and running tests.
-- Use Codex or Claude for implementation, debugging, refactors, and security-sensitive reasoning. Prefer Codex here; use Claude for an independent second opinion.
-- For P0/P1 security findings, cryptographic changes, hash/layout changes, migrations, authentication/authorization, proof verification, or destructive operations, use Codex or Claude for the main work and verify the result with direct source inspection and tests. Do not delegate the final decision to Ollama or Graphify.
-- Never send Olympus source or secrets to a hosted service merely to save tokens. Prefer local Graphify and wiserepo for sensitive exploration unless the user has explicitly authorized hosted processing.
-- Prefer local tools before metered hosted models; explain when high-confidence review requires Codex or Claude.
-- Subscription access does not imply API access. Do not configure paid API usage without explicit authorization.
-- When a task-routing recommendation is useful, run `node tools/model-router/route.mjs "<task>"`. Treat its output as a recommendation: the hard-coded safety rules take precedence, and the user may override the suggested provider.
-- Orient with wiserepo before spending paid tokens: `repo_qa` / `summarize` on allowlisted paths answer "where is this" and "what does this do", `git grep` answers an exact symbol or string. Read the file itself once the code has to change or be judged — a summary is a lead, not the lines you are editing.
-- The MCP tools and `bin/wiserepo.mjs` share one guard (`tools/agent-policy/policy.mjs`), and one deny-set or off-allowlist path refuses the **whole** request. That refusal is final: read the file yourself on the paid tier it implies. Do not retry with other paths or wording, and do not hand the same request to another tool to route around the guard.
-- A refusal escalates rather than blocks — `node tools/model-router/route.mjs "<task>" --paths <path>` names the tier (`local` / `mid` / `top`) and the model that owns the work.
-
-### Token budget
-
-Climb only as far as the job needs, and stop at the first tier that can do it:
-
-- **`local`** — wiserepo orientation and first-pass context: no paid tokens, no authority.
+- **`local`** — wiserepo/Qwen (`repo_qa`, `summarize`, `git grep`): discovery and
+  first-pass context, no paid tokens, no authority. A shared-guard refusal is final:
+  read the file at the tier it implies — do not rephrase or hand the request to
+  another tool to route around it.
 - **`mid`** — implementation, debugging, test changes, ordinary review.
-- **`top`** — security, cryptography, hash/layout, migrations, authn/authz, proof verification, or a failed attempt at `mid`; the Critical Invariants decide what never leaves `top`.
+- **`top`** — security, cryptography, hash/layout, migrations, authn/authz, proof
+  verification, destructive operations, or a failed `mid`. Confirm by reading the
+  source and running tests; never delegate the verdict to the local model or graph.
 
-Local output is a draft until the repo's gates confirm it: `node tools/verify-gate/verify.mjs` runs the checks for whatever a change touched and stops at the first failure. Treat any behavioural claim as unverified until a direct read or a test confirms it. Escalate on the first failure at a tier instead of re-prompting it, and do not spend a paid call on what `git grep`, `graphify query`, or wiserepo has already answered.
+`node tools/model-router/route.mjs "<task>" [--paths <path>]` names the tier and
+model; mechanics live with the tools — deny-set and path rules in
+`tools/agent-policy/` (which owns the `.olympus-logs/route-report.jsonl` log),
+budget and gather limits in `tools/wiserepo/README.md` and
+`tools/qwen-local/README.md`.
 
-`tools/agent-policy/log.mjs` appends one JSON line per routing decision made by the `route.mjs` CLI and per local call made by the `qwen-local` CLI to `.olympus-logs/route-report.jsonl` (gitignored), and `python tools/agent-policy/route_report.py` reads it back — importing `routeTask` or `ask` does not log, so a library caller stays side-effect free. It records the tier that was chosen and the local model's measured token counts; a hosted model's billing is not visible from this repo, so no token number is invented for it.
+Never send Olympus source or secrets to a hosted service merely to save tokens, and
+never configure paid usage without explicit authorization — subscription access is
+not API access. Say when high-confidence review needs Codex or Claude.

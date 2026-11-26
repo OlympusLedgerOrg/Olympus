@@ -106,7 +106,7 @@ for the authoritative list. Common overrides:
 | `OLYMPUS_API_PORT` | Pin the HTTP port (default: ephemeral; tests pin 3737) |
 | `OLYMPUS_DEV_SIGNING_KEY=true` | Auto-generate an Ed25519 dev key on startup |
 | `OLYMPUS_BJJ_AUTHORITY_KEY` | Persistent BJJ key (32-byte hex); auto-generated if absent |
-| `OLYMPUS_PROOFS_DIR` | Override ZK artifact location (precedence: env > Tauri resource_dir > exe-relative > `proofs/keys`) |
+| `OLYMPUS_PROOFS_DIR` | Override ZK artifact location. Precedence: env > Tauri resource_dir > exe-relative > cwd `proofs/keys`, plus a **debug-build-only** `CARGO_MANIFEST_DIR`-relative `../proofs/keys` so `cargo tauri dev` (cwd = `src-tauri/`) resolves artifacts with no env var; release builds keep the first four candidates only. |
 | `OLYMPUS_ENV=production` | Refuse to start with `exit 2` if any ZK artifact is a `PLACEHOLDER` |
 | `DATABASE_URL` | Skip `pg_embed` and use this external PostgreSQL runtime role. Production requires `sslmode=verify-full`. |
 | `OLYMPUS_DATABASE_MIGRATION_URL` | Use the distinct maintenance role on the same external database; it hands its exclusive lifecycle lock to a shared migration-session hold, which closes only after the runtime pool has its own shared-lock keeper. Required in production. |

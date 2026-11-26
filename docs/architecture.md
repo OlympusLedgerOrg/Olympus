@@ -112,7 +112,8 @@ currently **`canonical_v2`** (see [`CHANGELOG.md`](../CHANGELOG.md)).
 .
 ├── app/public-ui/                  React + TS + Vite frontend
 ├── src-tauri/                      Tauri 2 desktop binary (entry point of the app)
-│   ├── src/main.rs                 Tauri entry, proofs_dir resolution, placeholder gate
+│   ├── src/main.rs                 Tauri entry: module wiring + main() orchestration
+│   ├── src/startup.rs              proofs_dir resolution, placeholder gate, ceremony manifests, bring-up
 │   ├── src/lib.rs                  shared lib for tests
 │   ├── src/server/mod.rs           Axum router wiring
 │   ├── src/api/                    HTTP route handlers (see below)
