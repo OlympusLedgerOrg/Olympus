@@ -17,6 +17,13 @@
  * collects both. Downloads are pinned by version and per-platform SHA-256 of
  * the `.gz` archive; `TAPLO_BIN` overrides it with a system install.
  *
+ * Those digests were computed from the downloaded artifacts themselves
+ * (trust-on-first-use), so they pin what this repo first fetched: they catch a
+ * later tampered or replaced asset, not a compromise at the first download.
+ * Upstream publishes no checksum file for 0.10.0, but all four agree with
+ * independently published copies — mise lockfiles using the aqua backend, and
+ * the SourceForge mirror.
+ *
  * Repo-wide runs enumerate their files through git instead of letting taplo
  * walk the tree. Walking is pathologically slow on WSL's `/mnt/c` mount, where
  * the 9p layer descends `node_modules` one stat at a time because pnpm's
