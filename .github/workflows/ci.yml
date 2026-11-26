@@ -894,6 +894,19 @@ jobs:
       - name: cargo check (federation feature)
         run: cargo check --locked -p olympus-desktop --no-default-features --features federation
 
+      # `federation_equivocation` boots embedded PostgreSQL, and without this
+      # cache every run downloads the binaries afresh. The PR #1750 run lost
+      # all 8 tests to an HTTP 429 from that download. The cache is safe for
+      # the same reason as in the jobs below: pg_fetch verifies the restored
+      # tree against the SHA-256 digests pinned in pg_fetch.rs and fails closed
+      # on a mismatch. This job does not test the cold download path; the
+      # uncached `pg-embed-integration` job does.
+      - name: Cache embedded PostgreSQL binaries
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ~/.cache/pg-embed
+          key: pg-embed-bin-${{ runner.os }}-${{ hashFiles('pg-embed-local/src/pg_fetch.rs') }}
+
       - name: Federation unit + equivocation tests
         run: >-
           cargo nextest run --locked --profile ci -p olympus-desktop
