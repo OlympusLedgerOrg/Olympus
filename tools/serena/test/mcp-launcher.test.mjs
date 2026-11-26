@@ -78,7 +78,14 @@ export const stopServer = async (child) => {
 };
 
 test("serenaArgs starts the stdio server in the single-project context", () => {
-  assert.deepEqual(serenaArgs(), ["start-mcp-server", "--context", "ide", "--project-from-cwd"]);
+  assert.deepEqual(serenaArgs(), [
+    "start-mcp-server",
+    "--context",
+    "ide",
+    "--project-from-cwd",
+    "--agent-interface",
+    "tools",
+  ]);
 
   // Client-supplied arguments are appended, never substituted: dropping the
   // pinned flags because a caller passed one would lose the project.
@@ -87,6 +94,8 @@ test("serenaArgs starts the stdio server in the single-project context", () => {
     "--context",
     "ide",
     "--project-from-cwd",
+    "--agent-interface",
+    "tools",
     "--log-level",
     "DEBUG",
   ]);

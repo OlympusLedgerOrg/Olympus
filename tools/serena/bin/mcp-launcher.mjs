@@ -39,9 +39,22 @@ export function resolveLaunchRoot(env = process.env) {
  * switched later through `activate_project`. `--project-from-cwd` is what the
  * pinned cwd below makes meaningful; without it Serena loads no project and
  * every symbol tool fails.
+ *
+ * `--agent-interface tools` is pinned for the same reason: it must not depend on
+ * the machine's `~/.serena/serena_config.yml`. A fresh config (CI's clean home)
+ * picks the REPL interface, which exposes `serena_repl` instead of one tool per
+ * operation, so `find_symbol` and the rest vanish while the server still starts.
  */
 export function serenaArgs(extraArgs = []) {
-  return ["start-mcp-server", "--context", "ide", "--project-from-cwd", ...extraArgs];
+  return [
+    "start-mcp-server",
+    "--context",
+    "ide",
+    "--project-from-cwd",
+    "--agent-interface",
+    "tools",
+    ...extraArgs,
+  ];
 }
 
 /**

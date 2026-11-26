@@ -53,6 +53,13 @@ repo. Launched that way Serena starts with no project activated (its log reads
 calls `activate_project`. `--context ide` is Serena's single-project context, so
 the project is fixed at startup rather than switched mid-session.
 
+The launcher also pins `--agent-interface tools`. That setting lives in
+`~/.serena/serena_config.yml`; a fresh config (a CI runner's clean home) selects
+the REPL interface, which exposes `serena_repl` instead of one tool per
+operation, so `find_symbol` and the rest disappear while the server still starts.
+This repository wants the per-operation tools, so the launcher asks for them
+explicitly rather than inheriting whatever the machine configured.
+
 The web dashboard follows `~/.serena/serena_config.yml`, which has
 `web_dashboard: true` and `web_dashboard_open_on_launch: false`: it listens on
 127.0.0.1 and opens no browser.
