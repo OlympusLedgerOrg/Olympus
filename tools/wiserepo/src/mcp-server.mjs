@@ -179,7 +179,10 @@ export async function gatherContext({
     );
   }
 
-  const budget = budgetCharsFor(await effectiveNumCtx(model ?? DEFAULT_OLLAMA_MODEL));
+  const budget = Math.max(
+    0,
+    budgetCharsFor(await effectiveNumCtx(model ?? DEFAULT_OLLAMA_MODEL)) - (question?.length ?? 0),
+  );
   const parts = [];
   let runningChars = 0;
   const dropped = [];
@@ -370,6 +373,12 @@ export async function runTool(name, args = {}, { onPrompt } = {}) {
       // review that looks standards-checked but never actually was.
       if (err.code !== "ENOENT") throw err;
     }
+    const model = modelForTool("review");
+    const promptBudget = Math.max(
+      0,
+      budgetCharsFor(await effectiveNumCtx(model)) - standards.length,
+    );
+    const boundedDiff = truncateText(diff, promptBudget, "diff");
     const prompt =
       `Review this diff against the project's engineering standards below. ` +
       `Flag correctness bugs, invariant violations, and missed test coverage. Be concise, most-severe first. ` +
@@ -388,8 +397,7 @@ export async function runTool(name, args = {}, { onPrompt } = {}) {
       `fix. Judge the code as it stands after the diff, and describe removed code as removed, ` +
       `never as current behaviour.\n\n` +
       (standards ? `## AGENTS.md (standards)\n\`\`\`\n${standards}\n\`\`\`\n\n` : "") +
-      `## Diff\n\`\`\`diff\n${diff || "(empty diff)"}\n\`\`\``;
-    const model = modelForTool("review");
+      `## Diff\n\`\`\`diff\n${boundedDiff || "(empty diff)"}\n\`\`\``;
     onPrompt?.({ system: SYSTEM_PROMPT, prompt, model });
     return withVerifiedCitations(
       await callModel({ system: SYSTEM_PROMPT, prompt, maxTokens: 8192, model }),
