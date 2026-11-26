@@ -17,10 +17,12 @@
  * collects both. Downloads are pinned by version and per-platform SHA-256 of
  * the `.gz` archive; `TAPLO_BIN` overrides it with a system install.
  *
- * WSL caveat: reading the repository through the `/mnt/c` 9p mount makes the
- * walk into `node_modules` take minutes, because pnpm's Windows junctions are
- * traversed one stat at a time. Run the gate from an ext4 checkout there.
- * Native Windows and native Linux both finish in about a second.
+ * Repo-wide runs enumerate their files through git instead of letting taplo
+ * walk the tree. Walking is pathologically slow on WSL's `/mnt/c` mount, where
+ * the 9p layer descends `node_modules` one stat at a time because pnpm's
+ * Windows junctions look like ordinary directories; the git view skips it
+ * entirely. If git cannot answer, the walk is used and the timeout below turns
+ * what would be a six-minute hang into an actionable error.
  */
 
 import { spawnSync } from "node:child_process";
@@ -31,6 +33,7 @@ import path from "node:path";
 import { gunzipSync } from "node:zlib";
 
 const VERSION = "0.10.0";
+const TIMEOUT_MS = Number(process.env.TAPLO_TIMEOUT_MS ?? 120_000);
 const BASE = `https://github.com/tamasfe/taplo/releases/download/${VERSION}`;
 
 /** Release assets are single-file `.gz` streams on every platform. */
@@ -72,6 +75,47 @@ function cachePath() {
 function runsPinnedVersion(bin) {
   const probe = spawnSync(bin, ["--version"], { encoding: "utf8" });
   return probe.status === 0 && probe.stdout.trim() === `taplo ${VERSION}`;
+}
+
+/**
+ * TOML files as git sees them: tracked plus untracked-but-not-ignored. git
+ * answers from the index and from `.gitignore`, so it never enters
+ * `node_modules`, which is what makes this fast on a slow filesystem.
+ *
+ * Returns null when git cannot answer, so the caller falls back to the walk.
+ * `taplo.toml`'s `exclude` list still applies to the paths we pass through.
+ */
+function gitTomlFiles(cwd) {
+  const inside = spawnSync("git", ["rev-parse", "--is-inside-work-tree"], {
+    cwd,
+    encoding: "utf8",
+  });
+  if (inside.status !== 0 || inside.stdout.trim() !== "true") {
+    return null;
+  }
+  const listed = spawnSync(
+    "git",
+    ["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "*.toml"],
+    { cwd, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
+  );
+  if (listed.status !== 0) {
+    return null;
+  }
+  return listed.stdout
+    .split("\0")
+    .filter((file) => file.length > 0)
+    .filter((file) => existsSync(path.resolve(cwd, file)));
+}
+
+/**
+ * True for `format` / `format --check` with no file arguments. Explicit paths
+ * and stdin (`-`) are passed through untouched.
+ */
+function isRepoWideFormat(args) {
+  if (args[0] !== "format" || args.includes("-")) {
+    return false;
+  }
+  return args.slice(1).every((arg) => arg.startsWith("-"));
 }
 
 async function download(target, dest) {
@@ -126,8 +170,23 @@ async function resolveBinary() {
   return dest;
 }
 
+const args = process.argv.slice(2);
+const files = isRepoWideFormat(args) ? gitTomlFiles(process.cwd()) : null;
+const argv = files && files.length > 0 ? [...args, ...files] : args;
+
 const binary = await resolveBinary();
-const result = spawnSync(binary, process.argv.slice(2), { stdio: "inherit" });
+const result = spawnSync(binary, argv, { stdio: "inherit", timeout: TIMEOUT_MS });
+
+if (result.error?.code === "ETIMEDOUT") {
+  fail(
+    `gave up after ${Math.round(TIMEOUT_MS / 1000)}s — the tree walk is ` +
+      `pathologically slow on this filesystem.\n` +
+      `  WSL's /mnt/c mount (9p) descends node_modules one stat at a time.\n` +
+      `  Run the gate from an ext4 checkout, or pass files explicitly:\n` +
+      `    node scripts/taplo.mjs format --check $(git ls-files '*.toml')\n` +
+      `  On Windows the gate runs natively in about a second.`,
+  );
+}
 if (result.error) {
   fail(result.error.message);
 }
