@@ -9,7 +9,14 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprot
 import { callModel, effectiveNumCtx, modelForTool, DEFAULT_OLLAMA_MODEL } from "./backend.mjs";
 import { budgetCharsFor } from "./budget.mjs";
 import { verifyCitations, formatMissingCitations } from "./citations.mjs";
-import { readRepoFile, gitDiff, gitGrep, truncateText, wouldTruncate } from "./repo.mjs";
+import {
+  DEFAULT_DIFF_MAX_CHARS,
+  readRepoFile,
+  gitDiff,
+  gitGrep,
+  truncateText,
+  wouldTruncate,
+} from "./repo.mjs";
 import { getOlympusContext, getCircuitStatus, checkInvariants } from "./olympus.mjs";
 // The same module the router and the Qwen wrapper use. The local model never
 // gets to decide what it may read, so this is enforced here, at the one point
@@ -360,7 +367,9 @@ export async function runTool(name, args = {}, { onPrompt } = {}) {
 
   if (name === "review_diff") {
     const diffArgs = args.diffArgs?.length ? args.diffArgs : ["HEAD"];
-    const diff = await gitDiff(diffArgs);
+    // Inspect the full diff before cutting it for the prompt. gitDiff still
+    // bounds subprocess output; its usual text cap is applied below instead.
+    const diff = await gitDiff(diffArgs, { maxBytes: Infinity });
     assertPathsAllowed(extractDiffPaths(diff), "review");
     let standards = "";
     try {
@@ -374,12 +383,7 @@ export async function runTool(name, args = {}, { onPrompt } = {}) {
       if (err.code !== "ENOENT") throw err;
     }
     const model = modelForTool("review");
-    const promptBudget = Math.max(
-      0,
-      budgetCharsFor(await effectiveNumCtx(model)) - standards.length,
-    );
-    const boundedDiff = truncateText(diff, promptBudget, "diff");
-    const prompt =
+    const promptStart =
       `Review this diff against the project's engineering standards below. ` +
       `Flag correctness bugs, invariant violations, and missed test coverage. Be concise, most-severe first. ` +
       // The fixture now carries two separated hunks, so per-hunk coverage is
@@ -397,11 +401,28 @@ export async function runTool(name, args = {}, { onPrompt } = {}) {
       `fix. Judge the code as it stands after the diff, and describe removed code as removed, ` +
       `never as current behaviour.\n\n` +
       (standards ? `## AGENTS.md (standards)\n\`\`\`\n${standards}\n\`\`\`\n\n` : "") +
-      `## Diff\n\`\`\`diff\n${boundedDiff || "(empty diff)"}\n\`\`\``;
+      "## Diff\n```diff\n";
+    const promptEnd = "\n```";
+    const diffBudget = Math.min(
+      DEFAULT_DIFF_MAX_CHARS,
+      budgetCharsFor(await effectiveNumCtx(model)) -
+        SYSTEM_PROMPT.length -
+        promptStart.length -
+        promptEnd.length,
+    );
+    if (diff && diffBudget <= 0) {
+      throw new Error("No diff content fits in the model context; use a larger context window");
+    }
+    const boundedDiff = diff.slice(0, Math.max(0, diffBudget));
+    const prompt = promptStart + (boundedDiff || "(empty diff)") + promptEnd;
     onPrompt?.({ system: SYSTEM_PROMPT, prompt, model });
-    return withVerifiedCitations(
+    const answer = await withVerifiedCitations(
       await callModel({ system: SYSTEM_PROMPT, prompt, maxTokens: 8192, model }),
     );
+    const omitted = diff.length - boundedDiff.length;
+    return omitted > 0
+      ? `[wiserepo: partial review — omitted ${omitted} of ${diff.length} diff chars; narrow the diff for full coverage]\n\n${answer}`
+      : answer;
   }
 
   if (name === "summarize") {

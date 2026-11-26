@@ -3,6 +3,10 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   gatherContext,
   budgetCharsFor,
@@ -181,4 +185,48 @@ test("withVerifiedCitations truncates oversized model output and says so", async
     result.length,
     120_000 + "\n...[truncated 1 of 120001 chars from model output]".length,
   );
+});
+
+test("review_diff reports omitted input even when the model does not mention it", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "wiserepo-review-"));
+  const previousRoot = process.env.WISEREPO_ROOT;
+  process.env.WISEREPO_ROOT = root;
+  t.after(() => {
+    if (previousRoot === undefined) delete process.env.WISEREPO_ROOT;
+    else process.env.WISEREPO_ROOT = previousRoot;
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  execFileSync("git", ["init", "-q"], { cwd: root });
+  mkdirSync(join(root, "docs"));
+  const file = "docs/review.md";
+  const stage = (content) => {
+    writeFileSync(join(root, file), content);
+    execFileSync("git", ["add", "--", file], { cwd: root });
+  };
+  let chats = 0;
+  t.mock.method(globalThis, "fetch", async (url) => {
+    if (url.endsWith("/api/show")) {
+      return Response.json({ digest: "test", model_info: { "test.context_length": 8192 } });
+    }
+    assert.ok(url.endsWith("/api/chat"));
+    chats++;
+    return new Response(
+      JSON.stringify({ message: { content: "Model answer" }, done: true }) + "\n",
+    );
+  });
+
+  const review = () => runTool("review_diff", { diffArgs: ["--cached"] });
+  stage("Small change\n");
+  assert.equal(await review(), "Model answer");
+
+  stage("Start of diff\n" + "Long line for the fixture\n".repeat(1000) + "End of diff\n");
+  assert.match(
+    await review(),
+    /^\[wiserepo: partial review .*omitted \d+ of \d+ diff chars.*\]\n\nModel answer$/,
+  );
+
+  writeFileSync(join(root, "AGENTS.md"), "Standards\n".repeat(2000));
+  await assert.rejects(review, /No diff content fits in the model context/);
+  assert.equal(chats, 2, "no review request should be sent when the whole diff is omitted");
 });
