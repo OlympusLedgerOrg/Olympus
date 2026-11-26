@@ -392,7 +392,11 @@ jobs:
           # Without this a missing SERENA_BIN would skip the handshake and the
           # job would report success without ever starting a server.
           SERENA_REQUIRE_HANDSHAKE: "1"
-        run: pnpm serena:test
+        # The suite needs no node_modules, so skip pnpm's pre-run dependency
+        # check: it otherwise installs the whole workspace, which fails under
+        # CI's frozen lockfile on drift unrelated to Serena (observed on main:
+        # @testing-library/user-event ^14.6.3 manifest vs ^14.6.13 lockfile).
+        run: pnpm --config.verify-deps-before-run=false serena:test
 
   # ── Static analysis (Semgrep) ────────────────────────────────────────────────
   # Runs on every push/PR regardless of what changed -- like secrets-scan,
