@@ -13,6 +13,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { existsSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -101,13 +102,21 @@ test(
         : false,
   },
   async () => {
-    const child = spawn(process.execPath, [LAUNCHER], {
-      // Deliberately NOT the repo: this is the cwd bug the launcher exists to
-      // absorb (a client spawns the command in its own directory).
-      cwd: os.tmpdir(),
-      env: { ...process.env, SERENA_BIN: process.env.SERENA_BIN },
-      stdio: ["pipe", "pipe", "inherit"],
-    });
+    const child = spawn(
+      process.execPath,
+      // Dashboard and GUI log window off. The handshake is the MCP contract, and
+      // on Windows the dashboard's pywebview window can outlive the kill below
+      // and keep the test runner's pipes open — observed once as a `serena:test`
+      // run that printed every check and then never exited.
+      [LAUNCHER, "--enable-web-dashboard", "false", "--enable-gui-log-window", "false"],
+      {
+        // Deliberately NOT the repo: this is the cwd bug the launcher exists to
+        // absorb (a client spawns the command in its own directory).
+        cwd: os.tmpdir(),
+        env: { ...process.env, SERENA_BIN: process.env.SERENA_BIN },
+        stdio: ["pipe", "pipe", "ignore"],
+      },
+    );
 
     const pending = new Map();
     let buffer = "";
@@ -161,7 +170,22 @@ test(
         assert.ok(names.includes(expected), `missing tool "${expected}" in ${names.join(", ")}`);
       }
     } finally {
+      // Deterministic teardown: close the transport, ask nicely, then insist.
+      // Leaving the child's pipes open is what turns a passing run into a hang.
+      child.stdin.end();
       child.kill();
+      let timer;
+      const exited = await Promise.race([
+        once(child, "exit").then(() => true),
+        new Promise((resolve) => {
+          timer = setTimeout(() => resolve(false), 10_000);
+        }),
+      ]);
+      clearTimeout(timer);
+      if (!exited) {
+        child.kill("SIGKILL");
+      }
+      child.stdout.destroy();
     }
   },
 );

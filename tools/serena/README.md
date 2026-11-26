@@ -59,6 +59,9 @@ pnpm serena:test        # node --test tools/serena/test/mcp-launcher.test.mjs
 ```
 
 Wired into `pnpm tooling:check` and the verify gate's `tools/<name>/` row. The
-argv, root-resolution and missing-binary tests always run; the live handshake
-test skips with a stated reason unless `SERENA_BIN` points at an installed
-Serena, because CI has no Python Serena install.
+argv, root-resolution and missing-binary tests always run. The live handshake
+test skips unless `SERENA_BIN` points at an installed Serena, so locally it
+runs only for a developer who has one. CI does not skip it: the
+`serena-handshake` job in `.github/workflows/ci.yml` installs `serena-agent`
+into a throwaway venv, exports `SERENA_BIN`, and runs this suite, so the
+handshake cannot rot behind a skip.
