@@ -16,9 +16,13 @@ Windows (Git Bash):
 
 ```bash
 python -m venv "$LOCALAPPDATA/serena-venv"
-"$LOCALAPPDATA/serena-venv/Scripts/python.exe" -m pip install serena-agent
+"$LOCALAPPDATA/serena-venv/Scripts/python.exe" -m pip install "serena-agent==2.1.0"
 setx SERENA_BIN "$LOCALAPPDATA\\serena-venv\\Scripts\\serena.exe"
 ```
+
+The version is pinned to the one CI tests (`SERENA_VERSION` in
+`.github/workflows/ci.yml`); a version bump moves both together, because the
+suite asserts the MCP surface of the release it runs.
 
 POSIX: the same venv with `bin/serena` instead of `Scripts/serena.exe`, and
 export `SERENA_BIN` from your shell profile. `serena init` is optional: the

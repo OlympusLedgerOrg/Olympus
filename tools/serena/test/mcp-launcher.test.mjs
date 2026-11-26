@@ -13,7 +13,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { once } from "node:events";
 import { existsSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -24,6 +23,52 @@ import { resolveLaunchRoot, serenaArgs } from "../bin/mcp-launcher.mjs";
 
 const LAUNCHER = fileURLToPath(new URL("../bin/mcp-launcher.mjs", import.meta.url));
 const REPO_ROOT = path.resolve(fileURLToPath(new URL("../../..", import.meta.url)));
+
+/**
+ * Stop the launched server whether or not it is still running.
+ *
+ * A child that exited on its own (a crashed launcher, or a server that quit
+ * after a bad request) leaves `exitCode` set. Teardown that ends its stdin,
+ * kills it and then waits for an `exit` event that already fired would either
+ * throw on the destroyed stream or sit out the whole timeout. Check first, and
+ * register the exit listener before signalling so an exit in between is not
+ * missed.
+ */
+const stopServer = async (child) => {
+  const hasExited = () => child.exitCode !== null || child.signalCode !== null;
+
+  child.stdin.destroy();
+  if (hasExited()) {
+    child.stdout.destroy();
+    return;
+  }
+
+  const waitForExit = new Promise((resolve) => {
+    let timer;
+    const onExit = () => {
+      clearTimeout(timer);
+      resolve(true);
+    };
+    timer = setTimeout(() => {
+      child.off("exit", onExit);
+      resolve(false);
+    }, 10_000);
+    child.once("exit", onExit);
+    // The child can exit between the check above and the listener, and the
+    // event would then never arrive for this listener.
+    if (hasExited()) {
+      child.off("exit", onExit);
+      clearTimeout(timer);
+      resolve(true);
+    }
+  });
+
+  child.kill();
+  if (!(await waitForExit)) {
+    child.kill("SIGKILL");
+  }
+  child.stdout.destroy();
+};
 
 test("serenaArgs starts the stdio server in the single-project context", () => {
   assert.deepEqual(serenaArgs(), ["start-mcp-server", "--context", "ide", "--project-from-cwd"]);
@@ -170,22 +215,9 @@ test(
         assert.ok(names.includes(expected), `missing tool "${expected}" in ${names.join(", ")}`);
       }
     } finally {
-      // Deterministic teardown: close the transport, ask nicely, then insist.
-      // Leaving the child's pipes open is what turns a passing run into a hang.
-      child.stdin.end();
-      child.kill();
-      let timer;
-      const exited = await Promise.race([
-        once(child, "exit").then(() => true),
-        new Promise((resolve) => {
-          timer = setTimeout(() => resolve(false), 10_000);
-        }),
-      ]);
-      clearTimeout(timer);
-      if (!exited) {
-        child.kill("SIGKILL");
-      }
-      child.stdout.destroy();
+      // Closing the child's pipes is what turns a passing run into a prompt exit,
+      // and the child must be stoppable even if it already died.
+      await stopServer(child);
     }
   },
 );
