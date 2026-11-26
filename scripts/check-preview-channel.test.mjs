@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -125,6 +126,35 @@ test("containment rejects the preview workflow losing the channel stamp", () => 
     assert.equal(errors.length, 1);
     assert.match(errors[0], /no longer sets OLYMPUS_RELEASE_CHANNEL/);
   });
+});
+
+// Regression: a local `graphify-out/` cache (gitignored graph state) mentions the
+// channel, and the containment scan used to read the raw directory tree. That
+// failed the gate on developer machines while CI — which never has the
+// directory — stayed green. Containment must scan the git view, so ignored
+// state cannot decide the result.
+test("containment ignores files git ignores", () => {
+  const root = fixture();
+  try {
+    write(root, ".gitignore", "graphify-out/\n");
+    write(
+      root,
+      "graphify-out/cache/ast/0123456789.json",
+      '{"text":"OLYMPUS_RELEASE_CHANNEL appears only in this local graph cache"}\n',
+    );
+    execFileSync("git", ["init", "-q"], { cwd: root, stdio: "ignore" });
+
+    assert.deepEqual(checkContainment(root), []);
+
+    // The same fixture must still catch a real leak: the ignore rule may not
+    // silently switch the scan off.
+    write(root, ".github/workflows/ci.yml", "env:\n  OLYMPUS_RELEASE_CHANNEL: preview\n");
+    const errors = checkContainment(root);
+    assert.equal(errors.length, 1);
+    assert.match(errors[0], /ci\.yml mentions OLYMPUS_RELEASE_CHANNEL/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("containment allows markdown to discuss the channel", () => {
