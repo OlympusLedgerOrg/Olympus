@@ -154,7 +154,7 @@ Accurate-as-observed, not invariants.
   database.
 - **About 10 reviews per developer per hour** (Pro Plus), rolling and *adaptive* — a
   ceiling, not a budget; **pushing** spends it, so batch fixes into one push per
-  round (`auto_pause_after_reviewed_commits: 50`).
+  round (the commit cap is `.coderabbit.yaml`'s setting).
 - "Review triggered" is not confirmation — the bot *edits* it into the rate-limit
   warning. Ask `@coderabbitai rate limit`; a blocked push costs nothing.
 

@@ -2,19 +2,16 @@
 # CodeRabbit configuration for the Olympus repo.
 # Schema: https://docs.coderabbit.ai/reference/configuration
 #
-# Olympus is a Tauri 2 desktop app with a Rust backend (Axum / pg_embed),
-# a React TS frontend (app/public-ui), Circom circuits + Groth16 tooling
-# under proofs/, and parity-locked reference verifiers under verifiers/.
-# Security-sensitive crypto code (src-tauri/src/zk/, crates/olympus-crypto)
-# is the highest-value review surface; routine docs / dep bumps / lockfile
-# regenerations are noise we filter out.
+# The repo layout, invariants and engineering standards are AGENTS.md's; this
+# file only tunes what the reviewer looks at. Security-sensitive crypto code
+# (src-tauri/src/zk/, crates/olympus-crypto) is the highest-value review
+# surface; routine docs / dep bumps / lockfile regenerations are noise.
 
 language: en-US
 early_access: false
 
-# Capped at 250 chars by the CodeRabbit schema. Longer values silently
-# reject the whole config — the security-focused per-path instructions
-# below then never load. Keep this terse.
+# Capped at 250 chars by the schema; a longer value rejects the whole file and
+# takes every path_instruction with it (see the "stay exclude-only" check below).
 tone_instructions: >
   Be concise. Security-sensitive crypto ledger — prioritise correctness,
   soundness, and supply-chain findings over style. Skip generic suggestions
@@ -30,18 +27,12 @@ reviews:
   changed_files_summary: true
   sequence_diagrams: false # too heavy for typical PRs
 
-  # Paths CodeRabbit should NOT auto-review. Lockfiles, generated artifacts,
-  # vendored crates, build output, and local worktrees. Leading "!" excludes.
-  #
-  # IMPORTANT: keep this list EXCLUDE-ONLY (every entry starts with "!").
-  # CodeRabbit path_filters follow git sparse-checkout semantics: the moment a
-  # single bare (non-"!") include pattern is added, the list flips to allowlist
-  # mode and ONLY files matching an include are reviewed — everything else
-  # (all of src-tauri/, crates/, migrations/, …) is silently skipped. That
-  # regression (bare "docs/**" includes) skipped every code review until it was
-  # reverted here. Security architecture docs are already reviewed by default,
-  # so they need no include entry; their per-path review focus lives in
-  # path_instructions below.
+  # Paths CodeRabbit should NOT auto-review: lockfiles, generated artifacts,
+  # vendored crates, build output, local worktrees. EXCLUDE-ONLY — every entry
+  # starts with "!". The "path_filters stay exclude-only" custom check below
+  # explains why a single bare include silently disables code review entirely.
+  # Security architecture docs are reviewed by default, so they need no include
+  # entry; their review focus lives in path_instructions.
   path_filters:
     - "!**/*.lock"
     - "!**/Cargo.lock"
@@ -303,7 +294,7 @@ reviews:
         or removing a third-party dependency: a version change in Cargo.toml
         or package.json, a pnpm-workspace.yaml override or ignoreGhsas entry,
         or a new vendored tree under crates/. Do not apply to first-party
-        version bumps (the Olympus version in CLAUDE.md, tauri.conf.json).
+        version bumps (the Olympus version in AGENTS.md, tauri.conf.json).
     - label: "security"
       instructions: |
         Apply when the PR changes a security boundary. Concretely: anything
@@ -362,10 +353,10 @@ reviews:
 
   # ── Pre-merge checks ──────────────────────────────────────────────────────
   # The built-in title/description/issue checks are Pro; `custom_checks` is
-  # Pro Plus. These encode CLAUDE.md's "Before every git push" section, which
-  # is already written as deterministic pass/fail criteria but until now was
-  # enforced only by the pre-push hook, CI, and memory. Each one below exists
-  # because it failed at least once in this repo.
+  # Pro Plus. These encode AGENTS.md's "Before every `git push`" checklist —
+  # deterministic pass/fail criteria that until now were enforced only by the
+  # pre-push hook, CI and memory. Each one below exists because it failed at
+  # least once in this repo.
   #
   # All custom checks start at `mode: warning` — they annotate the PR without
   # blocking, consistent with `request_changes_workflow: false`. Promote an
@@ -525,18 +516,13 @@ reviews:
           PR description itself, and Rust doc comments (/// and //!).
 
           FAIL if the PR adds or edits a sentence claiming a check,
-          guarantee, or reuse that the tree does not implement. Real examples
-          from this repo:
-            - RFC-0001 stated the verifier recomputes /Length and rejects a
-              mismatch. It was written twice — RFC and doc comment — and
-              implemented in neither verifier; the value is elided from the
-              commitment by design, so that sentence was the only thing
-              standing behind it. Rated Critical in review.
-            - ADR-0029 stated "same offline verifiers — all reused". Both
-              verifiers refused the format outright.
-            - A merged PR description cited the pdfjs-dist licence as MIT
-              (it is Apache-2.0) and an isEvalSupported option that had
-              already been removed.
+          guarantee, or reuse that the tree does not implement. AGENTS.md's
+          "Before every `git push`" → "Do the claims match the code?" list
+          names the ones that shipped here (the RFC-0001 /Length
+          recomputation, ADR-0029's "all reused", the pdfjs-dist licence); a
+          merged PR description also cited an isEvalSupported option that had
+          already been removed. Check the claim against code, not against a
+          sibling document that repeats it.
 
           Also FAIL if the diff references a file path, function name, env
           var, or migration number that does not exist in the tree at this
