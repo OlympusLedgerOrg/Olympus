@@ -10,6 +10,8 @@
 
 import { Agent } from "undici";
 
+import { DEFAULT_NUM_CTX as BASE_NUM_CTX } from "./budget.mjs";
+
 // Declared before the URL validation below, not after it. These are `class`
 // declarations, so their bindings are in the temporal dead zone until their
 // definition is evaluated — which is where a throw from that validation lands if
@@ -187,9 +189,10 @@ const MODEL_DISPATCHER = new Agent({
 // SILENTLY — no error, no warning — so the model would answer confidently
 // from a partial view while `gatherContext` reported nothing missing. Pin the
 // window explicitly (and clamp it to what the model declares — see
-// effectiveNumCtx), and let mcp-server.mjs size its char budget from the same
-// number so "what the model saw" and "wiserepo said it sent" cannot disagree.
-const DEFAULT_NUM_CTX = numericEnv("WISEREPO_NUM_CTX", 16_384, {
+// effectiveNumCtx), and let `budgetCharsFor` size every caller's char budget
+// from the same number so "what the model saw" and "the tool said it sent"
+// cannot disagree.
+const DEFAULT_NUM_CTX = numericEnv("WISEREPO_NUM_CTX", BASE_NUM_CTX, {
   min: 2_048,
   max: 262_144,
 });

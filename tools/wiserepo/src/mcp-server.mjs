@@ -7,6 +7,7 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { callModel, effectiveNumCtx, modelForTool, DEFAULT_OLLAMA_MODEL } from "./backend.mjs";
+import { budgetCharsFor } from "./budget.mjs";
 import { verifyCitations, formatMissingCitations } from "./citations.mjs";
 import { readRepoFile, gitDiff, gitGrep, truncateText, wouldTruncate } from "./repo.mjs";
 import { getOlympusContext, getCircuitStatus, checkInvariants } from "./olympus.mjs";
@@ -24,26 +25,11 @@ import {
 // Without this a request naming 30 files each just under their own limit
 // would still blow well past the model's context window.
 //
-// Derived from the model's ACTUAL window rather than a fixed 300k (which only
-// fit a big-token model): Ollama truncates an oversized prompt silently, so a
-// budget larger than num_ctx means the model answers from a partial view while
-// wiserepo's inline truncation notes claim everything was sent. ~3 chars/token
-// is deliberately pessimistic for this codebase (paths, diff markers and dense
-// Rust prose all over-tokenize), and the output reserve keeps room for the
-// answer so the prompt and the completion fit in one window.
-const CHARS_PER_TOKEN_ESTIMATE = 3;
-const OUTPUT_TOKEN_RESERVE = 4_096;
-
-/**
- * Character budget for one gather, from the window the model will really get.
- *
- * Called with the EFFECTIVE num_ctx (configured value clamped to what the model
- * declares), not the configured value alone: a budget derived from a window the
- * model does not have is the silent-truncation bug this exists to prevent.
- */
-export function budgetCharsFor(numCtx) {
-  return Math.max(1_024, numCtx - OUTPUT_TOKEN_RESERVE) * CHARS_PER_TOKEN_ESTIMATE;
-}
+// `budget.mjs` owns the arithmetic, so this server and the `qwen-local` wrapper
+// cannot disagree about what fits: the budget is derived from the model's
+// ACTUAL window (see `effectiveNumCtx`), never a fixed figure, because Ollama
+// truncates an oversized prompt silently.
+export { budgetCharsFor };
 
 // Hard cap on how many files a single request may name. Without this,
 // gatherContext reads and buffers EVERY requested file in full before the

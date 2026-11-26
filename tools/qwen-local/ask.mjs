@@ -32,13 +32,27 @@ import {
   refusalMessage,
 } from "../agent-policy/policy.mjs";
 import { resolveInRepoFollowingSymlinks } from "../wiserepo/src/repo.mjs";
+// The budget arithmetic, not the Ollama client: `budget.mjs` has no
+// dependencies, so `--check` keeps working before wiserepo's npm install.
+import { DEFAULT_NUM_CTX, budgetCharsFor } from "../wiserepo/src/budget.mjs";
 
 // Prompt ceilings in characters, not tokens: the ratio varies by file, but a
 // cap in the units actually measured is honest about what it enforces. Every
 // cut is reported — a silently truncated file is the failure this exists to
 // avoid, because the model then answers confidently from a partial view.
 export const MAX_FILE_CHARS = 24_000;
-export const MAX_PROMPT_CHARS = 48_000;
+
+/**
+ * The total budget when the backend cannot report the window it will pin.
+ *
+ * NOT a ceiling: `ask()` sizes the prompt from `effectiveNumCtx`, so raising
+ * `WISEREPO_NUM_CTX` (or using a model with a larger declared window) raises
+ * this with it, and a smaller window lowers it. The old fixed 48 000 was ~11k
+ * characters over the window a 16 384-token default actually holds, and Ollama
+ * truncates the overflow silently — the exact failure this file's comments
+ * promise to avoid. This is the same formula at the default window.
+ */
+export const MAX_PROMPT_CHARS = budgetCharsFor(DEFAULT_NUM_CTX);
 
 export const SYSTEM_PROMPT =
   "You answer questions about a software repository from the files you are given. " +
@@ -148,19 +162,39 @@ export function planAsk({ question, paths = [], taskClass = "qa", policy = loadP
 }
 
 /**
+ * The character budget for this request, from the window the model will get.
+ *
+ * `backend.callModel` pins `num_ctx` to `effectiveNumCtx(model)` — the
+ * configured window clamped to what the model declares — so the prompt budget
+ * is derived from that same number here. A stub backend that reports no window
+ * gets the default-window budget; that is a fallback for tests and library
+ * callers, not a cap. If the daemon is unreachable the default is used and
+ * `callModel` reports the real error, rather than a guess about the window
+ * hiding it.
+ */
+export async function promptBudgetFor(client, model) {
+  if (typeof client?.effectiveNumCtx !== "function") return MAX_PROMPT_CHARS;
+  try {
+    return budgetCharsFor(await client.effectiveNumCtx(model));
+  } catch {
+    return MAX_PROMPT_CHARS;
+  }
+}
+
+/**
  * Assemble the prompt, naming every file it could not fit.
  *
  * Budget is spent in the order given, which is why the caller controls it: the
  * files named last are the ones that lose, and that is reported rather than
  * left for the reader to infer from a confident answer.
  */
-export function buildPrompt(question, files) {
+export function buildPrompt(question, files, maxPromptChars = MAX_PROMPT_CHARS) {
   const sections = [];
   const includedPaths = [];
   const droppedPaths = [];
   let used = 0;
   for (const file of files) {
-    const remaining = MAX_PROMPT_CHARS - used;
+    const remaining = maxPromptChars - used;
     const cap = Math.min(MAX_FILE_CHARS, remaining);
     // A section needs room for its header, fences and the truncation note; an
     // empty one is worse than an honest omission.
@@ -195,14 +229,16 @@ export async function ask({ question, paths = [], taskClass = "qa", backend, pla
   const files = await Promise.all(
     paths.map(async (rawPath) => ({ path: rawPath, text: await readRepoFile(rawPath) })),
   );
-  const built = buildPrompt(question, files);
+  const client = backend ?? (await loadBackend());
+  // The window the backend will pin for this request, not a fixed figure.
+  const maxPromptChars = await promptBudgetFor(client, decided.model);
+  const built = buildPrompt(question, files, maxPromptChars);
   if (files.length > 0 && built.includedPaths.length === 0) {
     throw new ToolError(
       "no file fits the prompt budget; name fewer or smaller files " +
-        `(per-file ${MAX_FILE_CHARS} chars, total ${MAX_PROMPT_CHARS})`,
+        `(per-file ${MAX_FILE_CHARS} chars, total ${maxPromptChars})`,
     );
   }
-  const client = backend ?? (await loadBackend());
   const startedAt = Date.now();
   // Ollama reports the token counts on its final event; the backend forwards
   // them here so a call can be recorded as measured, not estimated.

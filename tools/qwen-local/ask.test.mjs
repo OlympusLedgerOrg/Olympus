@@ -16,6 +16,7 @@ import {
   buildPrompt,
   main,
   planAsk,
+  promptBudgetFor,
   readRepoFile,
 } from "./ask.mjs";
 
@@ -102,8 +103,6 @@ test("a file over the per-file cap is truncated with a visible note", () => {
 });
 
 test("files past the total budget are named, not silently omitted", () => {
-  // Two files fill MAX_PROMPT_CHARS exactly at the per-file cap; the third has
-  // no room left, which is the only way a file is dropped rather than cut.
   const full = "y".repeat(MAX_FILE_CHARS);
   const built = buildPrompt("what is this?", [
     { path: "docs/first.md", text: full },
@@ -113,6 +112,26 @@ test("files past the total budget are named, not silently omitted", () => {
   assert.deepEqual(built.includedPaths, ["docs/first.md", "docs/second.md"]);
   assert.deepEqual(built.droppedPaths, ["docs/third.md"]);
   assert.match(built.prompt, /\[not sent \(prompt budget\): docs\/third\.md\]/);
+});
+
+test("the total budget follows the window the backend will pin", async () => {
+  // An 8192-token window holds (8192 - 4096) * 3 = 12288 characters. A fixed
+  // 48000-character cap would send ~4x what the model can see, and Ollama drops
+  // the overflow without saying so while this tool reported every file sent.
+  const budget = await promptBudgetFor({ effectiveNumCtx: async () => 8_192 }, "any-model");
+  assert.equal(budget, 12_288);
+  const built = buildPrompt(
+    "what is this?",
+    [{ path: "docs/big.md", text: "z".repeat(30_000) }],
+    budget,
+  );
+  assert.match(built.prompt, /\[truncated: \d+ of 30000 characters omitted\]/);
+  assert.ok(built.prompt.length <= budget + 1_000, "prompt must fit the derived budget");
+});
+
+test("a backend reporting no window falls back to the default-window budget", async () => {
+  assert.equal(await promptBudgetFor({}, "any-model"), MAX_PROMPT_CHARS);
+  assert.equal(MAX_PROMPT_CHARS, 36_864);
 });
 
 test("ask sends the file body and the question to the model it planned for", async () => {

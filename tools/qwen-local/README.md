@@ -50,10 +50,18 @@ npm install --prefix tools/wiserepo
 
 ## Prompt budget
 
-Per file `MAX_FILE_CHARS` (24 000 characters), total `MAX_PROMPT_CHARS`
-(48 000). A cut file carries an explicit `[truncated: …]` line, and a file that
-does not fit at all is named in `[not sent (prompt budget): …]` — never dropped
-silently, because a model answering from a partial view does not say so.
+Per file `MAX_FILE_CHARS` (24 000 characters). The total is not a fixed figure:
+`ask` derives it from the window the model will actually get — `effectiveNumCtx`
+(`WISEREPO_NUM_CTX`, clamped to what the model declares) through
+`budgetCharsFor`, the same formula `tools/wiserepo` uses. At the default
+16 384-token window that is 36 864 characters; a larger configured window buys a
+larger prompt and a smaller one gets less, because Ollama truncates an oversized
+prompt silently. 36 864 is only the fallback for a backend that reports no
+window.
+
+A cut file carries an explicit `[truncated: …]` line, and a file that does not
+fit at all is named in `[not sent (prompt budget): …]` — never dropped silently,
+because a model answering from a partial view does not say so.
 
 The budget is spent in `-f` order, so name the important file first.
 

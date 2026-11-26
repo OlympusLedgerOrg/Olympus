@@ -455,7 +455,7 @@ last.
 - `summarize` — summarize a diff or set of files (changelog entry, PR description, etc.)
 
 Every file/diff/grep result is truncated per-piece, and the combined context for
-a single call is capped by `budgetCharsFor()` in `src/mcp-server.mjs`. That cap
+a single call is capped by `budgetCharsFor()` in `src/budget.mjs`. That cap
 is derived from the **effective** context window (~3 chars per token, minus a
 4096-token reserve for the answer) rather than a fixed number: a budget larger
 than the window the daemon actually has would be truncated at the far end by
