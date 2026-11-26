@@ -22,7 +22,8 @@
     "gate-integrity:test": "node --test scripts/check-gate-integrity.test.mjs",
     "qwen-local:test": "node --test tools/qwen-local/ask.test.mjs",
     "verify-gate:test": "node --test tools/verify-gate/verify.test.mjs",
-    "tooling:check": "pnpm format:check && pnpm license:headers && pnpm license:headers:test && pnpm qwen-local:test && pnpm verify-gate:test && pnpm release-actions:check && pnpm release-actions:test && pnpm release-assets:test && pnpm preview-channel:check && pnpm preview-channel:test && pnpm hooks:test && pnpm pr-scope:test && pnpm gate-integrity:test"
+    "route-log:test": "node --test tools/agent-policy/log.test.mjs",
+    "tooling:check": "pnpm format:check && pnpm license:headers && pnpm license:headers:test && pnpm qwen-local:test && pnpm verify-gate:test && pnpm route-log:test && pnpm release-actions:check && pnpm release-actions:test && pnpm release-assets:test && pnpm preview-channel:check && pnpm preview-channel:test && pnpm hooks:test && pnpm pr-scope:test && pnpm gate-integrity:test"
   },
   "devDependencies": {
     "@taplo/cli": "^0.7.0",
