@@ -115,7 +115,7 @@
 
   "agent_files": {
     "AGENTS.md": "THE single agent-instructions document (Codex, Cursor, Copilot, Claude Code v2.1.277+)",
-    "CLAUDE.md": "one-line import bridge: @AGENTS.md (needed by Claude Code < v2.1.277)",
+    "CLAUDE.md": "one-line pointer to AGENTS.md; the repository instructions live there",
     "context.json": "this file — machine-readable project facts for agents"
   }
 }

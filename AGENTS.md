@@ -4,6 +4,12 @@ This file provides guidance to AI coding agents when working with code in this r
 
 Current version: **v0.10.0** (June 2026).
 
+## Repository analysis tooling
+
+- Use Wiserepo for repository-aware indexing, search, and context reduction when it is available and relevant. Wiserepo uses the local Qwen model for its repository analysis; Qwen is not a separate required analysis path.
+- Use Graphify separately when call-graph, dependency-graph, or structural relationship analysis would materially improve the task.
+- Treat Wiserepo/Qwen and Graphify results as analysis aids. Verify security-sensitive or implementation-critical conclusions against the source code, tests, and required project gates.
+
 ## Absolute Upstream Boundary
 
 This is a permanent, non-negotiable owner policy.
@@ -393,30 +399,27 @@ CodeRabbit's dashboard or docs when one of them is load-bearing for a decision.
 
 ## graphify
 
-This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
-
-When the user types `/graphify`, use the installed graphify skill or instructions before doing anything else.
+Use the knowledge graph in `graphify-out/` for structural navigation when available. When the user types `/graphify`, use the installed Graphify instructions first.
 
 Rules:
-- When graphify-out/graph.json exists, run `graphify query "<question>"` before your first grep, search or source-file read for a codebase question, and put this rule in every subagent prompt that explores code. Read raw files only for lines the graph or an earlier read already located. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. When the answer is under a Markdown heading, `graphify section "<heading>"` prints that section's text, so the .md need not be opened. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
+- When `graphify-out/graph.json` exists, run `graphify query "<question>"` before raw source search. Use `graphify path` for relationships and `graphify explain` or `graphify section` for focused concepts.
 - Dirty graphify-out/ files are expected after hooks or incremental updates; dirty graph files are not a reason to skip graphify. Only skip graphify if the task is about stale or incorrect graph output, or the user explicitly says not to use it.
-- If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
-- Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
+- `graphify-out/graph.json` is local generated state. It is modified by `graphify update .`, configured Git hooks, or incremental Graphify updates—not merely by opening a chat.
+- Use `graphify-out/wiki/index.md` for broad navigation and `GRAPH_REPORT.md` only when focused queries are insufficient.
 - After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).
-- `graphify-out/` is gitignored local state, not a repo artefact: every machine rebuilds its own graph, so it never appears in a diff or a pull request. Never stage or commit it, and do not treat a dirty `graphify-out/` as a reason to skip graphify.
+- `graphify-out/` is gitignored local state; never stage or commit it.
 
 ## Agent and model routing
 
-Use the least expensive capable tool, but do not sacrifice correctness on security-critical or implementation work. Before beginning a non-trivial task, briefly recommend the execution path when the choice is not obvious.
+Use the least expensive capable tool without sacrificing correctness. Recommend the path briefly when it is not obvious.
 
-- Use local Ollama through wiserepo for inexpensive repository discovery, file finding, summaries, straightforward Q&A, and first-pass context gathering. Ollama is a helper and must not be treated as authoritative for cryptographic, security, or correctness conclusions.
+- Use local Qwen through Wiserepo for discovery, file finding, summaries, and first-pass context. It is advisory, not authoritative.
 - Use Graphify for structural navigation: callers, dependencies, paths, hubs, and change-impact exploration. Graphify is a map, not a substitute for reading the cited code and running tests.
-- Use Codex for implementation, debugging, test changes, repository-wide refactors, and security-sensitive reasoning when working in this Codex environment. Prefer the included ChatGPT/Codex plan authentication where available; do not assume an OpenAI API key or separate API billing is available.
-- Use Claude/Claude Code for an independent second opinion, difficult code review, architecture review, or tasks where a separate model perspective materially improves confidence. Do not assume that an Anthropic subscription is automatically available inside OpenCode; use Claude Code's own authenticated client or an explicitly configured provider.
+- Use Codex or Claude for implementation, debugging, refactors, and security-sensitive reasoning. Prefer Codex here; use Claude for an independent second opinion.
 - For P0/P1 security findings, cryptographic changes, hash/layout changes, migrations, authentication/authorization, proof verification, or destructive operations, use Codex or Claude for the main work and verify the result with direct source inspection and tests. Do not delegate the final decision to Ollama or Graphify.
 - Never send Olympus source or secrets to a hosted service merely to save tokens. Prefer local Graphify and wiserepo for sensitive exploration unless the user has explicitly authorized hosted processing.
-- If a task can be completed with local tools, do that before using a metered hosted model. If the task requires implementation or high-confidence review, say why Codex or Claude is warranted.
-- Subscription access and API access are separate. A ChatGPT/Codex subscription does not automatically provide an OpenAI API key, and an Anthropic subscription does not automatically provide an Anthropic API key. Do not configure paid API usage or credits without explicit user authorization.
+- Prefer local tools before metered hosted models; explain when high-confidence review requires Codex or Claude.
+- Subscription access does not imply API access. Do not configure paid API usage without explicit authorization.
 - When a task-routing recommendation is useful, run `node tools/model-router/route.mjs "<task>"`. Treat its output as a recommendation: the hard-coded safety rules take precedence, and the user may override the suggested provider.
 - Orient with wiserepo before spending paid tokens: `repo_qa` / `summarize` on allowlisted paths answer "where is this" and "what does this do", `git grep` answers an exact symbol or string. Read the file itself once the code has to change or be judged — a summary is a lead, not the lines you are editing.
 - The MCP tools and `bin/wiserepo.mjs` share one guard (`tools/agent-policy/policy.mjs`), and one deny-set or off-allowlist path refuses the **whole** request. That refusal is final: read the file yourself on the paid tier it implies. Do not retry with other paths or wording, and do not hand the same request to another tool to route around the guard.
