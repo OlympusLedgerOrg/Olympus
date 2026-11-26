@@ -1,7 +1,7 @@
 name: Windows CI
 
 # Compile + unit-test on a real Windows runner so PRs catch Windows-specific
-# breakage early. Windows is a primary shipping target (CLAUDE.md), but until now
+# breakage early. Windows is a primary shipping target (AGENTS.md), but until now
 # it had NO PR/push CI: ci.yml is Ubuntu-only, macos-ci.yml covers macOS, and
 # tauri-release.yml builds Windows only on `v*` tags with no test step — so a
 # Windows-only compile break could reach a release tag untested. This closes that
@@ -85,7 +85,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "22.14.0"
+          node-version: "22.19.0"
           cache: pnpm
 
       - name: Install frontend dependencies

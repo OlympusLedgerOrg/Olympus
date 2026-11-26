@@ -89,42 +89,6 @@ pub(super) fn parse_existence_witness(
     .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("witness: {e}")))
 }
 
-pub(super) fn parse_non_existence_witness(
-    v: &serde_json::Value,
-) -> Result<crate::zk::witness::NonExistenceWitness, ApiError> {
-    let root = parse_fr(
-        v.get("root")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| err(StatusCode::BAD_REQUEST, "missing witness.root"))?,
-    )
-    .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("root: {e}")))?;
-
-    let key_arr = v.get("key").and_then(|v| v.as_array()).ok_or_else(|| {
-        err(
-            StatusCode::BAD_REQUEST,
-            "missing witness.key (32-byte array)",
-        )
-    })?;
-    if key_arr.len() != 32 {
-        return Err(err(
-            StatusCode::BAD_REQUEST,
-            &format!("key must be 32 bytes, got {}", key_arr.len()),
-        ));
-    }
-    let mut key = [0u8; 32];
-    for (i, val) in key_arr.iter().enumerate() {
-        key[i] = val
-            .as_u64()
-            .and_then(|n| u8::try_from(n).ok())
-            .ok_or_else(|| err(StatusCode::BAD_REQUEST, &format!("key[{i}]: not u8")))?;
-    }
-
-    let path_elements = parse_fr_array(v, "pathElements")?;
-
-    crate::zk::witness::NonExistenceWitness::new(root, key, path_elements)
-        .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("witness: {e}")))
-}
-
 fn parse_fr_array(v: &serde_json::Value, field: &str) -> Result<Vec<ark_bn254::Fr>, ApiError> {
     let arr = v
         .get(field)
@@ -311,29 +275,6 @@ mod tests {
             "pathIndices": [256], // > u8::MAX
         });
         assert_err_status(parse_existence_witness(&v), StatusCode::BAD_REQUEST);
-    }
-
-    // ── parse_non_existence_witness ────────────────────────────────────────
-
-    #[test]
-    fn non_existence_rejects_wrong_key_length() {
-        // `key` must be exactly 32 bytes; 31 is rejected before any Fr work.
-        let key: Vec<u8> = vec![0u8; 31];
-        let v = json!({
-            "root": FR_ONE,
-            "key": key,
-            "pathElements": [FR_ONE],
-        });
-        assert_err_status(parse_non_existence_witness(&v), StatusCode::BAD_REQUEST);
-    }
-
-    #[test]
-    fn non_existence_missing_key_is_400() {
-        let v = json!({
-            "root": FR_ONE,
-            "pathElements": [FR_ONE],
-        });
-        assert_err_status(parse_non_existence_witness(&v), StatusCode::BAD_REQUEST);
     }
 
     // ── parse_unified_witness ─────────────────────────────────────────────

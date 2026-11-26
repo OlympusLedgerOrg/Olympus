@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
+use super::approved_paths::ApprovedPaths;
 use super::server_state::ApiState;
 
 /// Cap any single IPC-supplied `Vec<u8>` to match the Axum-side body limit
@@ -130,7 +131,10 @@ pub(crate) struct FileMeta {
 }
 
 #[tauri::command]
-pub(crate) async fn pick_file_path(app: tauri::AppHandle) -> Result<Option<FileMeta>, String> {
+pub(crate) async fn pick_file_path(
+    app: tauri::AppHandle,
+    approved: tauri::State<'_, ApprovedPaths>,
+) -> Result<Option<FileMeta>, String> {
     use tauri_plugin_dialog::DialogExt;
     let (tx, rx) = tokio::sync::oneshot::channel::<Option<std::path::PathBuf>>();
     app.dialog()
@@ -143,6 +147,7 @@ pub(crate) async fn pick_file_path(app: tauri::AppHandle) -> Result<Option<FileM
         Some(p) => p,
         None => return Ok(None),
     };
+    approved.approve(&path);
     let name = path
         .file_name()
         .and_then(|s| s.to_str())
@@ -158,8 +163,12 @@ pub(crate) async fn pick_file_path(app: tauri::AppHandle) -> Result<Option<FileM
 /// Returns the hex-encoded digest, identical to the server's `content_hash`.
 /// Streams the file in 64 KiB blocks so it never allocates the full contents.
 #[tauri::command]
-pub(crate) async fn hash_file_for_manifest(path: String) -> Result<String, String> {
+pub(crate) async fn hash_file_for_manifest(
+    path: String,
+    approved: tauri::State<'_, ApprovedPaths>,
+) -> Result<String, String> {
     use std::io::{BufReader, Read as _};
+    let path = approved.require(&path)?.to_string_lossy().into_owned();
     let file = std::fs::File::open(&path).map_err(|e| format!("open {path}: {e}"))?;
     let meta = file.metadata().map_err(|e| format!("stat {path}: {e}"))?;
     if !meta.is_file() {
@@ -262,7 +271,11 @@ fn read_file_capped(path: &str, limit: usize) -> Result<Vec<u8>, String> {
 /// manifest before cutting anything (ADR-0029 §5). Callers treat a failure as
 /// non-fatal — the object checklist works on the same document without it.
 #[tauri::command]
-pub(crate) async fn read_file_for_render(path: String) -> Result<tauri::ipc::Response, String> {
+pub(crate) async fn read_file_for_render(
+    path: String,
+    approved: tauri::State<'_, ApprovedPaths>,
+) -> Result<tauri::ipc::Response, String> {
+    let path = approved.require(&path)?.to_string_lossy().into_owned();
     let bytes = read_file_capped(&path, RENDER_BYTES_LIMIT)?;
     Ok(tauri::ipc::Response::new(bytes))
 }
@@ -284,6 +297,7 @@ pub(crate) async fn read_file_for_render(path: String) -> Result<tauri::ipc::Res
 #[tauri::command]
 pub(crate) async fn describe_by_path(
     api_state: tauri::State<'_, ApiState>,
+    approved: tauri::State<'_, ApprovedPaths>,
     path: String,
     original_root: Option<String>,
     shard_id: Option<String>,
@@ -291,6 +305,7 @@ pub(crate) async fn describe_by_path(
 ) -> Result<serde_json::Value, String> {
     use base64::Engine as _;
 
+    let path = approved.require(&path)?.to_string_lossy().into_owned();
     let bytes = read_file_capped(&path, IPC_BYTES_LIMIT)?;
     // The endpoint requires `content_hash` to equal BLAKE3 of the uploaded bytes
     // — hash the same buffer we send, so the two cannot disagree.
@@ -362,6 +377,7 @@ pub(crate) struct ProgressEvent {
 pub(crate) async fn redact_by_path(
     app: tauri::AppHandle,
     api_state: tauri::State<'_, ApiState>,
+    approved: tauri::State<'_, ApprovedPaths>,
     path: String,
     redacted_obj_ids: Vec<u32>,
     recipient_id: String,
@@ -371,6 +387,8 @@ pub(crate) async fn redact_by_path(
 ) -> Result<serde_json::Value, String> {
     use base64::Engine as _;
     use std::io::Read as _;
+
+    let path = approved.require(&path)?.to_string_lossy().into_owned();
 
     // 10% — read file from disk
     let _ = on_progress.send(ProgressEvent {
@@ -543,7 +561,10 @@ pub(crate) async fn save_text_to_disk(
 /// Returns `None` on user cancel. Returns an error on read failure
 /// (e.g. permission denied, file vanished between pick and read).
 #[tauri::command]
-pub(crate) async fn open_file_dialog(app: tauri::AppHandle) -> Result<Option<PickedFile>, String> {
+pub(crate) async fn open_file_dialog(
+    app: tauri::AppHandle,
+    approved: tauri::State<'_, ApprovedPaths>,
+) -> Result<Option<PickedFile>, String> {
     use tauri_plugin_dialog::DialogExt;
     let (tx, rx) = tokio::sync::oneshot::channel::<Option<std::path::PathBuf>>();
     app.dialog()
@@ -556,6 +577,8 @@ pub(crate) async fn open_file_dialog(app: tauri::AppHandle) -> Result<Option<Pic
         Some(p) => p,
         None => return Ok(None),
     };
+
+    approved.approve(&path);
 
     // F-2: refuse oversize files BEFORE allocating a Vec<u8> for the entire
     // contents, and read through a SINGLE file handle so the size check and

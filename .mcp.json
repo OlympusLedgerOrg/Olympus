@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "wiserepo": {
+      "type": "stdio",
+      "command": "${WISEREPO_NODE:-node}",
+      "args": ["tools/wiserepo/bin/mcp-launcher.mjs"]
+    }
+  }
+}

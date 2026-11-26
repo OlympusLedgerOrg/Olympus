@@ -17,7 +17,43 @@ use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
-const PG_PORT: u16 = 5433;
+/// Default TCP port for the app-managed embedded cluster.
+const DEFAULT_PG_PORT: u16 = 5433;
+
+/// Resolve the embedded PostgreSQL port from `OLYMPUS_PG_PORT`.
+///
+/// A second Olympus instance — or any other process already holding 5433 —
+/// made the app-managed cluster unstartable with no supported override (audit
+/// G-P2-2). Invalid or zero values fall back to the default with a warning:
+/// the port is also baked into `postgresql.conf` and the process-identity
+/// checks, so refusing startup over a typo would strand the operator.
+fn resolve_pg_port(raw: Option<&str>) -> u16 {
+    let Some(raw) = raw else {
+        return DEFAULT_PG_PORT;
+    };
+    match raw.trim().parse::<u16>() {
+        Ok(port) if port != 0 => port,
+        _ => {
+            tracing::warn!(
+                "OLYMPUS_PG_PORT={raw:?} is not a valid TCP port; using {DEFAULT_PG_PORT}"
+            );
+            DEFAULT_PG_PORT
+        }
+    }
+}
+
+/// The resolved embedded-cluster port.
+///
+/// Public because integration tests must reserve the port the app will really
+/// bind: `OLYMPUS_PG_PORT` means a hand-copied `5433` constant in a test no
+/// longer describes the running cluster (audit G-P2-2).
+pub fn pg_port() -> u16 {
+    static RESOLVED: OnceLock<u16> = OnceLock::new();
+    *RESOLVED.get_or_init(|| {
+        let raw = std::env::var("OLYMPUS_PG_PORT").ok();
+        resolve_pg_port(raw.as_deref())
+    })
+}
 
 const PG_USER: &str = "olympus";
 
@@ -71,11 +107,12 @@ fn patch_pg_conf(data_dir: &Path) -> std::io::Result<()> {
     let patch = format!(
         "\n# Olympus embedded PostgreSQL managed settings v1\n\
          listen_addresses = '127.0.0.1'\n\
-         port = {PG_PORT}\n\
+         port = {}\n\
          password_encryption = 'scram-sha-256'\n\
          fsync = on\n\
          synchronous_commit = on\n\
-         full_page_writes = on\n"
+         full_page_writes = on\n",
+        pg_port()
     );
 
     // PostgreSQL uses the last occurrence of a setting. Requiring the exact
@@ -343,7 +380,7 @@ async fn try_init_embedded(
     };
     let settings = PgSettings {
         database_dir: data_dir.to_path_buf(),
-        port: PG_PORT,
+        port: pg_port(),
         user: PG_USER.into(),
         password: password.clone(),
         auth_method: PgAuthMethod::ScramSha256,
@@ -362,7 +399,7 @@ async fn try_init_embedded(
     dbg_log(app_data_dir, "PgEmbed::new OK");
 
     let stale_pid = data_dir.join("postmaster.pid");
-    let presence = probe_postmaster_presence(&stale_pid, data_dir, PG_PORT);
+    let presence = probe_postmaster_presence(&stale_pid, data_dir, pg_port());
     dbg_log(app_data_dir, &presence.safe_message());
     match presence {
         PidPresence::NoPidFile | PidPresence::Absent(_) => {}
@@ -388,7 +425,7 @@ async fn try_init_embedded(
                 data_dir,
                 &stale_executable.path,
                 stale_executable.sha256,
-                PG_PORT,
+                pg_port(),
             )?;
             let (outcome, retained_after_failure) =
                 cleanup_verified_postgres(&stale_pid, &stale_expected);
@@ -423,7 +460,7 @@ async fn try_init_embedded(
         data_dir,
         &authenticated_postgres.path,
         authenticated_postgres.sha256,
-        PG_PORT,
+        pg_port(),
     )?;
 
     dbg_log(app_data_dir, "patching postgresql.conf...");
@@ -466,7 +503,10 @@ async fn try_init_embedded(
 
     dbg_log(
         app_data_dir,
-        &format!("connecting pool: user={PG_USER} host=localhost port={PG_PORT} db={PG_DB}"),
+        &format!(
+            "connecting pool: user={PG_USER} host=localhost port={} db={PG_DB}",
+            pg_port()
+        ),
     );
     let pool = match PgPool::connect(&pg.full_db_uri(PG_DB)).await {
         Ok(pool) => pool,
@@ -499,7 +539,14 @@ async fn try_init_embedded(
     };
     dbg_log(app_data_dir, "pool connected");
 
-    sqlx::migrate!("../migrations").run(&pool).await?;
+    if let Err(error) = sqlx::migrate!("../migrations").run(&pool).await {
+        // Keep the renderer/operator-facing error sanitized, but preserve the
+        // migration name and database diagnostic in the local debug log. This
+        // is the only practical way to diagnose a failed migration without
+        // exposing SQL/database details through IPC or the UI.
+        dbg_log(app_data_dir, &format!("migration failed: {error:?}"));
+        return Err(error.into());
+    }
     dbg_log(app_data_dir, "migrations applied — PG fully ready");
 
     Ok(EmbeddedDb {
@@ -688,7 +735,7 @@ mod tests {
     use super::*;
 
     fn assert_managed_pg_settings_are_last(config: &str) {
-        let managed_port = format!("port = {PG_PORT}");
+        let managed_port = format!("port = {}", pg_port());
         for (managed_setting, insecure_setting) in [
             ("listen_addresses = '127.0.0.1'", "listen_addresses = '*'"),
             (managed_port.as_str(), "port = 9999"),

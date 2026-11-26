@@ -64,6 +64,7 @@ export interface HashVerificationResponse {
   record_id: string;
   shard_id: string;
   content_hash: string;
+  original_root?: string | null;
   merkle_root: string;
   merkle_proof: Record<string, unknown> | null;
   merkle_proof_valid: boolean;
@@ -137,6 +138,12 @@ export interface RecordProofResponse {
   batch_id?: string;
   poseidon_root?: string;
   merkle_proof: Record<string, unknown>;
+  /** Optional signed-proof metadata supplied by newer server versions. */
+  signature?: string | Record<string, unknown> | null;
+  issuer?: string | null;
+  signature_public_key?: { x: string; y: string } | null;
+  leaf_index?: number | null;
+  snapshot_size?: number | null;
 }
 
 // ─── Dataset types ────────────────────────────────────────────────────────────

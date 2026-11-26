@@ -112,7 +112,8 @@ currently **`canonical_v2`** (see [`CHANGELOG.md`](../CHANGELOG.md)).
 .
 ├── app/public-ui/                  React + TS + Vite frontend
 ├── src-tauri/                      Tauri 2 desktop binary (entry point of the app)
-│   ├── src/main.rs                 Tauri entry, proofs_dir resolution, placeholder gate
+│   ├── src/main.rs                 Tauri entry: module wiring + main() orchestration
+│   ├── src/startup.rs              proofs_dir resolution, placeholder gate, ceremony manifests, bring-up
 │   ├── src/lib.rs                  shared lib for tests
 │   ├── src/server/mod.rs           Axum router wiring
 │   ├── src/api/                    HTTP route handlers (see below)
@@ -247,7 +248,7 @@ Three core Circom circuits compile to Groth16 over BN254, with
 | Circuit | Purpose |
 |---|---|
 | `document_existence` | proves a document hash is in the Merkle root |
-| `non_existence` | proves a key is absent from the SMT |
+| `non_existence` | proves a key is absent from a *caller-supplied* SMT root; no endpoint serves it until absence is anchored to the signed ledger (OLY-H2) |
 | `unified_canonicalization_inclusion_root_sign` | historical artifact stem for structured section commitment + Merkle inclusion + ledger-root SMT inclusion; it proves neither canonicalization nor signatures |
 
 The public `unified_canonicalization_inclusion_root` protocol composes a RISC

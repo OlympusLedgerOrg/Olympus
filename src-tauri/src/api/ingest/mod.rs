@@ -78,6 +78,11 @@ struct IngestRow {
     canonicalization: Option<String>,
     merkle_proof_json: Option<String>,
     original_hash: Option<String>,
+    original_root: Option<String>,
+    snapshot_path: Option<serde_json::Value>,
+    snapshot_sig: Option<String>,
+    snapshot_index: Option<i64>,
+    snapshot_size: Option<i64>,
 }
 
 // ── Request / Response schemas ─────────────────────────────────────────────────
@@ -126,6 +131,7 @@ pub struct RecordProofResponse {
     pub shard_id: String,
     pub record_type: String,
     pub content_hash: String,
+    pub original_root: Option<String>,
     pub merkle_root: String,
     pub ledger_entry_hash: String,
     pub timestamp: String,
@@ -133,6 +139,11 @@ pub struct RecordProofResponse {
     pub poseidon_root: Option<String>,
     pub canonicalization: Option<serde_json::Value>,
     pub merkle_proof: serde_json::Value,
+    pub signature: Option<serde_json::Value>,
+    pub issuer: String,
+    pub signature_public_key: Option<serde_json::Value>,
+    pub leaf_index: Option<u64>,
+    pub snapshot_size: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub merkle_proof_valid: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -227,11 +238,25 @@ fn row_to_proof_response(row: &IngestRow, _for_verify: bool) -> RecordProofRespo
         .as_deref()
         .and_then(|s| serde_json::from_str(s).ok());
 
-    let proof_val: serde_json::Value = row
+    let legacy_proof: serde_json::Value = row
         .merkle_proof_json
         .as_deref()
         .and_then(|s| serde_json::from_str(s).ok())
         .unwrap_or(serde_json::json!({}));
+    // The authoritative proof is the stored Poseidon snapshot path. Export it
+    // as an array so third parties can walk it without contacting Olympus.
+    let proof_val = row.snapshot_path.clone().and_then(|path| {
+        let elements = path.get("path_elements")?.as_array()?;
+        let indices = path.get("path_indices")?.as_array()?;
+        if elements.len() != indices.len() { return None; }
+        Some(serde_json::Value::Array(elements.iter().zip(indices).map(|(hash, direction)| {
+            serde_json::json!({ "hash": hash, "position": if direction.as_u64() == Some(0) { "left" } else { "right" } })
+        }).collect()))
+    }).unwrap_or(legacy_proof);
+    let signature = row
+        .snapshot_sig
+        .as_deref()
+        .and_then(|s| serde_json::from_str(s).ok());
 
     // Prefer the canonical signed Poseidon snapshot root. Current commits
     // populate `snapshot_root` only; fall back to the legacy `merkle_root` /
@@ -256,6 +281,7 @@ fn row_to_proof_response(row: &IngestRow, _for_verify: bool) -> RecordProofRespo
         shard_id: row.shard_id.clone(),
         record_type: row.record_type.clone(),
         content_hash: row.content_hash.clone(),
+        original_root: row.original_root.clone(),
         merkle_root: root,
         ledger_entry_hash: row.ledger_entry_hash.clone(),
         timestamp: row.ts.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
@@ -263,12 +289,28 @@ fn row_to_proof_response(row: &IngestRow, _for_verify: bool) -> RecordProofRespo
         poseidon_root,
         canonicalization: canon,
         merkle_proof: proof_val,
+        signature,
+        issuer: "Olympus".to_owned(),
+        signature_public_key: None,
+        leaf_index: row.snapshot_index.map(|v| v as u64),
+        snapshot_size: row.snapshot_size.map(|v| v as u64),
         // Binary Merkle proofs were removed; authoritative inclusion is now the
         // signed Poseidon ledger snapshot (zk::snapshot).
         merkle_proof_valid: None,
         original_hash: row.original_hash.clone(),
         is_redacted,
     }
+}
+
+pub(crate) fn authority_public_key_json(
+    state: &crate::state::AppState,
+) -> Option<serde_json::Value> {
+    state.bjj_authority_pubkey.as_ref().map(|key| {
+        serde_json::json!({
+            "x": key.x.to_string(),
+            "y": key.y.to_string(),
+        })
+    })
 }
 
 // ── Shared snapshot-signature discriminator ─────────────────────────────────────
@@ -378,6 +420,11 @@ mod tests {
             canonicalization: None,
             merkle_proof_json: None,
             original_hash: None,
+            original_root: None,
+            snapshot_path: None,
+            snapshot_sig: None,
+            snapshot_index: None,
+            snapshot_size: None,
         }
     }
 

@@ -22,6 +22,7 @@
  * Run via `pnpm preview-channel:check` (wired into `pnpm tooling:check`).
  */
 
+import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -50,6 +51,38 @@ const SKIP_DIRECTORIES = new Set([
   "proofs/keys",
 ]);
 
+/** Files git considers part of the checkout: tracked plus untracked-unignored. */
+const listGitFiles = (root) => {
+  const run = (args) =>
+    execFileSync("git", args, {
+      cwd: root,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    })
+      .split("\0")
+      .filter(Boolean)
+      .map((file) => file.replace(/\\/g, "/"));
+  return [...run(["ls-files", "-z"]), ...run(["ls-files", "--others", "--exclude-standard", "-z"])];
+};
+
+/**
+ * Every file containment has to consider.
+ *
+ * This asks git rather than walking the directory tree, because only git knows
+ * `.gitignore`. Local, ignored state — `graphify-out/` graph caches,
+ * `.olympus-logs/`, build output — is not part of the repository, never exists
+ * on a CI checkout, and must not be able to fail a gate that is green upstream.
+ */
+const listFiles = (root) => {
+  try {
+    return [...new Set(listGitFiles(root))].sort();
+  } catch {
+    // Not a git checkout (a source tarball, or git is unavailable): there are no
+    // ignore rules to honour, so fall back to the directory walk.
+    return walk(root);
+  }
+};
+
 const walk = (root, relative = "") => {
   const absolute = path.join(root, relative);
   const out = [];
@@ -68,7 +101,8 @@ const walk = (root, relative = "") => {
 
 /**
  * Every file that mentions `OLYMPUS_RELEASE_CHANNEL`, excluding documentation
- * (which must be free to explain it) and this checker plus its own test.
+ * (which must be free to explain it), this checker plus its own test, and
+ * anything git ignores (see `listFiles`).
  */
 export const findChannelMentions = (root) => {
   const self = new Set([
@@ -76,14 +110,15 @@ export const findChannelMentions = (root) => {
     "scripts/check-preview-channel.test.mjs",
   ]);
   const offenders = [];
-  for (const relative of walk(root)) {
+  for (const relative of listFiles(root)) {
     if (self.has(relative)) continue;
     if (DOC_EXTENSIONS.has(path.extname(relative))) continue;
-    if (statSync(path.join(root, relative)).size > 2_000_000) continue;
     let contents;
     try {
+      if (statSync(path.join(root, relative)).size > 2_000_000) continue;
       contents = readFileSync(path.join(root, relative), "utf8");
     } catch {
+      // Tracked but deleted from the worktree, or unreadable: nothing to scan.
       continue;
     }
     if (contents.includes(CHANNEL_ENV)) offenders.push(relative);

@@ -7,8 +7,11 @@
     "format:check": "pnpm format:prettier:check && pnpm format:toml:check",
     "format:prettier": "prettier --write \"**/*.{js,mjs,cjs,ts,tsx,json,css,yml,yaml}\"",
     "format:prettier:check": "prettier --check \"**/*.{js,mjs,cjs,ts,tsx,json,css,yml,yaml}\"",
-    "format:toml": "taplo format",
-    "format:toml:check": "taplo format --check",
+    "format:toml": "node scripts/taplo.mjs format",
+    "format:toml:check": "node scripts/taplo.mjs format --check",
+    "taplo:test": "node --test scripts/taplo.test.mjs",
+    "lockfile:check": "node scripts/check-lockfile.mjs",
+    "lockfile:test": "node --test scripts/check-lockfile.test.mjs",
     "license:headers": "node scripts/check-license-headers.mjs",
     "license:headers:update-baseline": "node scripts/check-license-headers.mjs --update-baseline",
     "license:headers:test": "node --test scripts/check-license-headers.test.mjs",
@@ -19,10 +22,14 @@
     "preview-channel:test": "node --test scripts/check-preview-channel.test.mjs",
     "hooks:test": "node --test scripts/pre-commit-hook.test.mjs",
     "pr-scope:test": "node --test scripts/check-pr-scope.test.mjs",
-    "tooling:check": "pnpm format:check && pnpm license:headers && pnpm license:headers:test && pnpm release-actions:check && pnpm release-actions:test && pnpm release-assets:test && pnpm preview-channel:check && pnpm preview-channel:test && pnpm hooks:test && pnpm pr-scope:test"
+    "gate-integrity:test": "node --test scripts/check-gate-integrity.test.mjs",
+    "qwen-local:test": "node --test tools/qwen-local/ask.test.mjs",
+    "verify-gate:test": "node --test tools/verify-gate/verify.test.mjs",
+    "route-log:test": "node --test tools/agent-policy/log.test.mjs",
+    "route-report:test": "python tools/agent-policy/test_route_report.py",
+    "tooling:check": "pnpm lockfile:check && pnpm lockfile:test && pnpm format:check && pnpm taplo:test && pnpm license:headers && pnpm license:headers:test && pnpm qwen-local:test && pnpm verify-gate:test && pnpm route-log:test && pnpm route-report:test && pnpm release-actions:check && pnpm release-actions:test && pnpm release-assets:test && pnpm preview-channel:check && pnpm preview-channel:test && pnpm hooks:test && pnpm pr-scope:test && pnpm gate-integrity:test"
   },
   "devDependencies": {
-    "@taplo/cli": "^0.7.0",
     "prettier": "^3.9.6",
     "eslint": "^9.39.5",
     "js-yaml": "^5.2.3"

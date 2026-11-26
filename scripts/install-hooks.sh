@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Activate the shared git hooks in .githooks/ for this clone.
 #
-# Sets core.hooksPath so .githooks/pre-commit and .githooks/pre-push run
+# Sets core.hooksPath so the hooks in .githooks/ run
 # automatically. Idempotent — safe to run repeatedly.
 #
 # Usage:
@@ -18,10 +18,11 @@ if [ ! -d .githooks ]; then
 fi
 
 git config core.hooksPath .githooks
-chmod +x .githooks/pre-commit .githooks/pre-push 2>/dev/null || true
+chmod +x .githooks/pre-commit .githooks/post-commit .githooks/pre-push 2>/dev/null || true
 
 echo "Git hooks activated."
 echo "  pre-commit: cargo fmt + clippy + frontend lint/tsc on staged files"
+echo "  post-commit: update local Graphify graph when graphify is installed"
 echo "  pre-push:   full workspace clippy + tests + frontend build"
 echo ""
 echo "Bypass once with:  git commit --no-verify  /  git push --no-verify"

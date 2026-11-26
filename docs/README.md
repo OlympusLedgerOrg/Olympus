@@ -37,7 +37,7 @@ Welcome to the Olympus docs. Start here based on your role.
 1. **[Threat Model](threat-model.md)** — What we claim to protect
 2. **[Evidence Pack](court-evidence.md)** (§§5-9) — Ceremony integrity and cryptographic assumptions
 3. **[Architecture Decision Records](adr/)** — Why we made each design choice
-4. **[../CLAUDE.md](../CLAUDE.md)** — Critical Invariants (the safety constraints we never break)
+4. **[../AGENTS.md](../AGENTS.md)** — Critical Invariants (the safety constraints we never break)
 
 ---
 
@@ -84,7 +84,7 @@ See [adr/README.md](adr/README.md) for the full index.
 - **[Supply-chain vetting](supply-chain-vetting.md)** — `cargo-vet` baseline and follow-up scope
 - **[C2PA bridge guardrails](c2pa-bridge.md)** — supplemental provenance import/export boundaries
 - **[RFCs](rfcs/)** — proposed changes before they become ADRs
-- **[../CLAUDE.md](../CLAUDE.md)** — Critical Invariants (read before modifying crypto)
+- **[../AGENTS.md](../AGENTS.md)** — Critical Invariants (read before modifying crypto)
 - **[../SECURITY.md](../SECURITY.md)** — Coordinated vulnerability disclosure
 
 ---
@@ -146,7 +146,7 @@ A: See [../SECURITY.md](../SECURITY.md) for coordinated disclosure.
 | [DEMO.md](DEMO.md)                                 | Evaluators                 | 15 min | Desktop commit / verify walkthrough                          |
 | [BUILD_WEEK.md](BUILD_WEEK.md)                     | Judges, evaluators         | 10 min | Build Week 2026 provenance boundary                          |
 | [JUDGES.md](JUDGES.md)                             | Judges                     | 5 min  | Five-minute judge walkthrough                                |
-| [../CLAUDE.md](../CLAUDE.md)                       | Developers                 | 5 min  | Critical invariants                                          |
+| [../AGENTS.md](../AGENTS.md)                       | Developers                 | 5 min  | Critical invariants                                          |
 | [../SECURITY.md](../SECURITY.md)                   | Security researchers       | 5 min  | Coordinated disclosure                                       |
 
 ---

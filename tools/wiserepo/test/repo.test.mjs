@@ -19,8 +19,8 @@ import {
 } from "../src/repo.mjs";
 
 test("resolveInRepo allows a plain relative path inside the repo", () => {
-  const resolved = resolveInRepo("CLAUDE.md");
-  assert.ok(resolved.endsWith("CLAUDE.md"));
+  const resolved = resolveInRepo("AGENTS.md");
+  assert.ok(resolved.endsWith("AGENTS.md"));
 });
 
 test("resolveInRepo allows the repo root itself", () => {
@@ -108,7 +108,7 @@ test("sanitizeDiffArgs confines post-dash-dash pathspecs to the repo", () => {
     () => sanitizeDiffArgs(["HEAD", "--", "../../etc/passwd"]),
     /escapes the repo root/,
   );
-  assert.deepEqual(sanitizeDiffArgs(["HEAD", "--", "CLAUDE.md"]), ["HEAD", "--", "CLAUDE.md"]);
+  assert.deepEqual(sanitizeDiffArgs(["HEAD", "--", "AGENTS.md"]), ["HEAD", "--", "AGENTS.md"]);
 });
 
 test("sanitizeDiffArgs rejects a non-string argument", () => {
@@ -185,9 +185,9 @@ test(
     const linkPath = path.join(repoRoot(), "wiserepo-test-symlink-internal.txt");
     rmSync(linkPath, { force: true });
     try {
-      symlinkSync(path.join(repoRoot(), "CLAUDE.md"), linkPath);
+      symlinkSync(path.join(repoRoot(), "AGENTS.md"), linkPath);
       const real = await resolveInRepoFollowingSymlinks("wiserepo-test-symlink-internal.txt");
-      assert.equal(real, path.resolve(repoRoot(), "CLAUDE.md"));
+      assert.equal(real, path.resolve(repoRoot(), "AGENTS.md"));
     } finally {
       rmSync(linkPath, { force: true });
     }
@@ -219,8 +219,8 @@ test("wouldTruncate matches truncateText's actual cut decision, including near t
 // function is part of the public module surface.
 
 test("gitGrep with globs actually finds matches (regression: double -- silently matched nothing)", async () => {
-  const hits = await gitGrep("Absolute Upstream Boundary", { globs: ["CLAUDE.md"] });
-  assert.match(hits, /CLAUDE\.md/);
+  const hits = await gitGrep("Absolute Upstream Boundary", { globs: ["AGENTS.md"] });
+  assert.match(hits, /AGENTS\.md/);
 });
 
 test("gitGrep rejects a glob that looks like a flag", async () => {

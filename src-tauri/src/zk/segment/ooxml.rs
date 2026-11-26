@@ -88,7 +88,10 @@ fn read_parts(bytes: &[u8]) -> Result<Vec<(String, Vec<u8>)>, SegmentError> {
         if f.is_dir() {
             continue;
         }
-        let name = f.name().to_string();
+        let name = f
+            .name()
+            .map_err(|e| malformed(format!("entry {i}: {e}")))?
+            .to_string();
         let mut payload = Vec::new();
         // Read at most `remaining + 1` so an over-budget entry is detected without
         // buffering the whole bomb. `take` consumes `f`; name is already captured.

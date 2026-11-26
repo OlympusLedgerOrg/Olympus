@@ -57,9 +57,22 @@ use sqlx::postgres::PgConnection;
 /// `f4a75b468899d53e052916b79c160b03b64348388fd301740e00eca695cffb2d` (itself
 /// set by `0062_shards_checkpoint_quorum_threshold`, 683 -> 685; reproduced
 /// exactly against the pre-0063 migration set as the regeneration protocol's
-/// control run). Regenerated 2026-08-15 by applying the full migration set
-/// against a real PostgreSQL 16 database and running
-/// `regen_semantic_inventory_digest` — see the ignored maintenance test below.
+/// control run).
+///
+/// Regenerated 2026-11-26 with the documented helper against the verified
+/// **PostgreSQL 15.16** embedded package (`pg-embed-local`'s `PG_V15`):
+/// `OLYMPUS_INVENTORY_REGEN_URL=… cargo test -p olympus-desktop --lib
+/// regen_semantic_inventory_digest -- --ignored --nocapture` reported 747
+/// inventory rows and produced this value. 15 is the only major the runtime
+/// accepts: both `validate_external_pg_migration_maintenance_authority` and
+/// `validate_external_pg_session` require `150_000..160_000`.
+///
+/// The digest normalizes CRLF to LF in each definition before hashing
+/// (`external_pg_semantic_inventory_digest`). Migration files carry the
+/// checkout's line endings, and PostgreSQL stores routine source verbatim in
+/// `prosrc`, so a CRLF Windows checkout used to hash differently from an LF
+/// Linux checkout of the same commit (747 rows both ways). The normalized
+/// value therefore matches every checkout and the Linux CI fixture.
 const EXTERNAL_PG_SEMANTIC_INVENTORY_BLAKE3: &str =
     "8bf342fb06f1dfd29270d93b92ba70fa928b237cb93c15406ae9123b6985a668";
 
@@ -1386,17 +1399,30 @@ pub(super) fn external_pg_semantic_inventory_digest(
     let mut hasher = blake3::Hasher::new();
     hasher.update(b"OLY:EXTERNAL-PG:SEMANTIC-INVENTORY:V1");
     for row in rows {
+        let definition = normalized_semantic_definition(&row.definition);
         for value in [
             row.object_kind.as_bytes(),
             row.parent_name.as_bytes(),
             row.object_name.as_bytes(),
-            row.definition.as_bytes(),
+            definition.as_bytes(),
         ] {
             hasher.update(&(value.len() as u64).to_be_bytes());
             hasher.update(value);
         }
     }
     hasher.finalize().to_hex().to_string()
+}
+
+/// Definitions are JSON text, so a CR in a stored definition is the two-byte
+/// escape `\r` rather than a raw control character. Normalizing the escape
+/// keeps the digest independent of the checkout's line endings without
+/// changing any value PostgreSQL reports.
+fn normalized_semantic_definition(definition: &str) -> std::borrow::Cow<'_, str> {
+    if definition.contains("\\r\\n") {
+        std::borrow::Cow::Owned(definition.replace("\\r\\n", "\\n"))
+    } else {
+        std::borrow::Cow::Borrowed(definition)
+    }
 }
 
 pub(super) async fn probe_external_pg_closed_catalog(

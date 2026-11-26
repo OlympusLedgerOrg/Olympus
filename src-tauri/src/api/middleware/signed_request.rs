@@ -17,7 +17,7 @@ use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use olympus_crypto::{
     request_envelope::{signed_request_message, REQUEST_V1_DOMAIN_SEPARATOR},
     signature_envelope::{
-        SignatureAlgorithm, SignatureEnvelopeError, SignatureEnvelopeV2, SignatureVerificationMode,
+        SignatureAlgorithm, SignatureEnvelopeError, SignatureEnvelopeV3, SignatureVerificationMode,
         VerifiedEnvelope,
     },
 };
@@ -175,7 +175,7 @@ where
 #[derive(Debug)]
 struct ParsedEnvelope {
     request: SignedRequestV1,
-    signature: SignatureEnvelopeV2,
+    signature: SignatureEnvelopeV3,
     payload_canonical: Vec<u8>,
 }
 
@@ -412,7 +412,7 @@ fn route_pattern_matches(pattern: &str, path: &str) -> bool {
 #[derive(Deserialize)]
 struct WireEnvelope {
     request: WireSignedRequestV1,
-    signature: SignatureEnvelopeV2,
+    signature: SignatureEnvelopeV3,
     payload_canonical_b64: String,
 }
 
@@ -673,10 +673,11 @@ fn map_signature_error(e: SignatureEnvelopeError) -> SignedRequestRejection {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ed25519_dalek::SigningKey;
+    use ed25519_dalek::{Signer, SigningKey};
     use olympus_crypto::request_envelope::REQUEST_V1_PREFIX;
     use olympus_crypto::signature_envelope::{
-        DomainSeparator, SignatureComponent, SignatureEnvelopeV2, SignatureSuite,
+        signature_envelope_message, DomainSeparator, SignatureComponent, SignatureEnvelopeV3,
+        SignatureSuite, SIGNATURE_ENVELOPE_V3_SCHEMA,
     };
     use serde_json::json;
 
@@ -693,7 +694,7 @@ mod tests {
             nonce: "nonce-123".to_string(),
             scope: "ingest".to_string(),
         };
-        let signature = SignatureEnvelopeV2::sign_ed25519(
+        let signature = SignatureEnvelopeV3::sign_ed25519(
             DomainSeparator::new(REQUEST_V1_DOMAIN_SEPARATOR).unwrap(),
             request.message(),
             &sk,
@@ -760,23 +761,67 @@ mod tests {
         assert_eq!(err.status, StatusCode::BAD_REQUEST);
     }
 
+    /// v3 signs the declared suite and its canonical algorithm list, so an
+    /// envelope that claims the hybrid suite must be built — and its Ed25519
+    /// leg signed — as one. This is the property that stops a downgrade: you
+    /// cannot sign an Ed25519 envelope and then relabel it hybrid.
     #[test]
     fn hybrid_shape_is_classically_verifiable_before_hybrid_required_fails() {
         let payload = br#"{"a":1}"#;
-        let mut body: serde_json::Value =
-            serde_json::from_slice(&signed_envelope_body("POST", "/ingest/files", payload))
-                .unwrap();
-        let signature = body.get_mut("signature").unwrap();
-        signature["suite"] = json!("hybrid-ed25519-ml-dsa65");
-        signature["signatures"]
-            .as_array_mut()
-            .unwrap()
-            .push(json!(SignatureComponent {
-                algorithm: SignatureAlgorithm::MlDsa65,
-                public_key: vec![0x22; 1952],
-                signature: vec![0x33; 3309],
-            }));
-        let body = serde_json::to_vec(&body).unwrap();
+        let sk = SigningKey::from_bytes(&[0x42; 32]);
+        let domain = DomainSeparator::new(REQUEST_V1_DOMAIN_SEPARATOR).unwrap();
+        let request = SignedRequestV1 {
+            operator_id: "operator-a".to_string(),
+            key_id: "key-1".to_string(),
+            method: "POST".to_string(),
+            path: "/ingest/files".to_string(),
+            body_hash: *blake3::hash(payload).as_bytes(),
+            timestamp_utc: chrono::Utc::now().timestamp(),
+            nonce: "nonce-123".to_string(),
+            scope: "ingest".to_string(),
+        };
+        let descriptor = SignatureSuite::HybridEd25519MlDsa65.descriptor();
+        let message = signature_envelope_message(
+            &domain,
+            &request.message(),
+            descriptor.suite,
+            &descriptor.algorithms,
+        );
+        let envelope = SignatureEnvelopeV3 {
+            schema: SIGNATURE_ENVELOPE_V3_SCHEMA.to_owned(),
+            suite: descriptor.suite,
+            domain_separator: domain,
+            payload_digest: request.message(),
+            signatures: vec![
+                SignatureComponent {
+                    algorithm: SignatureAlgorithm::Ed25519,
+                    public_key: sk.verifying_key().to_bytes().to_vec(),
+                    signature: sk.sign(&message).to_bytes().to_vec(),
+                },
+                // Placeholder ML-DSA leg: this build has no verifier for it,
+                // which is what the HybridRequired assertion below exercises.
+                SignatureComponent {
+                    algorithm: SignatureAlgorithm::MlDsa65,
+                    public_key: vec![0x22; 1952],
+                    signature: vec![0x33; 3309],
+                },
+            ],
+        };
+        let body = serde_json::to_vec(&json!({
+            "request": {
+                "operator_id": request.operator_id,
+                "key_id": request.key_id,
+                "method": request.method,
+                "path": request.path,
+                "body_hash_hex": hex::encode(request.body_hash),
+                "timestamp_utc": request.timestamp_utc,
+                "nonce": request.nonce,
+                "scope": request.scope,
+            },
+            "signature": envelope,
+            "payload_canonical_b64": B64.encode(payload),
+        }))
+        .unwrap();
         let parsed = parse_wire_envelope(&body, &Method::POST, "/ingest/files").unwrap();
         assert_eq!(parsed.signature.suite, SignatureSuite::HybridEd25519MlDsa65);
         assert!(parsed
@@ -793,6 +838,35 @@ mod tests {
         ));
     }
 
+    /// The negative direction: relabelling a signed Ed25519 envelope as hybrid
+    /// must break the classical leg, not silently pass.
+    #[test]
+    fn suite_relabel_after_signing_fails_classical_verification() {
+        let payload = br#"{"a":1}"#;
+        let mut body: serde_json::Value =
+            serde_json::from_slice(&signed_envelope_body("POST", "/ingest/files", payload))
+                .unwrap();
+        let signature = body.get_mut("signature").unwrap();
+        signature["suite"] = json!("hybrid-ed25519-ml-dsa65");
+        signature["signatures"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!(SignatureComponent {
+                algorithm: SignatureAlgorithm::MlDsa65,
+                public_key: vec![0x22; 1952],
+                signature: vec![0x33; 3309],
+            }));
+        let body = serde_json::to_vec(&body).unwrap();
+        let parsed = parse_wire_envelope(&body, &Method::POST, "/ingest/files").unwrap();
+        assert!(matches!(
+            parsed
+                .signature
+                .verify(SignatureVerificationMode::ClassicalRequired),
+            Err(SignatureEnvelopeError::VerificationFailed(
+                SignatureAlgorithm::Ed25519
+            ))
+        ));
+    }
     #[test]
     fn request_prefix_is_pinned_to_adr_0036() {
         assert_eq!(REQUEST_V1_PREFIX, b"OLY:REQUEST:V1");

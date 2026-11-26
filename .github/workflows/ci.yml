@@ -100,9 +100,15 @@ jobs:
               - 'docs/adr/**'
               - 'scripts/check_adr_index.mjs'
             agent-docs:
-              - 'CLAUDE.md'
               - 'AGENTS.md'
+              - 'CLAUDE.md'
+              - '.github/copilot-instructions.md'
+              # Forbidden instruction files: the job below FAILS if any of these
+              # exist. They must select the filter too, or a PR that adds only
+              # CODEX.md never runs the check that rejects it.
               - 'CODEX.md'
+              - 'AGENTS.local.md'
+              - 'CLAUDE.local.md'
               - 'tools/wiserepo/**'
             tooling:
               - '.license-header-baseline'
@@ -189,14 +195,14 @@ jobs:
       - name: Check ADR index/status drift
         run: node scripts/check_adr_index.mjs
 
-  # ── AGENTS.md drift gate (wiserepo) ──────────────────────────────────────────
-  # CLAUDE.md and AGENTS.md carry the same guidance for two different
-  # assistants and have drifted apart for real in this repo before (commit
-  # 4f5e270f). wiserepo's own unit tests (structural-parity check, path-guard)
-  # run unconditionally; the actual drift check needs a model API key and is
-  # a soft gate — see the step below for why.
-  docs-agent-sync:
-    name: AGENTS.md drift check (wiserepo)
+  # ── Agent instructions: exactly one document, plus the tool that reads it ───
+  # AGENTS.md is hand-maintained now — nothing generates it. This job keeps the
+  # two guarantees the retired CLAUDE.md→AGENTS.md generator partly covered:
+  # that there is still exactly ONE instructions document, and that wiserepo's
+  # test suite runs somewhere (deleting the generator also deleted the only job
+  # that ran `npm test` for tools/wiserepo).
+  agent-docs:
+    name: one instructions document (AGENTS.md)
     runs-on: ubuntu-latest
     needs: changes
     if: needs.changes.outputs.agent-docs == 'true' || needs.changes.outputs.ci == 'true'
@@ -207,37 +213,54 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: AGENTS.md is the only instructions document
+        run: |
+          # CLAUDE.md is an import bridge for Claude Code < v2.1.277, not a copy.
+          test -f AGENTS.md || { echo "AGENTS.md is missing"; exit 1; }
+          test -f CLAUDE.md || { echo "CLAUDE.md is missing: it is the @AGENTS.md bridge"; exit 1; }
+          if [ "$(tr -d '\r' < CLAUDE.md)" != "@AGENTS.md" ]; then
+            echo "CLAUDE.md must contain exactly one line: @AGENTS.md"
+            echo "A second copy of the guidance is the drift this repo removed."
+            exit 1
+          fi
+          for f in CODEX.md AGENTS.local.md CLAUDE.local.md; do
+            if [ -e "$f" ]; then
+              echo "$f must not exist: AGENTS.md is the only instructions document"
+              exit 1
+            fi
+          done
+          # Copilot's instruction file is a pointer too. It shipped as a
+          # ~150-line second copy that had drifted behind AGENTS.md (v0.9.5,
+          # retired Python verifier paths). Keep it short and naming the
+          # authority so it cannot regrow into a summary unnoticed.
+          copilot=.github/copilot-instructions.md
+          test -f "$copilot" || { echo "$copilot is missing: it is the Copilot pointer to AGENTS.md"; exit 1; }
+          if ! grep -q 'AGENTS\.md' "$copilot"; then
+            echo "$copilot must point at AGENTS.md; guidance belongs there, not here."
+            exit 1
+          fi
+          nonblank=$(grep -c '[^[:space:]]' "$copilot" || true)
+          if [ "$nonblank" -gt 10 ]; then
+            echo "$copilot has $nonblank non-blank lines: it must stay a pointer (max 10), not a second copy."
+            exit 1
+          fi
+          echo "OK: one instructions document; CLAUDE.md and Copilot instructions are pointers."
+
       - name: Set up Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "22.14.0"
+          # tools/wiserepo's engines field requires >=22.19.0 and undici@8.13.1
+          # calls zstd.createZstdDecompress (added in 22.15). On 22.14 every
+          # test file that imports backend.mjs dies at import with
+          # "TypeError: Cannot read properties of undefined (reading 'bind')".
+          # That is why 22.19.0 is the reviewed pin for every job, not just
+          # this one — the rest of the repo used to sit on 22.14.0.
+          node-version: "22.19.0"
           cache: npm
           cache-dependency-path: tools/wiserepo/package-lock.json
 
-      - name: Install wiserepo dependencies
-        run: npm ci
-        working-directory: tools/wiserepo
-
-      - name: wiserepo unit tests
-        run: npm test
-        working-directory: tools/wiserepo
-
-      - name: Check AGENTS.md is in sync with CLAUDE.md
-        run: |
-          # A HARD gate, and cheap: `--check` is a pure content-hash
-          # comparison of CLAUDE.md against the source-hash trailer stamped
-          # in AGENTS.md. It calls no model, so it needs no Ollama daemon,
-          # no network, and no secret — and can therefore only exit 0 (in
-          # sync) or 1 (drifted). The exit-2 "backend unavailable" branch of
-          # the contract is unreachable here by construction; only an actual
-          # regeneration (running this script WITHOUT --check, which CI
-          # never does) can hit it.
-          #
-          # This step previously had to juggle a repo secret and skip itself
-          # on pull_request to avoid exposing an API key to PR-authored
-          # code. wiserepo is Ollama-only now: there is no key to leak, so
-          # the gate runs identically on every trigger.
-          node bin/sync-agent-docs.mjs --check
+      - name: wiserepo tests
+        run: npm ci && npm test
         working-directory: tools/wiserepo
 
   # ── Formatting + per-file license headers ───────────────────────────────────
@@ -261,7 +284,44 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "22.14.0"
+          node-version: "22.19.0"
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Run formatting and license-header checks
+        run: pnpm tooling:check
+
+  # ── The same gate on Windows ─────────────────────────────────────────────────
+  # `format:toml:check` collected zero files and exited 0 on Windows for as long
+  # as `@taplo/cli` ran it, and nobody noticed because only Ubuntu ran this gate.
+  # `scripts/taplo.mjs` fixed the tool; this job keeps it fixed — a change that
+  # silently stops checking files on Windows now fails CI instead of passing
+  # quietly. It also exercises the rest of the chain (prettier, license headers,
+  # release assets, hook tests) against a real Windows filesystem, which is where
+  # path and shell differences actually bite.
+  repo-tooling-windows:
+    name: formatting + license headers (windows)
+    runs-on: windows-latest
+    needs: changes
+    if: needs.changes.outputs.tooling == 'true' || needs.changes.outputs.ci == 'true'
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: "11.1.2"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22.19.0"
           cache: pnpm
 
       - name: Install dependencies
@@ -273,7 +333,7 @@ jobs:
   # ── Static analysis (Semgrep) ────────────────────────────────────────────────
   # Runs on every push/PR regardless of what changed -- like secrets-scan,
   # deliberately not gated behind the `changes` filter, because
-  # .semgrep/olympus-rules.yml encodes repo-wide invariants (CLAUDE.md's
+  # .semgrep/olympus-rules.yml encodes repo-wide invariants (AGENTS.md's
   # "Critical Invariants" section) that any Rust change anywhere could
   # violate, not just changes in one filtered area.
   #
@@ -424,7 +484,7 @@ jobs:
 
   # ── Public API drift (olympus-crypto) ────────────────────────────────────────
   # olympus-crypto carries the ADR-0005 leaf-hash layout and the other
-  # constants CLAUDE.md lists as "four independent implementations to keep in
+  # constants AGENTS.md lists as "four independent implementations to keep in
   # step" -- an accidental rename or signature change here is exactly the
   # silent-drift class of bug that section exists to prevent, and nothing
   # else in CI would catch a change that compiles fine but alters the crate's
@@ -556,7 +616,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "22.14.0"
+          node-version: "22.19.0"
 
       - name: Install + run JS verifier conformance tests
         working-directory: verifiers/javascript
@@ -664,7 +724,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "22.14.0"
+          node-version: "22.19.0"
           cache: npm
           cache-dependency-path: proofs/package-lock.json
 
@@ -1192,7 +1252,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "22.14.0"
+          node-version: "22.19.0"
           cache: npm
           cache-dependency-path: proofs/package-lock.json
 
@@ -1369,7 +1429,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "22.14.0"
+          node-version: "22.19.0"
 
       # pnpm is the source-of-truth package manager for the app/public-ui
       # workspace; `pnpm audit` (below) reads pnpm-lock.yaml + the
@@ -1757,7 +1817,7 @@ jobs:
       - name: Set up Node.js (for ceremony npm tooling)
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "22.14.0"
+          node-version: "22.19.0"
 
       - name: ZK ceremony artifacts (cached)
         uses: ./.github/actions/zk-ceremony-artifacts
@@ -1845,6 +1905,100 @@ jobs:
           CARGO_PROFILE_DEV_DEBUG: "line-tables-only"
           CARGO_PROFILE_TEST_DEBUG: "line-tables-only"
         run: cargo test --locked --doc --workspace
+
+  # ── External PostgreSQL role contract ────────────────────────────────────────
+  # `tauri-unit` runs the external-role tests inside the whole `api_db` binary,
+  # but that did not gate the catalog pin: a semantic-inventory digest
+  # regenerated on PostgreSQL 16 sat on `main` even though the verified 15.16
+  # catalog computes a different value on both Linux and Windows. This job runs
+  # only those two tests, under their own name, on every change that can move
+  # the pin (and on any workflow edit through the `ci` filter).
+  #
+  # `cargo clean -p olympus-desktop` is load-bearing: the job exists to prove
+  # the checked-out constant matches the catalog, so it must never reuse a
+  # cached test binary built from older sources.
+  external-db-contract:
+    name: external PostgreSQL role contract (api_db)
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.rust-app == 'true' || needs.changes.outputs.ci == 'true'
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # stable
+        with:
+          toolchain: 1.95.0
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          workspaces: ". -> target"
+          shared-key: external-db-contract
+
+      - name: Cache embedded PostgreSQL binaries
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ${{ runner.os == 'Windows' && '~\AppData\Local\pg-embed' || '~/.cache/pg-embed' }}
+          key: pg-embed-bin-${{ runner.os }}-${{ hashFiles('pg-embed-local/src/pg_fetch.rs') }}
+
+      - name: Install Linux system dependencies
+        # Same retry/timeout budget as every copy of this step in this file:
+        # 3 × 240 s update + 3 × 600 s install + recovery tails fits under the
+        # 50-minute cap. Keep them in step when changing either copy.
+        timeout-minutes: 50
+        env:
+          DEBIAN_FRONTEND: noninteractive
+          APT_LISTCHANGES_FRONTEND: none
+        run: |
+          set -euo pipefail
+          for i in 1 2 3; do
+            if sudo -E timeout 240 apt-get update -o Acquire::Retries=3; then
+              break
+            fi
+            echo "apt-get update attempt $i failed; sleeping 5 s"
+            sleep 5
+            if [ "$i" = "3" ]; then
+              echo "apt-get update failed 3 times — aborting"
+              exit 1
+            fi
+          done
+          for i in 1 2 3; do
+            if sudo -E timeout 600 apt-get install -y \
+              libwebkit2gtk-4.1-dev \
+              libappindicator3-dev \
+              librsvg2-dev \
+              patchelf \
+              mold; then
+              break
+            fi
+            echo "apt-get install attempt $i failed; recovering and sleeping 10 s"
+            sudo -E timeout 120 dpkg --configure -a || true
+            sleep 10
+            if [ "$i" = "3" ]; then
+              echo "apt-get install failed 3 times — aborting"
+              exit 1
+            fi
+          done
+
+      - name: Rebuild olympus-desktop from the checkout
+        run: cargo clean -p olympus-desktop
+
+      - name: cargo test (external PostgreSQL role contract)
+        working-directory: src-tauri
+        timeout-minutes: 20
+        env:
+          RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
+          CARGO_PROFILE_DEV_DEBUG: "line-tables-only"
+          CARGO_PROFILE_TEST_DEBUG: "line-tables-only"
+        run: >-
+          cargo test --locked --no-default-features --test api_db
+          external_pg_roles -- --test-threads=1
 
   # ── Tauri ZK prover tests (heavy: ark-circom/wasmer) ─────────────────────────
   # Split out from `tauri-unit` so the common test path doesn't pay the
@@ -1937,7 +2091,7 @@ jobs:
       - name: Set up Node.js (for ceremony npm tooling)
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "22.14.0"
+          node-version: "22.19.0"
 
       - name: ZK ceremony artifacts (cached)
         uses: ./.github/actions/zk-ceremony-artifacts
@@ -1999,7 +2153,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "22.14.0"
+          node-version: "22.19.0"
           cache: pnpm
 
       - name: Install dependencies

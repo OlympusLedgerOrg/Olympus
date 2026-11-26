@@ -3,19 +3,22 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Self-hosted repo Q&A / review / doc-sync MCP server for Olympus, backed by the user's own Claude or Codex API key.",
+  "description": "Self-hosted repo Q&A / review MCP server for Olympus, backed by a local Ollama model (no cloud backend, no API key).",
   "bin": {
-    "wiserepo-sync-agent-docs": "./bin/sync-agent-docs.mjs"
+    "wiserepo": "./bin/wiserepo.mjs"
   },
   "scripts": {
     "start": "node src/mcp-server.mjs",
-    "sync-agent-docs": "node bin/sync-agent-docs.mjs",
+    "mcp": "node src/mcp-server.mjs",
+    "cli": "node bin/wiserepo.mjs",
+    "eval": "node bin/eval.mjs",
     "test": "node --test \"test/**/*.test.mjs\""
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.30.0"
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "undici": "^8.13.1"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.19.0"
   }
 }

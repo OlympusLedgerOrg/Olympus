@@ -102,23 +102,112 @@ const isMutableExternalAction = (action) => {
 export const mutableExternalActions = (contents) =>
   actionReferences(contents).filter(({ action }) => isMutableExternalAction(action));
 
-const REVIEWED_NODE_VERSION = "22.14.0";
+const REVIEWED_NODE_VERSION = "22.19.0";
 const REVIEWED_RUST_VERSION = "1.95.0";
 
-export const mutableToolchainInputs = (contents) => {
+// A job may pin a Node.js other than REVIEWED_NODE_VERSION only through an
+// entry in this list. An entry names one workflow, one job and one exact
+// version, and must state why in a sentence. Nothing else relaxes the pin: a
+// sibling job, another workflow, or a range such as "22" stays a violation.
+//
+// Adding an entry is a reviewed, greppable diff that leaves the global pin
+// alone. An entry that stops matching a live job is itself a violation, so an
+// exception cannot outlive the reason it was granted for.
+//
+// None are in force today. The shape is:
+//   {
+//     workflow: ".github/workflows/tauri-release.yml",
+//     job: "bundle-linux",
+//     version: "20.19.0",
+//     reason: "The bundled updater plugin needs Node 20 until <issue> lands.",
+//   }
+const NODE_VERSION_EXCEPTIONS = [];
+
+const EXACT_VERSION = /^\d+\.\d+\.\d+$/;
+const MINIMUM_REASON_LENGTH = 20;
+
+const exceptionKey = (exception) => `${exception.workflow}#${exception.job}@${exception.version}`;
+
+const nodeVersionIsExcepted = (exceptions, { workflow, job, version, used }) => {
+  if (!workflow || !job) return false;
+  for (const exception of exceptions) {
+    if (exception.workflow !== workflow) continue;
+    if (exception.job !== job) continue;
+    if (exception.version !== version) continue;
+    used?.add(exceptionKey(exception));
+    return true;
+  }
+  return false;
+};
+
+/** Shape checks, so a typo in an exception is a failure rather than a silent no-op. */
+const validateNodeVersionExceptions = (exceptions) => {
   const violations = [];
-  const visit = (value) => {
+  const valid = [];
+  const seen = new Set();
+
+  for (const exception of exceptions) {
+    if (
+      typeof exception?.workflow !== "string" ||
+      !/^\.github\/workflows\/[^/]+\.ya?ml$/.test(exception.workflow)
+    ) {
+      violations.push(
+        `node-version exception must name a .github/workflows/*.yml file: ${JSON.stringify(exception)}`,
+      );
+      continue;
+    }
+    const { workflow } = exception;
+    if (typeof exception.job !== "string" || exception.job.trim().length === 0) {
+      violations.push(`${workflow}: node-version exception must name a job id`);
+      continue;
+    }
+    if (typeof exception.version !== "string" || !EXACT_VERSION.test(exception.version)) {
+      violations.push(
+        `${workflow}: node-version exception for ${exception.job} must name an exact x.y.z version`,
+      );
+      continue;
+    }
+    if (
+      typeof exception.reason !== "string" ||
+      exception.reason.trim().length < MINIMUM_REASON_LENGTH
+    ) {
+      violations.push(
+        `${workflow}: node-version exception for ${exception.job} must state a reason`,
+      );
+      continue;
+    }
+    const key = exceptionKey(exception);
+    if (seen.has(key)) {
+      violations.push(
+        `${workflow}: duplicate node-version exception for ${exception.job} (${exception.version})`,
+      );
+      continue;
+    }
+    seen.add(key);
+    valid.push(exception);
+  }
+
+  return { violations, valid };
+};
+
+const toolchainViolations = (contents, { workflow = null, exceptions = [], used = null } = {}) => {
+  const violations = [];
+  const visit = (value, job) => {
     if (Array.isArray(value)) {
-      value.forEach(visit);
+      value.forEach((child) => visit(child, job));
       return;
     }
     if (!value || typeof value !== "object") return;
 
     if (typeof value.uses === "string" && value.uses.startsWith("actions/setup-node@")) {
-      const version = value.with?.["node-version"];
-      if (String(version ?? "") !== REVIEWED_NODE_VERSION) {
+      const version = String(value.with?.["node-version"] ?? "");
+      const excepted = nodeVersionIsExcepted(exceptions, { workflow, job, version, used });
+      if (version !== REVIEWED_NODE_VERSION && !excepted) {
+        // Name the job: without it, identical violations from two jobs collapse
+        // into one line in the dedupe below and hide the one that must change.
+        const scope = job ? `job ${job}: ` : "";
         violations.push(
-          `actions/setup-node must select exact reviewed Node.js ${REVIEWED_NODE_VERSION}`,
+          `${scope}actions/setup-node must select exact reviewed Node.js ${REVIEWED_NODE_VERSION} (or a documented per-job exception)`,
         );
       }
     }
@@ -160,11 +249,30 @@ export const mutableToolchainInputs = (contents) => {
       }
     }
 
-    Object.values(value).forEach(visit);
+    Object.values(value).forEach((child) => visit(child, job));
   };
-  visit(parseYaml(contents));
+
+  const document = parseYaml(contents);
+  const jobs =
+    document?.jobs && typeof document.jobs === "object" && !Array.isArray(document.jobs)
+      ? Object.entries(document.jobs)
+      : null;
+  if (jobs) {
+    for (const [jobId, job] of jobs) visit(job, jobId);
+  } else {
+    // Composite actions and bare step lists have no job scope, so a per-job
+    // exception can never apply to them.
+    visit(document, null);
+  }
   return [...new Set(violations)];
 };
+
+export const mutableToolchainInputs = (contents, context = {}) =>
+  toolchainViolations(contents, {
+    workflow: context.workflow ?? null,
+    exceptions: context.exceptions ?? NODE_VERSION_EXCEPTIONS,
+    used: context.used ?? null,
+  });
 
 const localActionManifests = (root) => {
   const actionRoot = path.join(root, ".github/actions");
@@ -185,8 +293,12 @@ const localActionManifests = (root) => {
   return manifests.sort((left, right) => left.localeCompare(right));
 };
 
-export const checkPrivilegedWorkflows = (root = process.cwd()) => {
-  const violations = [];
+export const checkPrivilegedWorkflows = (root = process.cwd(), options = {}) => {
+  const exceptions = options.exceptions ?? NODE_VERSION_EXCEPTIONS;
+  const { violations: exceptionShapeViolations, valid: validExceptions } =
+    validateNodeVersionExceptions(exceptions);
+  const usedExceptions = new Set();
+  const violations = [...exceptionShapeViolations];
   const visitedLocalManifests = new Set();
   const displayPath = (absolutePath) => path.relative(root, absolutePath).split(path.sep).join("/");
 
@@ -210,7 +322,11 @@ export const checkPrivilegedWorkflows = (root = process.cwd()) => {
   };
 
   const inspectReferences = (source, contents) => {
-    for (const violation of mutableToolchainInputs(contents)) {
+    for (const violation of toolchainViolations(contents, {
+      workflow: source,
+      exceptions: validExceptions,
+      used: usedExceptions,
+    })) {
       violations.push(`${source}: ${violation}`);
     }
     for (const reference of actionReferences(contents)) {
@@ -253,6 +369,13 @@ export const checkPrivilegedWorkflows = (root = process.cwd()) => {
     if (visitedLocalManifests.has(absoluteManifest)) continue;
     visitedLocalManifests.add(absoluteManifest);
     inspectReferences(manifest, readFileSync(absoluteManifest, "utf8"));
+  }
+
+  for (const exception of validExceptions) {
+    if (usedExceptions.has(exceptionKey(exception))) continue;
+    violations.push(
+      `${exception.workflow}: node-version exception for job ${exception.job} (${exception.version}) no longer applies — that job is gone or pins ${REVIEWED_NODE_VERSION}`,
+    );
   }
   return violations;
 };

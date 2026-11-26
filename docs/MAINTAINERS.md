@@ -69,7 +69,7 @@ area resolves to that default owner; the granular rows describe where
 
 | Area | Paths | Notes |
 |------|-------|-------|
-| Shared crypto | `crates/olympus-crypto/`, `crates/light-poseidon/`, `crates/babyjubjub-permissive/` | Hash/SMT/Poseidon invariants — changes are migration-class (see `CLAUDE.md` → Critical Invariants). |
+| Shared crypto | `crates/olympus-crypto/`, `crates/light-poseidon/`, `crates/babyjubjub-permissive/` | Hash/SMT/Poseidon invariants — changes are migration-class (see `AGENTS.md` → Critical Invariants). |
 | ZK / circuits | `proofs/`, `src-tauri/src/zk/` | Circuit + ceremony changes require an ADR and a manifest regeneration. |
 | Backend / API | `src-tauri/src/` | Axum routes, auth, anchoring, federation, embedded DB. |
 | Frontend | `app/public-ui/` | React + TypeScript UI. |
@@ -91,7 +91,7 @@ maintainer pool than concentrate authority.
 
 **Reviewer → Maintainer**
 1. Demonstrate good judgment as a reviewer — sound merges, respect for the
-   [Critical Invariants](../CLAUDE.md), and constructive collaboration.
+   [Critical Invariants](../AGENTS.md), and constructive collaboration.
 2. A maintainer nominates you in a `governance` issue.
 3. Requires an affirmative maintainer vote per the voting rule in
    `docs/governance.md` (supermajority of active maintainers).
@@ -110,7 +110,7 @@ Being a maintainer is a duty, not just a permission set:
   Critical Invariants when merging.
 - **Protect the protocol.** Any change to leaf/node hashing, SMT shape, ZK
   circuits, or ceremony artifacts requires an ADR and the regeneration steps in
-  `CLAUDE.md`. Do not merge invariant-breaking changes without one.
+  `AGENTS.md`. Do not merge invariant-breaking changes without one.
 - **Keep CI green.** Do not merge with failing required checks. Use the
   security-hardening gates described in `SECURITY.md`.
 - **Share the load.** Mentor contributors and actively look for reviewer

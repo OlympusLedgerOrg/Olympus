@@ -1,0 +1,122 @@
+{
+  "_comment": "Machine-readable project context for AI agents. Keep in sync with AGENTS.md. Source of truth for the values below is the code — not this file.",
+  "project": "Olympus",
+  "version": "v0.10.0",
+  "repo_org": "OlympusLedgerOrg",
+
+  "languages": {
+    "Rust": "Everything security/data-critical: Tauri app, Axum server, crypto, DB, ZK, federation, quorum, anchoring",
+    "TypeScript": "React frontend only (app/public-ui/) — no security-sensitive crypto",
+    "Python": "verify-only client SDK (clients/python/) — NOT a service, no server role",
+    "retired": ["Go", "Python-server", "Python-verifier"]
+  },
+
+  "package_names": {
+    "tauri_app": "olympus-desktop",
+    "shared_crypto": "olympus-crypto"
+  },
+
+  "workspace": {
+    "primary": "Cargo.toml (src-tauri, crates/olympus-crypto, crates/olympus-manifest, crates/light-poseidon, crates/babyjubjub-permissive)",
+    "excluded": [
+      "verifiers/rust (separate workspace — needs --manifest-path)",
+      "verifiers/rust/fuzz",
+      "pg-embed-local",
+      "clients/cli",
+      "proofs/zkvm/canonicalization/guest",
+      "proofs/zkvm/canonicalization/host-tools"
+    ],
+    "note": "The repo has 7 Cargo workspaces. Root --workspace reaches only one."
+  },
+
+  "critical_constants": {
+    "LAZY_DEPTH": 72,
+    "CANOPY_RECOMPUTE_CAP": 1024,
+    "node_prefix": "OLY:NODE:V1|",
+    "empty_leaf_prefix": "OLY:EMPTY-LEAF:V1",
+    "leaf_prefix_format": "ADR-0005 structured binary: u8(0x01) || 'OLY' || u8(LEAF) || u8(V1) || lp(shard_id)",
+    "leaf_prefix_legacy": "OLY:LEAF:V1| (retained as pinned marker only — NOT the live prefix)",
+    "quorum_domain": "OLY:SBT:QUORUM:V2",
+    "single_issuer_domain": "OLY:SBT:V1",
+    "revocation_domain": "OLY:SBT:REVOKE:V1",
+    "transition_attestation_domain": "OLY:SNAPSHOT:PERSIST:V1",
+    "smt_root_attestation_domain": "OLY:SMT:ROOT:V1"
+  },
+
+  "leaf_hash_signature": "leaf_hash(shard_id, key, value_hash, parser_id, canonical_parser_version, model_hash)",
+  "leaf_hash_implementations": [
+    "crates/olympus-crypto/src/lib.rs",
+    "verifiers/rust/src/lib.rs",
+    "verifiers/javascript/verifier.js",
+    "clients/python/src/olympus_manifest/hashing.py"
+  ],
+  "test_vectors": "verifiers/test_vectors/vectors.json (SMT — single cross-language source of truth)",
+  "python_vectors": "clients/python/tests/vectors.json (Python SDK parity — separate generated file)",
+
+  "circuits": {
+    "production": [
+      "document_existence",
+      "non_existence",
+      "unified_canonicalization_inclusion_root_sign"
+    ],
+    "feature_gated": ["federation_quorum (quorum-circuit feature, ceremony pending)"],
+    "removed": ["redaction_validity (ADR-0030 — replaced by signed Merkle fold)"],
+    "artifacts_dir": "proofs/keys/",
+    "manifests_dir": "proofs/keys/manifests/",
+    "vkeys_dir": "proofs/keys/verification_keys/"
+  },
+
+  "segmenters": [
+    "pdf-object (traditional xref PDF)",
+    "pdf-xref-stream (modern PDF, ADR-0028)",
+    "text-line (text/Markdown, ADR-0026 Phase 2)",
+    "ooxml-part (.docx/.xlsx/.pptx, ADR-0026)"
+  ],
+
+  "api_port": {
+    "default": "ephemeral",
+    "tests": 3737
+  },
+
+  "key_env_vars": {
+    "OLYMPUS_API_PORT": "HTTP port for embedded Axum server",
+    "OLYMPUS_INGEST_SIGNING_KEY": "persistent Ed25519 key (or OLYMPUS_DEV_SIGNING_KEY=true for dev auto-gen)",
+    "OLYMPUS_BJJ_AUTHORITY_KEY": "persistent Baby Jubjub authority key (32-byte hex)",
+    "OLYMPUS_PROOFS_DIR": "override ZK artifacts directory",
+    "OLYMPUS_ENV": "set to 'production' to enforce strict artifact/ceremony checks (exit 2 on failure)",
+    "DATABASE_URL": "external PostgreSQL URL (skips pg_embed when set)",
+    "OLYMPUS_DEV_ALLOW_SINGLE_DATABASE_URL": "true = reuse DATABASE_URL for migrations (dev/CI only)",
+    "WISEREPO_ROOT": "override for wiserepo MCP server repo root (default: auto-detected)"
+  },
+
+  "pre_push_checklist": [
+    "Do claims match code? (every assertion in ADRs/doc comments verified against implementation)",
+    "Have all gates run in every scope? (7 workspaces, verifiers/rust, app/public-ui ESLint from inside dir, pnpm tooling:check)"
+  ],
+
+  "mcp_server": {
+    "path": "tools/wiserepo/",
+    "start": "node tools/wiserepo/src/mcp-server.mjs",
+    "tools": [
+      "repo_qa",
+      "review_diff",
+      "summarize",
+      "olympus_context",
+      "circuit_status",
+      "check_invariants"
+    ],
+    "backend": "Ollama (local, default model: qwen2.5-coder:7b-instruct)",
+    "env": {
+      "WISEREPO_ROOT": "repo root override (auto-detected when unset)",
+      "WISEREPO_OLLAMA_URL": "Ollama URL (default: http://localhost:11434)",
+      "WISEREPO_OLLAMA_MODEL": "model override (default: qwen2.5-coder:7b-instruct)"
+    }
+  },
+
+  "agent_files": {
+    "AGENTS.md": "THE single agent-instructions document (Codex, Cursor, Copilot, Claude Code v2.1.277+)",
+    "CLAUDE.md": "one-line pointer to AGENTS.md; the repository instructions live there",
+    ".github/copilot-instructions.md": "pointer to AGENTS.md for GitHub Copilot; no guidance of its own",
+    "context.json": "this file — machine-readable project facts for agents"
+  }
+}

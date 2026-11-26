@@ -12,11 +12,16 @@ use thiserror::Error;
 
 use crate::length_prefixed;
 
-/// Wire schema tag for [`SignatureEnvelopeV2`].
-pub const SIGNATURE_ENVELOPE_V2_SCHEMA: &str = "olympus-signature-envelope/v2";
+/// Wire schema tag for [`SignatureEnvelopeV3`].
+///
+/// v3 is a deliberate breaking change from v2: the suite identifier and the
+/// ordered algorithm list are now inside the signed message. In v2 they were
+/// not, so a hybrid envelope could be relabelled as classical and its PQ leg
+/// stripped while the Ed25519 signature still verified (audit A-P2-1).
+pub const SIGNATURE_ENVELOPE_V3_SCHEMA: &str = "olympus-signature-envelope/v3";
 
 /// Domain prefix for the bytes signed by every envelope component.
-pub const SIGNATURE_ENVELOPE_V2_PREFIX: &[u8] = b"OLY:SIGNATURE-ENVELOPE:V2";
+pub const SIGNATURE_ENVELOPE_V3_PREFIX: &[u8] = b"OLY:SIGNATURE-ENVELOPE:V3";
 
 /// Algorithm identifiers used in envelope components.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -44,6 +49,17 @@ pub enum SignatureSuite {
 }
 
 impl SignatureSuite {
+    /// Stable suite identifier bound into the signed message.
+    ///
+    /// Changing a spelling here is a wire-format change, exactly like changing
+    /// an algorithm's [`SignatureAlgorithm::wire_name`].
+    pub const fn wire_name(self) -> &'static str {
+        match self {
+            Self::Ed25519 => "ed25519",
+            Self::HybridEd25519MlDsa65 => "hybrid-ed25519-ml-dsa-65",
+        }
+    }
+
     pub fn descriptor(self) -> SuiteDescriptor {
         match self {
             Self::Ed25519 => SuiteDescriptor {
@@ -63,9 +79,14 @@ impl SignatureSuite {
 /// Verification policy chosen by the caller.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SignatureVerificationMode {
-    /// Verify the classical Ed25519 leg and ignore experimental sidecar legs.
+    /// Verify the classical Ed25519 leg. For a hybrid envelope this is an
+    /// explicit downgrade by the *caller*; it is safe against relabelling
+    /// because the suite is inside the signed message (v3), but it still does
+    /// not verify the PQ leg.
     ClassicalRequired,
     /// Verify Ed25519 and require every advertised hybrid leg to be supported.
+    /// ML-DSA verification is not implemented yet, so this currently fails
+    /// closed with [`SignatureEnvelopeError::UnsupportedAlgorithm`].
     HybridRequired,
 }
 
@@ -105,7 +126,7 @@ pub struct SignatureComponent {
 
 /// Versioned signature sidecar.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SignatureEnvelopeV2 {
+pub struct SignatureEnvelopeV3 {
     pub schema: String,
     pub suite: SignatureSuite,
     pub domain_separator: DomainSeparator,
@@ -156,17 +177,23 @@ pub enum SignatureEnvelopeError {
     VerificationFailed(SignatureAlgorithm),
 }
 
-impl SignatureEnvelopeV2 {
+impl SignatureEnvelopeV3 {
     /// Build an Ed25519 envelope by signing the ADR-0035 envelope message.
     pub fn sign_ed25519(
         domain_separator: DomainSeparator,
         payload_digest: [u8; 32],
         signing_key: &SigningKey,
     ) -> Self {
-        let message = signature_envelope_message(&domain_separator, &payload_digest);
+        let descriptor = SignatureSuite::Ed25519.descriptor();
+        let message = signature_envelope_message(
+            &domain_separator,
+            &payload_digest,
+            descriptor.suite,
+            &descriptor.algorithms,
+        );
         let signature = signing_key.sign(&message);
         Self {
-            schema: SIGNATURE_ENVELOPE_V2_SCHEMA.to_owned(),
+            schema: SIGNATURE_ENVELOPE_V3_SCHEMA.to_owned(),
             suite: SignatureSuite::Ed25519,
             domain_separator,
             payload_digest,
@@ -187,10 +214,17 @@ impl SignatureEnvelopeV2 {
         let ed25519 = self.component(SignatureAlgorithm::Ed25519).ok_or(
             SignatureEnvelopeError::MissingSignature(SignatureAlgorithm::Ed25519),
         )?;
-        let ed25519_public_key = verify_ed25519_component(
-            ed25519,
-            &signature_envelope_message(&self.domain_separator, &self.payload_digest),
-        )?;
+
+        // v3: the suite and its canonical algorithm list are part of the signed
+        // message, so changing either after signing invalidates the Ed25519 leg.
+        let descriptor = self.suite.descriptor();
+        let message = signature_envelope_message(
+            &self.domain_separator,
+            &self.payload_digest,
+            descriptor.suite,
+            &descriptor.algorithms,
+        );
+        let ed25519_public_key = verify_ed25519_component(ed25519, &message)?;
 
         let mut verified_algorithms = vec![SignatureAlgorithm::Ed25519];
         if mode == SignatureVerificationMode::HybridRequired {
@@ -213,7 +247,7 @@ impl SignatureEnvelopeV2 {
     }
 
     fn validate_shape(&self) -> Result<(), SignatureEnvelopeError> {
-        if self.schema != SIGNATURE_ENVELOPE_V2_SCHEMA {
+        if self.schema != SIGNATURE_ENVELOPE_V3_SCHEMA {
             return Err(SignatureEnvelopeError::UnsupportedSchema(
                 self.schema.clone(),
             ));
@@ -256,19 +290,33 @@ impl SignatureEnvelopeV2 {
 ///
 /// ```text
 /// BLAKE3(
-///   OLY:SIGNATURE-ENVELOPE:V2 ||
+///   OLY:SIGNATURE-ENVELOPE:V3 ||
 ///   lp(domain_separator_utf8) ||
-///   lp(payload_digest_32)
+///   lp(payload_digest_32) ||
+///   lp(suite_wire_name) ||
+///   u32_be(algorithm_count) ||
+///   for each algorithm in the suite's canonical order: lp(algorithm_wire_name)
 /// )
 /// ```
+///
+/// The algorithm list is the suite descriptor's order, not the order of the
+/// serialized `signatures` array: components are a set, and a sender must not
+/// be able to reorder JSON to change the digest.
 pub fn signature_envelope_message(
     domain_separator: &DomainSeparator,
     payload_digest: &[u8; 32],
+    suite: SignatureSuite,
+    algorithms: &[SignatureAlgorithm],
 ) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
-    hasher.update(SIGNATURE_ENVELOPE_V2_PREFIX);
+    hasher.update(SIGNATURE_ENVELOPE_V3_PREFIX);
     hasher.update(&length_prefixed(domain_separator.as_str().as_bytes()));
     hasher.update(&length_prefixed(payload_digest));
+    hasher.update(&length_prefixed(suite.wire_name().as_bytes()));
+    hasher.update(&(algorithms.len() as u32).to_be_bytes());
+    for algorithm in algorithms {
+        hasher.update(&length_prefixed(algorithm.wire_name().as_bytes()));
+    }
     *hasher.finalize().as_bytes()
 }
 
@@ -322,11 +370,43 @@ mod tests {
         DomainSeparator::new("OLY:TEST:SIGNATURE-ENVELOPE").unwrap()
     }
 
+    /// Build an honestly-signed hybrid-shaped envelope for policy tests. No
+    /// ML-DSA implementation exists, so the PQ component is opaque filler; the
+    /// Ed25519 leg is real and signs the hybrid message (suite + both
+    /// algorithms), which is what makes the shape tests meaningful.
+    fn signed_hybrid_fixture(sk: &SigningKey, digest: [u8; 32]) -> SignatureEnvelopeV3 {
+        let descriptor = SignatureSuite::HybridEd25519MlDsa65.descriptor();
+        let message = signature_envelope_message(
+            &domain(),
+            &digest,
+            descriptor.suite,
+            &descriptor.algorithms,
+        );
+        SignatureEnvelopeV3 {
+            schema: SIGNATURE_ENVELOPE_V3_SCHEMA.to_owned(),
+            suite: SignatureSuite::HybridEd25519MlDsa65,
+            domain_separator: domain(),
+            payload_digest: digest,
+            signatures: vec![
+                SignatureComponent {
+                    algorithm: SignatureAlgorithm::Ed25519,
+                    public_key: sk.verifying_key().to_bytes().to_vec(),
+                    signature: sk.sign(&message).to_bytes().to_vec(),
+                },
+                SignatureComponent {
+                    algorithm: SignatureAlgorithm::MlDsa65,
+                    public_key: vec![0x22; 1952],
+                    signature: vec![0x33; 3309],
+                },
+            ],
+        }
+    }
+
     #[test]
     fn ed25519_envelope_roundtrips() {
         let sk = SigningKey::from_bytes(&[0x42; 32]);
         let digest = [0x11; 32];
-        let envelope = SignatureEnvelopeV2::sign_ed25519(domain(), digest, &sk);
+        let envelope = SignatureEnvelopeV3::sign_ed25519(domain(), digest, &sk);
 
         let verified = envelope
             .verify(SignatureVerificationMode::ClassicalRequired)
@@ -344,7 +424,7 @@ mod tests {
     fn domain_separator_participates_in_signature_message() {
         let sk = SigningKey::from_bytes(&[0x42; 32]);
         let digest = [0x11; 32];
-        let mut envelope = SignatureEnvelopeV2::sign_ed25519(domain(), digest, &sk);
+        let mut envelope = SignatureEnvelopeV3::sign_ed25519(domain(), digest, &sk);
         envelope.domain_separator = DomainSeparator::new("OLY:TEST:OTHER").unwrap();
 
         assert_eq!(
@@ -356,10 +436,34 @@ mod tests {
     }
 
     #[test]
-    fn hybrid_suite_can_be_classically_checked_but_not_hybrid_checked_yet() {
+    fn relabelling_a_hybrid_envelope_as_classical_breaks_the_signature() {
+        // Audit A-P2-1 regression. v2 signed only (domain, payload), so this
+        // relabel + leg-strip verified. v3 binds the suite and algorithm list,
+        // so the same edit must fail the Ed25519 leg even though the Ed25519
+        // component itself is untouched.
         let sk = SigningKey::from_bytes(&[0x42; 32]);
-        let digest = [0x11; 32];
-        let mut envelope = SignatureEnvelopeV2::sign_ed25519(domain(), digest, &sk);
+        let mut envelope = signed_hybrid_fixture(&sk, [0x11; 32]);
+        assert!(envelope
+            .verify(SignatureVerificationMode::ClassicalRequired)
+            .is_ok());
+
+        envelope.suite = SignatureSuite::Ed25519;
+        envelope
+            .signatures
+            .retain(|c| c.algorithm == SignatureAlgorithm::Ed25519);
+
+        assert_eq!(
+            envelope
+                .verify(SignatureVerificationMode::ClassicalRequired)
+                .unwrap_err(),
+            SignatureEnvelopeError::VerificationFailed(SignatureAlgorithm::Ed25519)
+        );
+    }
+
+    #[test]
+    fn adding_a_leg_after_signing_breaks_the_signature() {
+        let sk = SigningKey::from_bytes(&[0x42; 32]);
+        let mut envelope = SignatureEnvelopeV3::sign_ed25519(domain(), [0x11; 32], &sk);
         envelope.suite = SignatureSuite::HybridEd25519MlDsa65;
         envelope.signatures.push(SignatureComponent {
             algorithm: SignatureAlgorithm::MlDsa65,
@@ -367,9 +471,19 @@ mod tests {
             signature: vec![0x33; 3309],
         });
 
-        assert!(envelope
-            .verify(SignatureVerificationMode::ClassicalRequired)
-            .is_ok());
+        assert_eq!(
+            envelope
+                .verify(SignatureVerificationMode::ClassicalRequired)
+                .unwrap_err(),
+            SignatureEnvelopeError::VerificationFailed(SignatureAlgorithm::Ed25519)
+        );
+    }
+
+    #[test]
+    fn hybrid_suite_cannot_be_hybrid_verified_until_ml_dsa_exists() {
+        let sk = SigningKey::from_bytes(&[0x42; 32]);
+        let envelope = signed_hybrid_fixture(&sk, [0x11; 32]);
+
         assert_eq!(
             envelope
                 .verify(SignatureVerificationMode::HybridRequired)
@@ -381,7 +495,7 @@ mod tests {
     #[test]
     fn duplicate_components_are_rejected() {
         let sk = SigningKey::from_bytes(&[0x42; 32]);
-        let mut envelope = SignatureEnvelopeV2::sign_ed25519(domain(), [0x11; 32], &sk);
+        let mut envelope = SignatureEnvelopeV3::sign_ed25519(domain(), [0x11; 32], &sk);
         envelope.signatures.push(envelope.signatures[0].clone());
 
         assert_eq!(
@@ -394,18 +508,57 @@ mod tests {
 
     #[test]
     fn signing_message_is_pinned() {
-        let digest = [0x11; 32];
-        let message = signature_envelope_message(&domain(), &digest);
+        let descriptor = SignatureSuite::Ed25519.descriptor();
+        let message = signature_envelope_message(
+            &domain(),
+            &[0x11; 32],
+            descriptor.suite,
+            &descriptor.algorithms,
+        );
+        // Pinned so an accidental encoding change (field order, prefix,
+        // algorithm list) cannot ship without a deliberate wire-format bump.
         assert_eq!(
             hex::encode(message),
-            "69c894aefcd729ae67ba5cb83b5d9656d4026b4c8adcfb31f9221112837886d0"
+            "c5d5fe6c528cb90e16d2ff7b0f062bdb4305fee78846d5f22414c28942e6f989"
         );
+    }
+
+    #[test]
+    fn signature_message_binds_suite_and_algorithm_list() {
+        let digest = [0x11; 32];
+        let classical = signature_envelope_message(
+            &domain(),
+            &digest,
+            SignatureSuite::Ed25519,
+            &SignatureSuite::Ed25519.descriptor().algorithms,
+        );
+        let hybrid = signature_envelope_message(
+            &domain(),
+            &digest,
+            SignatureSuite::HybridEd25519MlDsa65,
+            &SignatureSuite::HybridEd25519MlDsa65.descriptor().algorithms,
+        );
+        assert_ne!(classical, hybrid, "suite must be inside the digest");
+
+        // Same suite, different advertised leg set: also a different digest.
+        let doctored = signature_envelope_message(
+            &domain(),
+            &digest,
+            SignatureSuite::HybridEd25519MlDsa65,
+            &[SignatureAlgorithm::Ed25519],
+        );
+        assert_ne!(hybrid, doctored, "algorithm list must be inside the digest");
     }
 
     #[test]
     fn algorithm_wire_names_and_suite_descriptors_are_pinned() {
         assert_eq!(SignatureAlgorithm::Ed25519.wire_name(), "ed25519");
         assert_eq!(SignatureAlgorithm::MlDsa65.wire_name(), "ml-dsa-65");
+        assert_eq!(SignatureSuite::Ed25519.wire_name(), "ed25519");
+        assert_eq!(
+            SignatureSuite::HybridEd25519MlDsa65.wire_name(),
+            "hybrid-ed25519-ml-dsa-65"
+        );
 
         let classical = SignatureSuite::Ed25519.descriptor();
         assert_eq!(classical.suite, SignatureSuite::Ed25519);
@@ -437,17 +590,17 @@ mod tests {
     #[test]
     fn signed_envelope_shape_and_component_errors_are_observable() {
         let sk = SigningKey::from_bytes(&[0x42; 32]);
-        let mut envelope = SignatureEnvelopeV2::sign_ed25519(domain(), [0x11; 32], &sk);
+        let mut envelope = SignatureEnvelopeV3::sign_ed25519(domain(), [0x11; 32], &sk);
 
-        envelope.schema = "olympus-signature-envelope/v1".to_owned();
+        envelope.schema = "olympus-signature-envelope/v2".to_owned();
         assert_eq!(
             envelope
                 .verify(SignatureVerificationMode::ClassicalRequired)
                 .unwrap_err(),
-            SignatureEnvelopeError::UnsupportedSchema("olympus-signature-envelope/v1".to_owned())
+            SignatureEnvelopeError::UnsupportedSchema("olympus-signature-envelope/v2".to_owned())
         );
 
-        let mut envelope = SignatureEnvelopeV2::sign_ed25519(domain(), [0x11; 32], &sk);
+        let mut envelope = SignatureEnvelopeV3::sign_ed25519(domain(), [0x11; 32], &sk);
         envelope.signatures.clear();
         assert_eq!(
             envelope
@@ -456,7 +609,7 @@ mod tests {
             SignatureEnvelopeError::MissingSignature(SignatureAlgorithm::Ed25519)
         );
 
-        let mut envelope = SignatureEnvelopeV2::sign_ed25519(domain(), [0x11; 32], &sk);
+        let mut envelope = SignatureEnvelopeV3::sign_ed25519(domain(), [0x11; 32], &sk);
         envelope.signatures[0].algorithm = SignatureAlgorithm::MlDsa65;
         assert_eq!(
             envelope
@@ -473,8 +626,14 @@ mod tests {
     fn ed25519_component_validation_checks_lengths_and_returns_real_key() {
         let sk = SigningKey::from_bytes(&[0x42; 32]);
         let digest = [0x11; 32];
-        let envelope = SignatureEnvelopeV2::sign_ed25519(domain(), digest, &sk);
-        let message = signature_envelope_message(&envelope.domain_separator, &digest);
+        let envelope = SignatureEnvelopeV3::sign_ed25519(domain(), digest, &sk);
+        let descriptor = envelope.suite.descriptor();
+        let message = signature_envelope_message(
+            &envelope.domain_separator,
+            &digest,
+            descriptor.suite,
+            &descriptor.algorithms,
+        );
         let component = &envelope.signatures[0];
 
         assert_eq!(

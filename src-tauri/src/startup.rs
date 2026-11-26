@@ -716,6 +716,16 @@ pub(crate) fn run_preflight_checks(
 ) -> (bool, Option<std::path::PathBuf>) {
     let proofs_dir = resolve_proofs_dir(app_handle);
     let is_prod = crate::env::is_production();
+
+    // Unconditional (deliberately not production-only): an explicitly-set but
+    // unparseable checkpoint-quorum threshold is a configuration error in every
+    // environment. It used to silently degrade an intended M-of-N policy to
+    // 1-of-N (audit D-P2-1).
+    if let Some(reason) = crate::quorum::checkpoint::checkpoint_quorum_threshold_config_error() {
+        eprintln!("[olympus-desktop] FATAL: {reason}");
+        std::process::exit(2);
+    }
+
     let prod_config_errors = production_runtime_config_errors();
     if !prod_config_errors.is_empty() {
         eprintln!(

@@ -158,6 +158,10 @@ Olympus.zip
 olympus-smt-demo-*.exe
 
 # Local agent tooling and audit-skill output (not repo artefacts)
+graphify-out/
 plugins/
 .agents/plugins/
 security-audit-skill/
+
+# wiserepo eval runs: per-run answers + provenance (baseline.json points at them)
+tools/wiserepo/eval/runs/
