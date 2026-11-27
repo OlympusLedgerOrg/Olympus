@@ -49,11 +49,14 @@ operation, SBTs, anchoring. TypeScript: `app/public-ui/` only. Python:
 `clients/python/`, a verify-only SDK — not a service. Go and server-side Python are
 retired; `verifiers/` (Rust + JavaScript) holds the reference implementations and
 `clients/python` re-implements the leaf hash, so a hash change touches all four.
+`clients/python/native` is an optional PyO3 binding to `olympus-crypto`, not a
+fifth implementation: it agrees with the producer by construction, so it never
+replaces the pure-Python verifier — its tests cross-check the two.
 
 **Layout.** `src-tauri/` (`startup.rs`, `server/mod.rs`), `crates/olympus-crypto` (the
 authoritative hash and SMT constants), `proofs/`,
 `verifiers/`, `clients/python/`, `app/public-ui/`, `migrations/` — five workspace
-members, and six other Cargo workspaces that need `--manifest-path`
+members, and seven other Cargo workspaces that need `--manifest-path`
 (`context.json.workspace`).
 
 **Two names that mislead.** Redaction is not a SNARK (ADR-0030): an Ed25519

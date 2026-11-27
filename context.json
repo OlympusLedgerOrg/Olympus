@@ -23,10 +23,11 @@
       "verifiers/rust/fuzz",
       "pg-embed-local",
       "clients/cli",
+      "clients/python/native (optional PyO3 backend, built by maturin)",
       "proofs/zkvm/canonicalization/guest",
       "proofs/zkvm/canonicalization/host-tools"
     ],
-    "note": "The repo has 7 Cargo workspaces. Root --workspace reaches only one."
+    "note": "The repo has 8 Cargo workspaces. Root --workspace reaches only one."
   },
 
   "critical_constants": {
@@ -91,7 +92,7 @@
 
   "pre_push_checklist": [
     "Do claims match code? (every assertion in ADRs/doc comments verified against implementation)",
-    "Have all gates run in every scope? (7 workspaces, verifiers/rust, app/public-ui ESLint from inside dir, pnpm tooling:check)"
+    "Have all gates run in every scope? (8 workspaces, verifiers/rust, app/public-ui ESLint from inside dir, pnpm tooling:check)"
   ],
 
   "mcp_server": {

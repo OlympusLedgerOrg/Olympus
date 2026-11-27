@@ -1,0 +1,27 @@
+[package]
+name = "olympus-manifest-native"
+version = "0.1.0"
+edition = "2021"
+description = "Optional PyO3 bindings to olympus-crypto / olympus-manifest for the Python SDK"
+license = "Apache-2.0"
+repository = "https://github.com/OlympusLedgerOrg/Olympus"
+# Built by maturin as a Python extension, never published to crates.io.
+publish = false
+
+# Standalone: excluded from the root workspace (like verifiers/rust) so PyO3
+# linking never enters `cargo test --workspace` / clippy.
+[workspace]
+
+[lib]
+name = "olympus_manifest_native"
+crate-type = [ "cdylib" ]
+
+[dependencies]
+# abi3-py39: one wheel per platform covers every CPython >= 3.9 (matches
+# clients/python's requires-python).
+pyo3 = { version = "0.26", features = [ "extension-module", "abi3-py39" ] }
+olympus-crypto = { path = "../../../crates/olympus-crypto", features = [
+  "smt",
+] }
+olympus-manifest = { path = "../../../crates/olympus-manifest" }
+serde_json = "1"

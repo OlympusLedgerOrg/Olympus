@@ -32,7 +32,8 @@ wrong in four different ways without seeing an error. This encodes that table.
 | root `Cargo.toml` / `Cargo.lock` | the same, at `--workspace`                                                                                                     |
 | `verifiers/rust/`                | fmt, clippy and tests via `--manifest-path`; the fuzz workspace gets `cargo check`                                             |
 | `clients/cli/`                   | fmt, clippy `--all-features`, `cargo test --locked … --all-features`                                                           |
-| `clients/python/`                | `python -m pytest -q clients/python/tests`                                                                                     |
+| `clients/python/`                | `python -m pytest -q clients/python/tests` (native parity tests skip unless `maturin develop` built the backend)               |
+| `clients/python/native/`         | additionally fmt and clippy via `--manifest-path` (its own workspace)                                                          |
 | `app/public-ui/`                 | from inside the directory: `tsc -b`, `eslint . --max-warnings 0`, `vitest run` (local binaries, not `pnpm exec`)               |
 | `verifiers/javascript/`          | `npm test` from inside the directory                                                                                           |
 | `pg-embed-local/`                | its library tests only, as the CI job does                                                                                     |
@@ -53,8 +54,10 @@ before a commit that matters.
 `pnpm <script>` verifies the dependency graph before running, and when the
 lockfile disagrees with the installed tree it installs to "fix" it — rewriting
 `pnpm-lock.yaml`. A verification gate that dirties the tree it is checking is
-not a gate, so Prettier, taplo, tsc, eslint and vitest are invoked through their
-`node` entry points in `node_modules`; cargo, npm and python are unaffected.
+not a gate, so Prettier, tsc, eslint and vitest are invoked through their
+`node` entry points in `node_modules`, and taplo through `scripts/taplo.mjs`
+(the npm `@taplo/cli` silently checks zero files on Windows); cargo, npm and
+python are unaffected.
 
 ## First failure is the verdict
 

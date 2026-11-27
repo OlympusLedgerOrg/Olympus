@@ -109,6 +109,21 @@ test("the Python client and JS verifier are reached at all", () => {
     "python -m pytest -q clients/python/tests",
   ]);
 
+  // The PyO3 backend is a separate Cargo workspace: it gets fmt/clippy via
+  // --manifest-path, never the root workspace, plus the Python suite.
+  const native = planVerification(["clients/python/native/src/lib.rs"]);
+  assert.deepEqual(commandsFor(native, "python-native"), [
+    "cargo fmt --manifest-path clients/python/native/Cargo.toml --check",
+    "cargo clippy --locked --manifest-path clients/python/native/Cargo.toml -- -D warnings",
+  ]);
+  assert.deepEqual(commandsFor(native, "python-client"), [
+    "python -m pytest -q clients/python/tests",
+  ]);
+  assert.equal(
+    native.scopes.some((entry) => entry.id === "rust"),
+    false,
+  );
+
   const js = planVerification(["verifiers/javascript/verifier.js"]);
   const scope = js.scopes.find((entry) => entry.id === "verifiers-javascript");
   assert.deepEqual(
@@ -126,11 +141,7 @@ test("a touched tool runs its own test files", () => {
 
 test("a TOML change adds the TOML formatter", () => {
   const plan = planVerification(["taplo.toml"]);
-  assert.ok(
-    commandsFor(plan, "tooling").includes(
-      "node node_modules/@taplo/cli/dist/cli.js format --check",
-    ),
-  );
+  assert.ok(commandsFor(plan, "tooling").includes("node scripts/taplo.mjs format --check"));
 });
 
 test("the gate stops at the first failure and names the tier", () => {

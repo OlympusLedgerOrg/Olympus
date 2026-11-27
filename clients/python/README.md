@@ -81,5 +81,26 @@ pip install -e '.[dev]'
 pytest -q
 ```
 
+### Optional native backend (`native/`)
+
+`native/` is a PyO3 extension (`olympus_manifest_native`, built with
+[maturin](https://www.maturin.rs/)) that wraps the Rust `olympus-crypto` /
+`olympus-manifest` crates. It is **not** a replacement for this package: the
+pure-Python code is an independent re-implementation, and a binding agrees with
+the Rust producer by construction. `tests/test_native_parity.py` cross-checks
+the two backends (primitives, field-binding mutations and tampered bundles) and
+skips when the extension is not built:
+
+```bash
+pip install maturin
+cd clients/python/native
+maturin develop          # inside a virtualenv
+cd .. && pytest -q        # native parity tests now run instead of skipping
+```
+
+`native/` is its own Cargo workspace with its own `Cargo.lock`. Keep its
+`unicode-normalization` pinned to the root `Cargo.lock`'s version:
+`olympus-manifest` checks the Unicode version at compile time.
+
 See ADR-0027 (`docs/adr/ADR-0027-dataset-manifest-commitments.md`) for the
 design and the Rust `clients/cli/README.md` for the full builder.
