@@ -2214,7 +2214,7 @@ criteria = "safe-to-deploy"
 
 [[exemptions.num_cpus]]
 version = "1.17.0"
-criteria = "safe-to-run"
+criteria = "safe-to-deploy"
 
 [[exemptions.num_enum]]
 version = "0.7.6"
