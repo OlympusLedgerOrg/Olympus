@@ -57,7 +57,7 @@ pull request. If you are unsure, open a `governance`-tagged issue and ask.
 | [RFC-0001](0001-textrun-container-commitment.md) | Commit the container for `pdf-textrun` so the format can be promoted | Accepted (2026-08-02) |
 | [RFC-0000](0000-transparency-receipts.md) | SCITT-style transparency receipts for Olympus bundles | Draft |
 | [RFC-0000](0000-width-preserving-redaction.md) | Width-preserving redaction for `pdf-textrun` | Draft |
-| [RFC-0000](0000-content-addressed-dataset-commitments.md) | Content-addressed dataset commitments with near-duplicate proofs | Draft |
+| [RFC-0000](0000-content-addressed-dataset-commitments.md) | Content-addressed dataset commitments | Draft |
 
 Drafts keep the placeholder `0000` until acceptance, per step 4 above — so more
 than one row may read `RFC-0000` at a time. Numbered entries sort first.
