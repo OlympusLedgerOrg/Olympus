@@ -252,3 +252,56 @@ test("review_diff reports omitted input even when the model does not mention it"
   await assert.rejects(review, /No diff content fits in the model context/);
   assert.equal(chats, 2, "no review request should be sent when the whole diff is omitted");
 });
+
+// The model reads `-`/`+` markers as if they were the file — the phantom
+// failure the review golden case scores. Three prompt attempts to explain the
+// convention did not move it, so the tool now shows the post-diff content and a
+// review no longer has to reconstruct it from the markers.
+test("review_diff sends the files as they stand after the diff", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "wiserepo-review-after-"));
+  const previousRoot = process.env.WISEREPO_ROOT;
+  const previousModel = process.env.WISEREPO_MODEL_REVIEW;
+  process.env.WISEREPO_ROOT = root;
+  process.env.WISEREPO_MODEL_REVIEW = "wiserepo-test-review-post-diff";
+  t.after(() => {
+    if (previousRoot === undefined) delete process.env.WISEREPO_ROOT;
+    else process.env.WISEREPO_ROOT = previousRoot;
+    if (previousModel === undefined) delete process.env.WISEREPO_MODEL_REVIEW;
+    else process.env.WISEREPO_MODEL_REVIEW = previousModel;
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  execFileSync("git", ["init", "-q"], { cwd: root });
+  mkdirSync(join(root, "docs"));
+  const file = "docs/review.md";
+  writeFileSync(
+    join(root, file),
+    "export function clampPage(page, lastPage) {\n  if (page > lastPage) return lastPage;\n  return page;\n}\n",
+  );
+  execFileSync("git", ["add", "--", file], { cwd: root });
+
+  t.mock.method(globalThis, "fetch", async (url) => {
+    if (url.endsWith("/api/show")) {
+      return Response.json({ digest: "test", model_info: { "test.context_length": 16384 } });
+    }
+    return new Response(
+      JSON.stringify({ message: { content: "Model answer" }, done: true }) + "\n",
+    );
+  });
+
+  let prompt;
+  await runTool(
+    "review_diff",
+    { diffArgs: ["--cached"] },
+    {
+      onPrompt: ({ prompt: captured }) => {
+        prompt = captured;
+      },
+    },
+  );
+
+  assert.match(prompt, /## Files after the change/);
+  assert.match(prompt, /### docs\/review\.md \(working tree\)/);
+  // The line without its `+` marker: the file itself, not the diff.
+  assert.match(prompt, /^ {2}if \(page > lastPage\) return lastPage;$/m);
+});
