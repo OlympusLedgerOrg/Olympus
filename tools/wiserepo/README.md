@@ -404,6 +404,26 @@ defect as "increases the page count by 1", which no accepted phrasing covers,
 and the phantom case inverted direction again. Both variants were reverted; the
 prompt those runs scored is the one the baseline below was recorded on.
 
+A third attempt aimed at `clean-fix-not-flagged` directly, adding "a hunk whose
+only effect is to remove a defect is a correct change: say so plainly, and do not
+recommend restoring what it removed". At `--repeat 3` it scored `review` 1/3: two
+of three clean samples stopped proposing the restore, but the answers collapsed
+to "both hunks are correct" without naming `clampPage`, so
+`no-phantom-removed-line` failed on its positive expectation (0/3) instead. It
+was reverted: a blanket permission to call a change correct costs the naming the
+phantom case scores.
+
+A fourth attempt replaced that sentence with a per-hunk restatement — "name the
+function it changes and state what that function does after the change, then give
+your finding, or say the hunk is correct" — keeping the correct-change clause. At
+`--repeat 3` it fixed BOTH previous failures (`no-phantom-removed-line` 3/3,
+`clean-fix-not-flagged` 3/3) and broke `planted-off-by-one` (0/3): the answers
+named `pageCount` and called adding 1 "unnecessary and incorrect" but never
+stated the consequence ("extra page"), which is the phrasing that case accepts.
+Reverted
+against the 3/3 bar; it is the closest configuration measured so far, and the
+remaining gap is that case's expectation group, not the phantom matcher.
+
 `eval/baseline.json` is this `--repeat 3` run (answers in `eval/runs/`), so the
 comparison point is the honest rate rather than a single draw, and it was
 recorded on the prompt the tool now sends. A one-sample run is still allowed; it
