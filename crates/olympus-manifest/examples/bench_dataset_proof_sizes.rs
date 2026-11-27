@@ -5,55 +5,38 @@
 
 use olympus_manifest::content::{
     commit::{content_digest, content_key, empty_meta_root, ItemPreimage},
-    domains::{h, Domain},
+    error::ContentError,
+    fingerprint::{FpEntry, FpSet, MINHASH_WIDTH},
     tree::ItemTree,
-    verify_m1_open, verify_n1,
+    verify_m1_open, verify_m2, verify_n1,
     version::ProfileEntry,
     wire::ExactProof,
-    OpenedItem,
+    FpProfile, M2Proof, OpenedItem,
 };
 
 const PARTITION_BITS: u8 = 4;
 const ITEMS: u32 = 1 << 20;
 const QUERIES: u32 = 4096;
 
-fn fingerprint_witness() -> ([u8; 32], Vec<u8>) {
-    let fingerprint = |segment: u32| {
-        let mut bytes = [0; 480];
-        blake3::Hasher::new()
-            .update(&segment.to_be_bytes())
-            .finalize_xof()
-            .fill(&mut bytes);
-        bytes
-    };
-    let mut level: Vec<_> = (0u32..128)
-        .map(|segment| {
-            h(
-                Domain::Fp,
-                &[&[0, 0], &segment.to_be_bytes(), &fingerprint(segment)],
-            )
-        })
-        .collect();
-    let mut wire = Vec::new();
-    wire.extend_from_slice(&0u16.to_be_bytes()); // fingerprint profile
-    wire.extend_from_slice(&0u32.to_be_bytes()); // segment
-    wire.extend_from_slice(&0u32.to_be_bytes()); // leaf position
-    wire.extend_from_slice(&128u32.to_be_bytes()); // fingerprint tree size
-    wire.extend_from_slice(&fingerprint(0));
-    while level.len() > 1 {
-        wire.extend_from_slice(&level[1]);
-        level = level
-            .chunks_exact(2)
-            .map(|pair| h(Domain::FpNode, &[&pair[0], &pair[1]]))
-            .collect();
-    }
-
-    let mut root = h(Domain::Fp, &[&wire[..2], &wire[2..6], &wire[14..494]]);
-    for sibling in wire[494..].chunks_exact(32) {
-        root = h(Domain::FpNode, &[&root, sibling]);
-    }
-    assert_eq!(root, level[0]);
-    (root, wire)
+/// 128 synthetic segment fingerprints of the `text/minhash-120` width under
+/// one profile, built with the real fingerprint-set code.
+fn fingerprint_set() -> Result<FpSet, ContentError> {
+    FpSet::new(
+        (0u32..128)
+            .map(|segment| {
+                let mut fingerprint = vec![0; MINHASH_WIDTH];
+                blake3::Hasher::new()
+                    .update(&segment.to_be_bytes())
+                    .finalize_xof()
+                    .fill(&mut fingerprint);
+                FpEntry {
+                    fp_profile_index: 0,
+                    segment_index: segment,
+                    fingerprint,
+                }
+            })
+            .collect(),
+    )
 }
 
 fn report(name: &str, sizes: &mut [usize], target: usize) {
@@ -66,7 +49,9 @@ fn report(name: &str, sizes: &mut [usize], target: usize) {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let (fp_set_root, fingerprint) = fingerprint_witness();
+    let fp_set = fingerprint_set()?;
+    let fp_set_root = fp_set.root();
+    let fp_table = [FpProfile::text_minhash_120().entry()];
     let profiles = [ProfileEntry {
         id: "bytes/raw".into(),
         version: 1,
@@ -86,7 +71,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let preimage = item(number);
             Ok((key(&preimage)?, preimage.commitment()))
         })
-        .collect::<Result<_, olympus_manifest::content::error::ContentError>>()?;
+        .collect::<Result<_, ContentError>>()?;
     let tree = ItemTree::build(PARTITION_BITS, leaves)?;
 
     let mut memberships = Vec::new();
@@ -95,12 +80,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for query in 0..QUERIES {
         let preimage = item(query * (ITEMS / QUERIES));
         let member = key(&preimage)?;
-        let proof = ExactProof::Membership(OpenedItem {
+        let opened_item = OpenedItem {
             key: member,
             path: tree.path(&member),
             preimage,
-        })
-        .encode(PARTITION_BITS)?;
+        };
+        let proof = ExactProof::Membership(opened_item.clone()).encode(PARTITION_BITS)?;
         let ExactProof::Membership(opened) = ExactProof::decode(PARTITION_BITS, &proof)? else {
             unreachable!();
         };
@@ -109,11 +94,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         assert_eq!(verified.fp_set_root, fp_set_root);
         memberships.push(proof.len());
 
-        // M2's separate statement tag plus lp(M1-open) and its fingerprint witness.
-        let mut m2 = vec![3];
-        m2.extend_from_slice(&(proof.len() as u32).to_be_bytes());
-        m2.extend_from_slice(&proof);
-        m2.extend_from_slice(&fingerprint);
+        // Plain M2 for segment 0 through the real codec and verifier.
+        let segment = &fp_set.entries()[0];
+        let m2 = M2Proof {
+            item: opened_item,
+            fp_profile_index: 0,
+            segment_index: segment.segment_index,
+            leaf_index: 0,
+            leaf_count: fp_set.entries().len() as u32,
+            fingerprint: segment.fingerprint.clone(),
+            fp_path: fp_set.path(0),
+        }
+        .encode(PARTITION_BITS)?;
+        let decoded = M2Proof::decode(PARTITION_BITS, &fp_table, &m2)?;
+        verify_m2(
+            PARTITION_BITS,
+            &tree.root(),
+            &profiles,
+            &fp_table,
+            &decoded,
+            &segment.fingerprint,
+        )?;
         similarities.push(m2.len());
 
         let absent = key(&item(ITEMS + query))?;

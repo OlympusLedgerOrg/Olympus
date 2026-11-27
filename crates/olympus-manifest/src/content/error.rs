@@ -182,6 +182,71 @@ pub enum ContentError {
     /// at least one occurrence (§2).
     #[error("item opening has occurrence_count = 0")]
     ZeroOccurrences,
+
+    /// A fingerprint-profile table row names a profile this implementation
+    /// does not implement; it is never matched under a guessed rule.
+    #[error("fingerprint profile {0:?} is not implemented")]
+    UnknownFpProfile(String),
+
+    /// A fingerprint-profile row carries band, row or threshold parameters
+    /// its profile definition does not allow.
+    #[error("fingerprint profile parameters invalid: {0}")]
+    InvalidFpParams(&'static str),
+
+    /// The fingerprint table names one `(fp_profile_id, fp_profile_version)`
+    /// twice.
+    #[error("fingerprint profile {0:?} appears twice in the table")]
+    DuplicateFpProfile(String),
+
+    /// A fingerprint-profile index names no row of the version's table.
+    #[error("fingerprint profile index {0} is out of range")]
+    UnknownFpIndex(u16),
+
+    /// A fingerprint is not the width its profile defines.
+    #[error("fingerprint is {got} bytes, its profile defines {expected}")]
+    FingerprintWidth {
+        /// Profile width.
+        expected: usize,
+        /// Supplied length.
+        got: usize,
+    },
+
+    /// M2 fingerprint position `leaf_index ≥ leaf_count`.
+    #[error("fingerprint position {j} out of range for leaf_count = {n}")]
+    FpPositionOutOfRange {
+        /// `leaf_index`.
+        j: u32,
+        /// `leaf_count`.
+        n: u32,
+    },
+
+    /// Wrong number of fingerprint siblings for the `(leaf_index, leaf_count)`
+    /// shape.
+    #[error("fingerprint path has {got} siblings, its shape needs {expected}")]
+    FpPathLength {
+        /// Siblings required by the shape.
+        expected: usize,
+        /// Siblings supplied.
+        got: usize,
+    },
+
+    /// The fingerprint path does not fold to the opened `fp_set_root`.
+    #[error("fingerprint path does not fold to fp_set_root")]
+    FpRootMismatch,
+
+    /// The candidate fingerprint does not pass the signed profile threshold
+    /// against the query fingerprint.
+    #[error("candidate matches {matching} slots, the signed threshold is {threshold}")]
+    BelowThreshold {
+        /// Matching MinHash slots.
+        matching: u32,
+        /// Threshold from the authenticated fingerprint-profile row.
+        threshold: u32,
+    },
+
+    /// A similarity bucket holds more entries than its `u32` count can frame.
+    #[error("similarity bucket exceeds u32 entries")]
+    BucketTooLarge,
 }
 
 /// Result alias.

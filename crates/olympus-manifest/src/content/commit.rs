@@ -24,7 +24,7 @@ pub fn content_key(profile_id: &str, profile_version: u32, digest: &[u8; 32]) ->
     Ok(blake3::derive_key(CONTENT_KEY_CONTEXT, &m))
 }
 
-/// Root of an empty fingerprint set, `H_fp("")`. v1 exact-only items use it.
+/// Root of an empty fingerprint set, `H_fp("")`: an unfingerprinted item.
 pub fn empty_fp_set_root() -> [u8; 32] {
     h(Domain::Fp, &[])
 }
@@ -250,8 +250,7 @@ pub(crate) fn fold_promoted(
     siblings: &[[u8; 32]],
     node: Domain,
 ) -> Result<[u8; 32]> {
-    let shape = promoted_shape(j, n);
-    let expected = shape.iter().filter(|s| s.is_some()).count();
+    let expected = promoted_sibling_count(j, n);
     if expected != siblings.len() {
         return Err(ContentError::MetaPathLength {
             j,
@@ -260,16 +259,28 @@ pub(crate) fn fold_promoted(
             got: siblings.len(),
         });
     }
+    Ok(fold_promoted_with(leaf, j, n, siblings, node))
+}
+
+/// Fold `leaf` at `(j, n)`; the caller has checked that `siblings` has
+/// exactly [`promoted_sibling_count`]`(j, n)` entries.
+pub(crate) fn fold_promoted_with(
+    leaf: [u8; 32],
+    j: u64,
+    n: u64,
+    siblings: &[[u8; 32]],
+    node: Domain,
+) -> [u8; 32] {
     let mut acc = leaf;
     let mut sibs = siblings.iter();
-    for side in shape {
+    for side in promoted_shape(j, n) {
         match side {
             Some(true) => acc = h(node, &[sibs.next().expect("counted"), &acc]),
             Some(false) => acc = h(node, &[&acc, sibs.next().expect("counted")]),
             None => {}
         }
     }
-    Ok(acc)
+    acc
 }
 
 /// A metadata set in position (strictly ascending blinder) order.
@@ -324,20 +335,31 @@ impl MetaSet {
     /// Siblings for the entry at position `j` (bottom-up, promoted levels
     /// omitted), read from the cached levels.
     pub fn path(&self, j: usize) -> Vec<[u8; 32]> {
-        let mut path = Vec::new();
-        let mut idx = j;
-        for level in self.levels.iter().take(self.levels.len().saturating_sub(1)) {
-            if let Some(sib) = level.get(idx ^ 1) {
-                path.push(*sib);
-            }
-            idx /= 2;
-        }
-        path
+        path_from_levels(&self.levels, j)
     }
 }
 
+/// Siblings for position `j` (bottom-up, promoted levels omitted) from the
+/// cached levels of [`promoted_levels`].
+pub(crate) fn path_from_levels(levels: &[Vec<[u8; 32]>], j: usize) -> Vec<[u8; 32]> {
+    let mut path = Vec::new();
+    let mut idx = j;
+    for level in levels.iter().take(levels.len().saturating_sub(1)) {
+        if let Some(sib) = level.get(idx ^ 1) {
+            path.push(*sib);
+        }
+        idx /= 2;
+    }
+    path
+}
+
+/// Number of siblings a promoted path at `(j, n)` carries.
+pub(crate) fn promoted_sibling_count(j: u64, n: u64) -> usize {
+    promoted_shape(j, n).iter().filter(|s| s.is_some()).count()
+}
+
 /// Every level of a promoted binary Merkle tree over non-empty `leaves`.
-fn promoted_levels(leaves: Vec<[u8; 32]>, node: Domain) -> Vec<Vec<[u8; 32]>> {
+pub(crate) fn promoted_levels(leaves: Vec<[u8; 32]>, node: Domain) -> Vec<Vec<[u8; 32]>> {
     let mut levels = vec![leaves];
     while levels.last().is_some_and(|l| l.len() > 1) {
         let next = levels
