@@ -361,10 +361,10 @@ re-scoped case set (2026-11-27):
 
 | suite | score | time | what failed |
 | --- | --- | --- | --- |
-| `qa` | 5/5 (3/3 samples each) | 79 s | — |
-| `review` | 2/3 (planted 3/3, phantom 3/3, clean 0/3) | 97 s | `clean-fix-not-flagged`: every sample called the correct fix a defect and proposed restoring `+ 1` |
-| `summarize` | 1/1 (3/3 samples) | 28 s | — |
-| **overall** | **8/9 (89 %)** | 204 s | |
+| `qa` | 5/5 (3/3 samples each) | 70 s | — |
+| `review` | 2/3 (planted 3/3, phantom 3/3, clean 0/3) | 103 s | `clean-fix-not-flagged`: every sample called the correct fix a defect and proposed restoring `+ 1` |
+| `summarize` | 1/1 (3/3 samples) | 26 s | — |
+| **overall** | **8/9 (89 %)** | 199 s | |
 
 The failure moved with the tool. Before `review_diff` sent the post-diff file,
 `no-phantom-removed-line` failed 0/3 samples in every run — the model kept
@@ -400,9 +400,9 @@ Re-run at `--repeat 3` with the matcher fixed, that wording took
 state the consequence in a fresh present-tense sentence, which the matcher
 reads as a live claim. Adding a clause that keeps the consequence inside the
 attributed sentence scored 1/3 instead — the planted-bug case then described the
-defect as "increases the page count by 1", which no accepted phrasing covers,
-and the phantom case inverted direction again. Both variants were reverted; the
-prompt those runs scored is the one the baseline below was recorded on.
+defect as "increases the page count by 1", which the group did not accept at the
+time (it does now), and the phantom case inverted direction again. Both variants
+were reverted.
 
 A third attempt aimed at `clean-fix-not-flagged` directly, adding "a hunk whose
 only effect is to remove a defect is a correct change: say so plainly, and do not
@@ -413,16 +413,20 @@ to "both hunks are correct" without naming `clampPage`, so
 was reverted: a blanket permission to call a change correct costs the naming the
 phantom case scores.
 
-A fourth attempt replaced that sentence with a per-hunk restatement — "name the
-function it changes and state what that function does after the change, then give
-your finding, or say the hunk is correct" — keeping the correct-change clause. At
-`--repeat 3` it fixed BOTH previous failures (`no-phantom-removed-line` 3/3,
-`clean-fix-not-flagged` 3/3) and broke `planted-off-by-one` (0/3): the answers
-named `pageCount` and called adding 1 "unnecessary and incorrect" but never
-stated the consequence ("extra page"), which is the phrasing that case accepts.
-Reverted
-against the 3/3 bar; it is the closest configuration measured so far, and the
-remaining gap is that case's expectation group, not the phantom matcher.
+The fourth attempt was a per-hunk restatement: "name the function it changes and
+state what that function does after the change, then give your finding — or say
+the hunk is correct". At `--repeat 3` it fixed both failing cases
+(`no-phantom-removed-line` 3/3, `clean-fix-not-flagged` 3/3) but broke
+`planted-off-by-one` (0/3): the answers named `pageCount` and called adding 1
+"unnecessary and incorrect" without ever stating the consequence. Accepting that
+phrasing (`adds 1 to the result`, `unnecessary`) made the suite 3/3, and that was
+the wrong fix: both are available from the added line itself, so the case could
+no longer tell a review that understood the bug from one that paraphrased the
+hunk. With the group tightened back to a stated consequence, the same prompt
+scored `review` 2/3 with `planted-off-by-one` at 0/3, so the wording was
+reverted. `increases the page count` stays accepted because it states the
+consequence; `off-by-one` and `+ 1` do not, so a review that only describes the
+`clampPage` hunk cannot pass.
 
 `eval/baseline.json` is this `--repeat 3` run (answers in `eval/runs/`), so the
 comparison point is the honest rate rather than a single draw, and it was
