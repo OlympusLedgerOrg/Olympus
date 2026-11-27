@@ -161,6 +161,12 @@ test("every review case requires the review to address the diff", async () => {
   const consequence = planted.expect.find(Array.isArray);
   assert.ok(consequence, "the planted-bug case has no consequence group");
   assert.ok(consequence.includes("extra page"));
+  // A real answer phrased the same finding as "increases the page count by 1"
+  // and the case scored it as silence. Wording must not decide the case.
+  assert.deepEqual(
+    missingExpectations("The change increases the page count by 1.", [consequence]),
+    [],
+  );
 
   // A clean range whose only change is a correct fix: the review must not turn
   // the removed `+ 1` into a live defect. Without `expect` it would pass on a
