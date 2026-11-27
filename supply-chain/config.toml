@@ -2821,11 +2821,11 @@ version = "0.15.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.risc0-binfmt]]
-version = "3.0.5"
+version = "3.0.6"
 criteria = "safe-to-deploy"
 
 [[exemptions.risc0-build]]
-version = "3.0.6"
+version = "3.0.7"
 criteria = "safe-to-deploy"
 
 [[exemptions.risc0-build-kernel]]
@@ -2833,27 +2833,35 @@ version = "2.0.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.risc0-circuit-keccak]]
-version = "4.0.6"
+version = "4.1.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.risc0-circuit-keccak-sys]]
-version = "4.0.3"
+version = "4.1.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.risc0-circuit-recursion]]
-version = "4.0.5"
+version = "4.1.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.risc0-circuit-recursion-control-zkrs]]
+version = "4.1.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.risc0-circuit-recursion-sys]]
-version = "4.0.3"
+version = "4.1.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.risc0-circuit-recursion-zkrs]]
+version = "4.1.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.risc0-circuit-rv32im]]
-version = "4.0.5"
+version = "4.1.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.risc0-circuit-rv32im-sys]]
-version = "4.0.3"
+version = "4.1.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.risc0-core]]
@@ -2861,11 +2869,11 @@ version = "3.0.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.risc0-groth16]]
-version = "3.0.5"
+version = "3.0.6"
 criteria = "safe-to-deploy"
 
 [[exemptions.risc0-sys]]
-version = "1.5.0"
+version = "1.5.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.risc0-zkos-v1compat]]
@@ -2873,11 +2881,11 @@ version = "2.2.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.risc0-zkp]]
-version = "3.0.5"
+version = "3.0.6"
 criteria = "safe-to-deploy"
 
 [[exemptions.risc0-zkvm]]
-version = "3.0.6"
+version = "3.1.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.risc0-zkvm-platform]]
