@@ -10,6 +10,7 @@ import {
   blockedCase,
   buildBaselineRecord,
   buildRunRecord,
+  caseOutcome,
   casePassed,
   indexGoldenCases,
   parseArgs,
@@ -34,6 +35,7 @@ test("parseArgs defaults to every suite with no limit", () => {
   assert.deepEqual(parseArgs([]), {
     limit: Infinity,
     model: undefined,
+    repeat: 1,
     rescore: undefined,
     showAnswers: false,
     task: "all",
@@ -64,6 +66,20 @@ test("parseArgs rejects a non-positive limit", () => {
   assert.throws(() => parseArgs(["--limit", "0"]), /positive integer/);
   assert.throws(() => parseArgs(["--limit=abc"]), /positive integer/);
   assert.equal(parseArgs(["--limit=2"]).limit, 2);
+});
+
+// One draw per case cannot separate a prompt fix from a lucky sample, and the
+// review suite has three cases. `--repeat` is how a 3/3 becomes evidence.
+test("parseArgs accepts --repeat and defaults to one sample", () => {
+  assert.equal(parseArgs([]).repeat, 1);
+  assert.equal(parseArgs(["--repeat", "3"]).repeat, 3);
+  assert.equal(parseArgs(["--repeat=2"]).repeat, 2);
+});
+
+test("parseArgs rejects a non-positive or missing repeat", () => {
+  for (const argv of [["--repeat"], ["--repeat", "0"], ["--repeat=abc"], ["--repeat=-1"]]) {
+    assert.throws(() => parseArgs(argv), /--repeat needs a positive integer/);
+  }
 });
 
 test("parseArgs accepts --model and --write-baseline", () => {
@@ -309,6 +325,26 @@ test("a blocked case is counted beside the score, never in it", () => {
   );
 });
 
+// A case passes only when every sample does. Counting a mixed case as a pass
+// because one draw agreed would make --repeat report luck as reliability.
+test("a case passes only when every repeat sample passes", () => {
+  const good = { ok: true, verdict: { missing: [], phantom: [], badCitations: [] } };
+  const phantom = {
+    ok: false,
+    verdict: { missing: [], phantom: ["lastPage - 1"], badCitations: [] },
+  };
+
+  assert.equal(caseOutcome([good, good]).ok, true);
+  assert.equal(caseOutcome([good, good]).passed, 2);
+
+  const mixed = caseOutcome([good, phantom]);
+  assert.equal(mixed.ok, false);
+  assert.equal(mixed.passed, 1);
+  // Diagnostics come from the failing sample, or the console would print a
+  // passing sample's (empty) problems under a FAIL verdict.
+  assert.equal(mixed.representative, phantom);
+});
+
 // Re-scoring a recorded run must not turn a recorded refusal into a verdict on
 // an answer that was never produced.
 test("re-scoring carries a blocked case through instead of scoring its missing answer", async () => {
@@ -395,6 +431,39 @@ test("a recorded run re-scores offline, and a changed verdict is visible", async
   // Re-scoring explains the recorded run; it does not replace it.
   assert.equal(scored[0].answer, entries[0].answer);
   assert.equal(scored[0].prompt_sha256, entries[0].prompt_sha256);
+});
+
+// A --repeat record holds one answer per sample. Re-scoring only the top-level
+// answer would let a case that failed on its second draw pass offline, which is
+// exactly the flakiness --repeat exists to surface.
+test("re-scoring judges every stored sample, not just the first", async () => {
+  const goldenById = indexGoldenCases([
+    {
+      suite: "review",
+      cases: [{ id: "repeat-case", expect: ["clampPage"], expect_absent: ["lastPage - 1"] }],
+    },
+  ]);
+  const [scored] = await rescoreRecord(
+    [
+      {
+        suite: "review",
+        id: "repeat-case",
+        seconds: 6,
+        prompt_sha256: "a".repeat(64),
+        answer: "clampPage no longer returns `lastPage - 1`.",
+        samples: [
+          { answer: "clampPage no longer returns `lastPage - 1`." },
+          { answer: "clampPage returns `lastPage - 1`." },
+        ],
+      },
+    ],
+    goldenById,
+  );
+  assert.equal(scored.ok, false);
+  assert.deepEqual(
+    scored.samples.map((sample) => sample.ok),
+    [true, false],
+  );
 });
 
 // A re-score that only re-ran the stored verdict would pass a review citing a

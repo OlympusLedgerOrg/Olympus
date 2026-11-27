@@ -20,6 +20,7 @@
 //   node bin/eval.mjs                     # every suite, every case
 //   node bin/eval.mjs --task qa           # one suite (the cheap one)
 //   node bin/eval.mjs --limit 2           # first 2 cases per suite (smoke test)
+//   node bin/eval.mjs --repeat 3          # 3 samples per case — one draw cannot show flakiness
 //   node bin/eval.mjs --model qwen2.5-coder:3b   # compare tags on the same cases
 //   node bin/eval.mjs --write-baseline    # record the scores eval/baseline.json
 //   node bin/eval.mjs --show-answers      # print each raw answer under its verdict
@@ -111,6 +112,17 @@ function parseLimit(raw) {
   return value;
 }
 
+// `--repeat` changes how much evidence one score represents, so it is validated
+// like --limit and recorded in the run's provenance: a three-sample run and a
+// one-sample run are not the same measurement even on the same prompt.
+function parseRepeat(raw) {
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1) {
+    throw new Error("--repeat needs a positive integer");
+  }
+  return value;
+}
+
 // Covers both `--model` with no following argument and the empty `--model=`
 // form. Validating where the value is read is the only place that can tell
 // those apart from a tag; a later `argv.includes("--model")` re-check
@@ -129,6 +141,7 @@ export function parseArgs(argv) {
   const options = {
     limit: Infinity,
     model: undefined,
+    repeat: 1,
     rescore: undefined,
     showAnswers: false,
     task: "all",
@@ -144,6 +157,10 @@ export function parseArgs(argv) {
       options.model = needModel(argv[++i]);
     } else if (arg.startsWith("--model=")) {
       options.model = needModel(arg.slice("--model=".length));
+    } else if (arg === "--repeat") {
+      options.repeat = parseRepeat(argv[++i]);
+    } else if (arg.startsWith("--repeat=")) {
+      options.repeat = parseRepeat(arg.slice("--repeat=".length));
     } else if (arg === "--task") {
       options.task = needTask(argv[++i]);
     } else if (arg.startsWith("--task=")) {
@@ -509,33 +526,100 @@ export async function rescoreRecord(entries, goldenById) {
       scored.push(entry);
       continue;
     }
-    const { missing, phantom, badCitations, ok } = await scoreCase(entry.answer, item);
-    scored.push({ ...entry, verdict: { missing, phantom, badCitations }, ok });
+    // A `--repeat` record stores one answer per sample; an older single-sample
+    // record keeps its answer at the top level. Re-score every draw that exists,
+    // so a repeat run cannot be judged by whichever sample happened to be first.
+    const samples = entry.samples?.length ? entry.samples : [{ answer: entry.answer }];
+    const rescored = [];
+    for (const sample of samples) {
+      const { missing, phantom, badCitations, ok } = await scoreCase(sample.answer, item);
+      rescored.push({ ...sample, verdict: { missing, phantom, badCitations }, ok });
+    }
+    const { ok, representative } = caseOutcome(rescored);
+    scored.push({
+      ...entry,
+      samples: rescored,
+      answer: representative.answer,
+      verdict: representative.verdict,
+      ok,
+    });
   }
   return scored;
+}
+
+/**
+ * A case's verdict over N samples: it passes only when EVERY sample does.
+ *
+ * Counting samples instead of cases would change the suite's denominator, so a
+ * `--repeat 3` run would read against a one-sample baseline as "case set
+ * changed", and a flaky model would look like a bigger test suite. Counting
+ * cases keeps the score comparable and puts the flakiness on the line itself
+ * (`2/3 samples`) instead of hiding inside a percentage.
+ *
+ * The representative is the first FAILING sample: the printed problems have to
+ * explain the FAIL, and a mixed case printed from its passing sample would show
+ * PASS beside a phantom.
+ *
+ * Exported so the aggregation is testable without a model call.
+ */
+export function caseOutcome(samples) {
+  const failed = samples.find((sample) => !sample.ok);
+  return {
+    ok: !failed,
+    passed: samples.filter((sample) => sample.ok).length,
+    representative: failed ?? samples[0],
+  };
 }
 
 async function runSuite(name, options) {
   const spec = SUITE_SPECS[name];
   const cases = await loadCases(spec.fileName, options.limit);
-  console.log(`\n${name} — ${cases.length} case(s)`);
+  const repeat = options.repeat;
+  console.log(`\n${name} — ${cases.length} case(s)${repeat > 1 ? ` x ${repeat} samples` : ""}`);
 
   const scored = [];
   for (const item of cases) {
     const started = Date.now();
-    // Captured per case, from the tool path itself: a run-level hash cannot say
-    // WHICH case's prompt moved, and rebuilding the prompt here would drift
-    // from what was sent the first time the prompt changes.
-    let request;
-    let answer;
-    try {
-      answer = await spec.call(item, (captured) => {
-        request = captured;
+    const samples = [];
+    let blocked;
+    // `--repeat` exists because temperature 0 is not reproducibility: with one
+    // draw per case a 3-case suite cannot tell a fix from a lucky sample. Each
+    // attempt goes through the same tool path, so the eval scores the prompt a
+    // caller would actually get, N times.
+    for (let attempt = 1; attempt <= repeat; attempt++) {
+      // Captured per attempt, from the tool path itself: a run-level hash cannot
+      // say WHICH case's prompt moved, and rebuilding the prompt here would
+      // drift from what was sent the first time the prompt changes.
+      let request;
+      let answer;
+      try {
+        answer = await spec.call(item, (captured) => {
+          request = captured;
+        });
+      } catch (err) {
+        if (!(err instanceof PolicyError)) throw err;
+        // The policy decides on the paths the case names, before any model call,
+        // so a second attempt would be refused identically: record it once.
+        blocked = blockedCase(name, item, err);
+        break;
+      }
+      if (!request) {
+        throw new Error(
+          `${name}/${item.id} never reported its prompt — the run record cannot prove what was scored`,
+        );
+      }
+      const verdict = await scoreCase(answer, item);
+      samples.push({
+        answer,
+        model: request.model,
+        prompt_sha256: promptSha256(request),
+        verdict,
+        ok: verdict.ok,
       });
-    } catch (err) {
-      if (!(err instanceof PolicyError)) throw err;
-      const seconds = Math.round((Date.now() - started) / 1000);
-      const blocked = blockedCase(name, item, err);
+    }
+    const seconds = Math.round((Date.now() - started) / 1000);
+
+    if (blocked) {
       console.log(`BLOCKED  ${name}/${item.id}  (${seconds}s, agent policy — not scored)`);
       // The full refusal sentence is stored on the record; the console gets the
       // paths, which is the part a reader can act on.
@@ -546,42 +630,45 @@ async function runSuite(name, options) {
       scored.push({ ...blocked, seconds });
       continue;
     }
-    if (!request) {
-      throw new Error(
-        `${name}/${item.id} never reported its prompt — the run record cannot prove what was scored`,
-      );
-    }
-    const seconds = Math.round((Date.now() - started) / 1000);
 
-    const verdict = await scoreCase(answer, item);
+    const { ok, passed, representative } = caseOutcome(samples);
+    const sampleNote = repeat > 1 ? `${passed}/${samples.length} samples, ` : "";
     console.log(
-      `${verdict.ok ? "PASS" : "FAIL"}  ${name}/${item.id}  (${seconds}s, ${verdict.badCitations.length} unverified citation(s))`,
+      `${ok ? "PASS" : "FAIL"}  ${name}/${item.id}  (${sampleNote}${seconds}s, ${representative.verdict.badCitations.length} unverified citation(s))`,
     );
-    reportProblems(verdict);
+    reportProblems(representative.verdict);
     if (options.showAnswers) {
-      // Prefixed per line so the transcript stays readable beside the verdicts
-      // and is obviously model output rather than harness output.
-      console.log(
-        answer
-          .split("\n")
-          .map((line) => `      | ${line}`)
-          .join("\n"),
-      );
+      for (const [index, sample] of samples.entries()) {
+        if (repeat > 1) {
+          console.log(
+            `      | --- sample ${index + 1}/${samples.length} (${sample.ok ? "PASS" : "FAIL"}) ---`,
+          );
+        }
+        // Prefixed per line so the transcript stays readable beside the verdicts
+        // and is obviously model output rather than harness output.
+        console.log(
+          sample.answer
+            .split("\n")
+            .map((line) => `      | ${line}`)
+            .join("\n"),
+        );
+      }
     }
 
     scored.push({
       suite: name,
       id: item.id,
-      model: request.model,
+      model: representative.model,
       seconds,
-      prompt_sha256: promptSha256(request),
-      answer,
+      prompt_sha256: representative.prompt_sha256,
+      samples,
+      answer: representative.answer,
       verdict: {
-        missing: verdict.missing,
-        phantom: verdict.phantom,
-        badCitations: verdict.badCitations,
+        missing: representative.verdict.missing,
+        phantom: representative.verdict.phantom,
+        badCitations: representative.verdict.badCitations,
       },
-      ok: verdict.ok,
+      ok,
     });
   }
   return scored;
@@ -658,6 +745,12 @@ export function provenanceDiffs(before, after) {
   }
   if ((was.prompt_sha256 ?? null) !== (now.prompt_sha256 ?? null)) {
     diffs.push(`prompt ${shortHash(was.prompt_sha256)} -> ${shortHash(now.prompt_sha256)}`);
+  }
+  // Same prompt and weights, different number of draws: not the same
+  // measurement. A baseline recorded before --repeat existed has no field and
+  // is one sample, so it compares equal rather than reporting a phantom change.
+  if ((was.repeat ?? 1) !== (now.repeat ?? 1)) {
+    diffs.push(`samples per case ${was.repeat ?? 1} -> ${now.repeat ?? 1}`);
   }
   const models = new Set([...Object.keys(was.models ?? {}), ...Object.keys(now.models ?? {})]);
   for (const model of models) {
@@ -742,8 +835,13 @@ async function rescoreRun(file) {
         : was === entry.ok
           ? ", same verdict as recorded"
           : ", VERDICT CHANGED since recording";
+    const sampleCount = entry.samples?.length ?? 1;
+    const sampleNote =
+      sampleCount > 1
+        ? `${entry.samples.filter((sample) => sample.ok).length}/${sampleCount} samples, `
+        : "";
     console.log(
-      `${entry.ok ? "PASS" : "FAIL"}  ${entry.suite}/${entry.id}  (${entry.seconds}s${moved})`,
+      `${entry.ok ? "PASS" : "FAIL"}  ${entry.suite}/${entry.id}  (${sampleNote}${entry.seconds}s${moved})`,
     );
     reportProblems(entry.verdict);
   }
@@ -823,7 +921,8 @@ async function main() {
   const suites = options.task === "all" ? SUITE_NAMES : [options.task];
 
   console.log(
-    `wiserepo eval — ${suites.join(" + ")}, model ${options.model ?? DEFAULT_OLLAMA_MODEL}`,
+    `wiserepo eval — ${suites.join(" + ")}, model ${options.model ?? DEFAULT_OLLAMA_MODEL}` +
+      (options.repeat > 1 ? `, ${options.repeat} samples/case` : ""),
   );
 
   // modelForTool reads each suite's override at call time, so setting all three
@@ -872,6 +971,7 @@ async function main() {
     model: options.model ?? DEFAULT_OLLAMA_MODEL,
     provenance: {
       ...(await gitState()),
+      repeat: options.repeat,
       prompt_sha256: runPromptSha256(caseRecords),
       models: await modelsUsed(caseRecords),
     },
