@@ -385,6 +385,16 @@ calculated"). It does not change the recorded failure — that answer says the
 code *currently* returns the removed value, which is the phantom the case
 scores.
 
+Re-run at `--repeat 3` with the matcher fixed, that wording took
+`no-phantom-removed-line` to 3/3 samples but left `clean-fix-not-flagged` at
+0/3: its answers attribute the removal ("The original code adds `1` …") and then
+state the consequence in a fresh present-tense sentence, which the matcher
+reads as a live claim. Adding a clause that keeps the consequence inside the
+attributed sentence scored 1/3 instead — the planted-bug case then described the
+defect as "increases the page count by 1", which no accepted phrasing covers,
+and the phantom case inverted direction again. Both variants were reverted; the
+prompt is unchanged, and the baseline still describes it.
+
 `eval/baseline.json` was recorded from this run (answers in `eval/runs/`), so the
 comparison point now matches the re-scoped case set instead of the replaced `qa`
 subjects. That run reported `worktree dirty`, which is correct — the eval's own
