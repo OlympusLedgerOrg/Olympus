@@ -68,6 +68,39 @@ test("unexpectedMentions accepts removed text called removed", () => {
   );
 });
 
+// Small models call the pre-diff revision "the original code" rather than "the
+// previous code", and state its behaviour in the past tense. A real review of
+// the `HEAD~2..HEAD` fixture wrote "The original code returns `lastPage - 1`"
+// while describing the change correctly, and an earlier prompt experiment made
+// `clean-fix-not-flagged` fail on "the original code adds `1`". Both are the
+// deletion attributed, not the removed value claimed as current.
+test("unexpectedMentions accepts original-code and past-tense attribution", () => {
+  assert.deepEqual(
+    unexpectedMentions("The original code returns lastPage - 1 when page exceeds lastPage.", [
+      "lastPage - 1",
+    ]),
+    [],
+  );
+  assert.deepEqual(
+    unexpectedMentions("`clampPage` returned lastPage - 1 before this change.", ["lastPage - 1"]),
+    [],
+  );
+  assert.deepEqual(
+    unexpectedMentions("`clampPage` was returning lastPage - 1 for the final page.", [
+      "lastPage - 1",
+    ]),
+    [],
+  );
+
+  // Present tense is still the failure this case exists to score: the recorded
+  // baseline's failing answer said "the current implementation returns
+  // `lastPage - 1`", which no past-tense marker may excuse.
+  assert.deepEqual(
+    unexpectedMentions("The current implementation returns lastPage - 1.", ["lastPage - 1"]),
+    ["lastPage - 1"],
+  );
+});
+
 // ...but a removal word in the same sentence must not launder a claim that the
 // value is still live, and the attribution has to sit near the mention.
 test("unexpectedMentions still flags a live claim beside a removal word", () => {
