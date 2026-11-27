@@ -97,9 +97,10 @@ cargo run --locked -p olympus-manifest --example bench_dataset_proof_sizes
 The benchmark builds a deterministic BLAKE3 item tree with 1,048,576
 synthetic items and 16 partitions, and samples 4,096 answers per statement.
 M1-open and N1 bodies round-trip through the Rust codec and verify against
-the tree root. The text M2 fixture adds one committed 480-byte fingerprint
-and seven fingerprint siblings to the item opening. Its fingerprint path
-is checked against the root bound by the item opening.
+the tree root. The text M2 fixture opens one 480-byte fingerprint from a
+128-segment fingerprint set, which needs seven fingerprint siblings. The M2
+body round-trips through the M2 codec and passes `verify_m2`. The
+fingerprints are synthetic bytes of the profile's width, not MinHash output.
 
 | Body | Median bytes | p95 bytes | Largest observed bytes |
 |---|---:|---:|---:|
@@ -139,3 +140,11 @@ shape. These measurements do not set a maximum for every dataset.
 9. Extraction profiles beyond v1: HuggingFace `datasets` Arrow shards,
    multi-field items (an image–caption pair as one item), and conversation
    formats.
+10. `text/minhash-120` v1 keeps only L* and N* characters, so a combining
+    mark (M*) that survives NFKC splits a word. Examples are Devanagari
+    vowel signs and the U+0307 left after folding `İ`. Scripts written
+    without spaces (Chinese, Japanese, Thai) normalize to very few tokens.
+    A paragraph can then fall below five tokens and get no fingerprint.
+    Either effect lowers recall for those languages. Measure both in the
+    text-threshold study before v1 is fixed, and consider a v2 that keeps M*
+    and segments unspaced scripts.

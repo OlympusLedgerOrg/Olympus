@@ -15,6 +15,44 @@
 use super::domains::{h, Domain};
 use super::error::{ContentError, Result};
 
+/// The three keyed-hash domains one sparse Merkle tree uses (RFC §4). The
+/// item tree and the similarity index share the construction under disjoint
+/// domains, so an item proof can never be presented as an index proof.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TreeDomains {
+    empty: Domain,
+    leaf: Domain,
+    node: Domain,
+}
+
+/// `E`, `H_leaf`, `H_node`: the item tree.
+pub(crate) const ITEM_TREE: TreeDomains = TreeDomains {
+    empty: Domain::Empty,
+    leaf: Domain::Leaf,
+    node: Domain::Node,
+};
+
+/// `E_s`, `H_sleaf`, `H_snode`: the similarity index.
+pub(crate) const SIMILARITY_TREE: TreeDomains = TreeDomains {
+    empty: Domain::SEmpty,
+    leaf: Domain::SLeaf,
+    node: Domain::SNode,
+};
+
+impl TreeDomains {
+    pub(crate) fn empty_root(self) -> [u8; 32] {
+        h(self.empty, &[])
+    }
+
+    pub(crate) fn leaf(self, key: &[u8; 32], value: &[u8; 32]) -> [u8; 32] {
+        h(self.leaf, &[key, value])
+    }
+
+    pub(crate) fn node(self, l: &[u8; 32], r: &[u8; 32]) -> [u8; 32] {
+        h(self.node, &[l, r])
+    }
+}
+
 /// Key bit `i`, MSB-first.
 pub fn bit(key: &[u8; 32], i: usize) -> bool {
     (key[i / 8] >> (7 - (i % 8))) & 1 == 1
@@ -22,17 +60,17 @@ pub fn bit(key: &[u8; 32], i: usize) -> bool {
 
 /// `E`.
 pub fn empty_root() -> [u8; 32] {
-    h(Domain::Empty, &[])
+    ITEM_TREE.empty_root()
 }
 
 /// `leaf(k, c)`.
 pub fn leaf_hash(key: &[u8; 32], commitment: &[u8; 32]) -> [u8; 32] {
-    h(Domain::Leaf, &[key, commitment])
+    ITEM_TREE.leaf(key, commitment)
 }
 
 /// `node(l, r)`.
 pub fn node_hash(l: &[u8; 32], r: &[u8; 32]) -> [u8; 32] {
-    h(Domain::Node, &[l, r])
+    ITEM_TREE.node(l, r)
 }
 
 /// `partition_root_i`.
@@ -74,12 +112,44 @@ pub enum Terminal {
 }
 
 impl Terminal {
-    fn hash(&self) -> [u8; 32] {
+    fn hash(&self, domains: TreeDomains) -> [u8; 32] {
         match self {
-            Self::Empty => empty_root(),
-            Self::Leaf { key, commitment } => leaf_hash(key, commitment),
+            Self::Empty => domains.empty_root(),
+            Self::Leaf { key, commitment } => domains.leaf(key, commitment),
         }
     }
+}
+
+/// Fold an in-subtree path whose root sits at depth `start` along `key`,
+/// applying the prefix and canonical-shape rules (§4). `siblings` are
+/// top-down; the caller has already bounded their number.
+pub(crate) fn fold_subtree(
+    domains: TreeDomains,
+    key: &[u8; 32],
+    start: usize,
+    siblings: &[[u8; 32]],
+    terminal: &Terminal,
+) -> Result<[u8; 32]> {
+    let d = siblings.len();
+    if let Terminal::Leaf { key: k2, .. } = terminal {
+        if (0..start + d).any(|i| bit(k2, i) != bit(key, i)) {
+            return Err(ContentError::PrefixMismatch);
+        }
+    }
+    if d > 0 && siblings[d - 1] == domains.empty_root() {
+        // A leaf or E beside E should have been hoisted / collapsed.
+        return Err(ContentError::NonCanonicalShape);
+    }
+    let mut acc = terminal.hash(domains);
+    for lvl in (0..d).rev() {
+        let sib = &siblings[lvl];
+        acc = if bit(key, start + lvl) {
+            domains.node(sib, &acc)
+        } else {
+            domains.node(&acc, sib)
+        };
+    }
+    Ok(acc)
 }
 
 /// A path from a terminal to `item_root`.
@@ -114,24 +184,7 @@ pub fn fold_item_path(p: u8, key: &[u8; 32], path: &ItemPath) -> Result<[u8; 32]
             got: path.top_siblings.len(),
         });
     }
-    if let Terminal::Leaf { key: k2, .. } = &path.terminal {
-        if (0..p_us + d).any(|i| bit(k2, i) != bit(key, i)) {
-            return Err(ContentError::PrefixMismatch);
-        }
-    }
-    if d > 0 && path.siblings[d - 1] == empty_root() {
-        // A leaf or E beside E should have been hoisted / collapsed.
-        return Err(ContentError::NonCanonicalShape);
-    }
-    let mut acc = path.terminal.hash();
-    for lvl in (0..d).rev() {
-        let sib = &path.siblings[lvl];
-        acc = if bit(key, p_us + lvl) {
-            node_hash(sib, &acc)
-        } else {
-            node_hash(&acc, sib)
-        };
-    }
+    let mut acc = fold_subtree(ITEM_TREE, key, p_us, &path.siblings, &path.terminal)?;
     acc = partition_root(p, partition_of(key, p), path.partition_count, &acc);
     for (t, sib) in path.top_siblings.iter().enumerate() {
         acc = if bit(key, p_us - 1 - t) {
@@ -191,8 +244,11 @@ enum Node {
     Branch(u32, u32),
 }
 
+/// One hoisted subtree (a partition of the item tree, or the whole
+/// similarity index).
 #[derive(Debug, Clone)]
-struct Partition {
+pub(crate) struct Partition {
+    domains: TreeDomains,
     /// Sorted `(key, commitment)`.
     leaves: Vec<([u8; 32], [u8; 32])>,
     nodes: Vec<Node>,
@@ -201,11 +257,17 @@ struct Partition {
 }
 
 impl Partition {
-    fn build(leaves: Vec<([u8; 32], [u8; 32])>, start_depth: usize) -> Self {
+    /// `leaves` must be sorted by key with no duplicates.
+    pub(crate) fn build(
+        domains: TreeDomains,
+        leaves: Vec<([u8; 32], [u8; 32])>,
+        start_depth: usize,
+    ) -> Self {
         let mut part = Partition {
+            domains,
             leaves,
             nodes: vec![Node::Empty],
-            hashes: vec![empty_root()],
+            hashes: vec![domains.empty_root()],
             root: 0,
         };
         let n = part.leaves.len();
@@ -225,25 +287,27 @@ impl Partition {
             1 => {
                 let (k, c) = self.leaves[lo];
                 let idx = u32::try_from(lo).expect("partition exceeds u32 leaves");
-                self.push(Node::Leaf(idx), leaf_hash(&k, &c))
+                self.push(Node::Leaf(idx), self.domains.leaf(&k, &c))
             }
             _ => {
                 // Distinct keys diverge before bit 256, so depth stays < 256.
                 let mid = lo + self.leaves[lo..hi].partition_point(|(k, _)| !bit(k, depth));
                 let l = self.build_range(lo, mid, depth + 1);
                 let r = self.build_range(mid, hi, depth + 1);
-                let hash = node_hash(&self.hashes[l as usize], &self.hashes[r as usize]);
+                let hash = self
+                    .domains
+                    .node(&self.hashes[l as usize], &self.hashes[r as usize]);
                 self.push(Node::Branch(l, r), hash)
             }
         }
     }
 
-    fn subtree_root(&self) -> [u8; 32] {
+    pub(crate) fn subtree_root(&self) -> [u8; 32] {
         self.hashes[self.root as usize]
     }
 
     /// In-partition siblings (top-down) and the terminal along `key`.
-    fn walk(&self, key: &[u8; 32], start_depth: usize) -> (Vec<[u8; 32]>, Terminal) {
+    pub(crate) fn walk(&self, key: &[u8; 32], start_depth: usize) -> (Vec<[u8; 32]>, Terminal) {
         let mut sibs = Vec::new();
         let mut cur = self.root;
         let mut depth = start_depth;
@@ -295,7 +359,7 @@ impl ItemTree {
         for leaf in leaves {
             buckets[partition_of(&leaf.0, p) as usize].push(leaf);
         }
-        let build = |b: Vec<([u8; 32], [u8; 32])>| Partition::build(b, p as usize);
+        let build = |b: Vec<([u8; 32], [u8; 32])>| Partition::build(ITEM_TREE, b, p as usize);
         #[cfg(feature = "parallel")]
         let partitions: Vec<Partition> = {
             use rayon::prelude::*;

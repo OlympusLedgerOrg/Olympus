@@ -4,6 +4,14 @@ Companion to [RFC-0000](0000-content-addressed-dataset-commitments.md).
 Plain M2 is a v1 extension after the text-threshold study. Image profiles
 remain gated. N2 and private proofs are [research](dataset-proof-research.md).
 
+**Implementation status.** `text/minhash-120` v1, fingerprint sets, the
+similarity index and plain M2 are implemented in `olympus-manifest`
+(`content::fingerprint`, `content::similarity`, `verify_m2`, and the M2 wire
+codec). The profile has no published conformance vectors yet, so RFC-0000
+§0a rule 1 still bars it from a header. The text-threshold study has not
+been run. The default threshold is a parameter, not a measured operating
+point.
+
 An M2 result proves that a committed item carries a segment fingerprint
 within the named threshold of the query fingerprint. Its relevance to
 human-recognizable copying depends on measured recall and precision.
@@ -28,17 +36,31 @@ inside a larger item, such as a book chapter embedded in a crawled page.
   run of characters outside Unicode categories L* and N* with one U+0020,
   then trim.
 - Split into tokens on U+0020. Segments are windows of 256 tokens with stride
-  128. An item shorter than 256 tokens is one segment. An item with fewer than
-  5 tokens gets no fingerprint.
+  128. Segment `k` is tokens `[128k, min(128k + 256, n))`, for
+  `k = 0 .. K−1`, where `K = 1` if `n ≤ 256` and `K = 1 + ⌈(n − 256) / 128⌉`
+  otherwise. This is the fewest windows that cover every token. The last
+  window of a longer item can be shorter than 256 tokens, but never shorter
+  than 129. An item with fewer than 5 tokens gets no fingerprint.
 - Shingles are each run of 5 consecutive tokens, joined with U+0020. Each
   shingle maps to
   `x = u64_be(BLAKE3.derive_key("olympus 2026-11 dataset minhash-shingle v1", shingle)[0..8]) mod (2^61−1)`.
 - Slot `i ∈ [0,120)` holds the minimum over the segment's shingles of
-  `((a_i·x + b_i) mod (2^61−1)) mod 2^32`. The coefficients `(a_i, b_i)` are
-  read in order from the BLAKE3 XOF of
-  `derive_key("olympus 2026-11 dataset minhash-coefficients v1", "")`, as
-  u64 values reduced mod `2^61−1`, with `a_i ≠ 0` (skip zeros).
+  `((a_i·x + b_i) mod (2^61−1)) mod 2^32`. The coefficients come from the
+  extended output of
+  `derive_key("olympus 2026-11 dataset minhash-coefficients v1", "")`, whose
+  first 32 bytes are that key. The stream is read as consecutive `u64_be`
+  values, each reduced mod `2^61−1`. For `i = 0, 1, …`, `a_i` is the next
+  nonzero reduced value (a zero is skipped), and `b_i` is the value after it,
+  where zero is allowed.
 - The fingerprint is the 120 slots in order, each `u32_be` (480 bytes).
+- The profile applies to items committed under `text/utf8-nfc`. Items under
+  any other canonicalization profile are committed exactly and get no
+  `text/minhash-120` fingerprint.
+- The verifier resolves a header row to this profile only for
+  `(text/minhash-120, 1)` with `b = 20`, `r = 6` and `1 ≤ threshold ≤ 120`.
+  Any other row is rejected and never reinterpreted. `implementation_id` is
+  not compared, because any conforming implementation may compute the
+  fingerprints.
 
 `image/pdq-256` v1 is the reference PDQ algorithm, with the implementation
 pinned by the profile. Items whose PDQ quality score is below 50 get **no**
@@ -51,7 +73,8 @@ is a common transformation that PDQ does not absorb.
 
 An item with no fingerprint is still committed exactly. The header counts
 these items (`unfingerprinted_count`) so that a verifier can see how much of
-the dataset falls outside near-duplicate coverage.
+the dataset falls outside near-duplicate coverage. It counts leaves, not
+occurrences. In an exact-only version it equals `item_count`.
 
 ## Similarity index
 
@@ -69,6 +92,12 @@ bucket(key)      = all (content_key, fp_profile_index, segment_index, fingerprin
 bucket_commit    = H_bucket(u32_be(count) ‖ for each entry: content_key ‖ u16_be(fp_profile_index) ‖ u32_be(segment_index) ‖ fingerprint)
 similarity_root  = olympus-dataset-tree/v1 over (band_key → bucket_commit), with the core RFC’s similarity domains (§4), no partitions
 ```
+
+"No partitions" means the subtree is rooted at depth 0 and used as is, with
+no `H_part` or `H_top` wrapper. An empty index is `E_s`. A bucket opening
+(a path along a band key plus the full sorted bucket) shows what the
+committed index files under that key. It is a class B fact about the index,
+and it never shows that no similar item exists.
 
 Detection probability for a near-duplicate is the chance that it shares at
 least one band with the query:
