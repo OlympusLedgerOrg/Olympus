@@ -23,6 +23,7 @@
   },
   "overrides": {
     "jsonpath": "file:./safe-jsonpath",
-    "ws": ">=8.21.0"
+    "ws": ">=8.21.0",
+    "brace-expansion": "^2.1.7"
   }
 }
