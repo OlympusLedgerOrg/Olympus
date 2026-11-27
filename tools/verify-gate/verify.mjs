@@ -132,6 +132,10 @@ export function planVerification(changedFiles, { fast = false, root = REPO_ROOT 
       },
     ];
     if (files.some((file) => file.endsWith(".toml"))) {
+      // The repo's own wrapper, the same invocation as `format:toml:check` in
+      // package.json (a test pins the two together). It fetches and
+      // digest-checks the native taplo binary; `@taplo/cli` is not a
+      // dependency, and its WASM build checks zero files on Windows.
       commands.push({
         cmd: "node",
         args: ["scripts/taplo.mjs", "format", "--check"],
