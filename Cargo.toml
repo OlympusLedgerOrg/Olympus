@@ -14,6 +14,9 @@ members = [
 ]
 exclude = [
   "verifiers/rust",
+  # Optional PyO3 backend for the Python SDK: its own workspace and lockfile,
+  # built by maturin, so PyO3 linking never enters `cargo test --workspace`.
+  "clients/python/native",
   "fuzz",
   # RISC Zero guest uses its pinned zkVM Rust target/toolchain and is built by
   # proofs/zkvm/build_canonicalization_guest.sh, not ordinary workspace Cargo.

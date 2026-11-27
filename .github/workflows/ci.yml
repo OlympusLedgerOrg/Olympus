@@ -755,7 +755,9 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
-          cache-dependency-path: clients/python/pyproject.toml
+          cache-dependency-path: |
+            clients/python/pyproject.toml
+            clients/python/native/pyproject.toml
 
       - name: Install client + test dependencies
         run: python -m pip install -e "./clients/python[dev]"
@@ -763,11 +765,33 @@ jobs:
       - name: Run Python parity and adversarial tests
         run: python -m pytest -q clients/python/tests
 
-      - name: Install Rust stable for parity-vector drift check
-        if: matrix.python-version == '3.14'
+      # Rust is installed on every matrix leg: the native backend is built
+      # with abi3-py39, so the 3.9 leg is what proves the declared ABI floor.
+      - name: Install Rust stable for native backend and vector drift check
         uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # stable
         with:
           toolchain: 1.95.0
+          components: rustfmt, clippy
+
+      - name: Lint native backend (fmt + clippy)
+        if: matrix.python-version == '3.14'
+        run: |
+          cargo fmt --manifest-path clients/python/native/Cargo.toml --check
+          cargo clippy --locked --manifest-path clients/python/native/Cargo.toml -- -D warnings
+
+      - name: Build and install native backend
+        shell: bash
+        run: |
+          python -m pip install "maturin==1.16.0"
+          python -m maturin build --locked --release -m clients/python/native/Cargo.toml -o native-dist
+          python -m pip install native-dist/*.whl
+
+      # test_native_parity.py uses importorskip, so an install that silently
+      # failed would turn the job green with skips; import it first to fail loud.
+      - name: Run cross-backend parity tests
+        run: |
+          python -c "import olympus_manifest_native"
+          python -m pytest -q clients/python/tests/test_native_parity.py
 
       - name: Verify committed Python vectors match Rust
         if: matrix.python-version == '3.14'
