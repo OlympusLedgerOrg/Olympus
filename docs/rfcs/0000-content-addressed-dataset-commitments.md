@@ -23,7 +23,7 @@ key independently.
 
 - **A — commitment.** M1-open and N1 establish exact membership and absence
   under a selected canonicalization profile. D1 and D2 compose these answers
-  across versions. The ledger evidence binds the signed header in time.
+  across versions. Ledger evidence establishes inclusion of the signed header.
 - **B — candidate retrieval.** See the [similarity companion](dataset-similarity.md)
   for fingerprint profiles, plain M2, and the limits of approximate matching.
 - **C — recorded statements.** MD1 proves what the committer recorded about
@@ -245,7 +245,7 @@ before anyone may rely on the absence of an undisclosed source.
    fixed.
 
 `opt_out_status = 1` on a committed item is not a violation of this format.
-It is a signed, timestamped record that the committer's *own records*
+It is a signed record, included in the ledger, that the committer's *own records*
 marked the source as opted out when it included the item. It is not proof
 that a valid opt-out request was made (Guarantee classes and scope).
 
@@ -420,9 +420,16 @@ checked against `item_root`.
 committed through `POST /ingest/files` into `ledger_shard_id`. The resulting
 ledger leaf binds `ledger_shard_id` via ADR-0005 and the bundle's BLAKE3
 content hash as `value_hash`. It is covered by the shard's
-`SmtRootAttestation` and the checkpoint `TransitionAttestation`. That gives
-the version an append-only, attested timestamp and makes a re-signed,
-backdated header detectable. `parent_header_digest` chains versions; a fork
+`SmtRootAttestation` and the checkpoint `TransitionAttestation`. These
+attestations bind roots and sizes. A V2 ledger snapshot also signs
+`signed_at_unix`. If the checkpoint authority and its clock are trusted,
+the first V2 checkpoint covering the bundle provides an upper bound on when
+the bundle existed. V1 snapshots carry no signed time.
+
+`created_at_unix_s` is signed display metadata chosen by the committer.
+The format does not compare it with an authenticated time, so it cannot
+detect a backdated claim. A later re-signing appears after the original in
+ledger inclusion order. `parent_header_digest` chains versions, and a fork
 appears as two headers naming the same parent.
 
 ### 7. Signed-message envelope
@@ -455,10 +462,9 @@ second time. Neither the suite of an existing header nor the leg set of a
 hybrid envelope can be changed without invalidating the Ed25519 signature. What
 the `ed25519` suite does *not* give is post-quantum strength. An adversary
 who can forge Ed25519 could sign a *new* `ed25519` header. Two things limit
-that. Every honest header is already in the insert-only ledger with an
-attested timestamp (§6), so a forged header cannot pretend to predate the
-real one. And a relying party sets its own minimum suite, and SHOULD require
-the hybrid suite for any version created after hybrid signing becomes
+that. An honest header already in the insert-only ledger retains its earlier
+inclusion position (§6). A relying party sets its own minimum suite and
+SHOULD require the hybrid suite for any version created after hybrid signing becomes
 available. Committers SHOULD re-sign their live versions under the hybrid
 suite once it ships. A re-signed header is a new header over the same
 `global_root`, so a verifier can use the same proof body with the new authenticated header.
@@ -545,8 +551,9 @@ derived from `(j, n)`, equals the opened `meta_root`. Because `meta_root`
 sits inside `item_commitment`, which sits under `content_key`, which sits
 under a `global_root` that binds the dataset ID and version, an MD1 for one
 item, version or dataset cannot be verified against another. The fields
-are then validated. An `opt_out_status` outside {0, 1, 2}, or non-NFC
-strings, are rejected. MD1 establishes a class C fact only: the committer
+are then validated. The `extraction_index` must refer to an entry in the
+authenticated extraction table. An `opt_out_status` outside {0, 1, 2}, or
+non-NFC strings, are rejected. MD1 establishes a class C fact only: the committer
 recorded this entry for one occurrence of this item.
 
 **D1 — removal between versions.** Public: two verified headers `h_old`

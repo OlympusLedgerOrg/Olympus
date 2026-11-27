@@ -97,7 +97,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     fs::create_dir_all(output_dir)?;
     let data = b"Olympus private dataset proof benchmark";
     let content_digest = content_digest(data);
-    let key = content_key("bytes/raw", 1, &content_digest);
+    let key = content_key("bytes/raw", 1, &content_digest)?;
     let preimage = ItemPreimage {
         profile_index: 0,
         canonical_len: data.len() as u64,

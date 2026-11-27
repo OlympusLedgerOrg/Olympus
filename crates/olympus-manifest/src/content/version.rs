@@ -2,7 +2,9 @@
 
 //! Profile tables and the global root (RFC §5).
 
-use super::domains::{h, lp_into, Domain};
+use unicode_normalization::is_nfc;
+
+use super::domains::{check_lp_len, h, lp_into, Domain};
 use super::error::{ContentError, Result};
 
 /// Format string bound into every global root.
@@ -55,23 +57,26 @@ fn table_len(n: usize, name: &'static str) -> Result<[u8; 2]> {
         .map_err(|_| ContentError::TableTooLarge(name))
 }
 
-fn non_empty(s: &str, field: &'static str) -> Result<()> {
+/// Append one framed string field after the RFC's string rules: non-empty,
+/// already NFC (never normalized silently here), and short enough for its
+/// `u32` length prefix. Nothing is appended on error.
+fn text_field(out: &mut Vec<u8>, s: &str, field: &'static str) -> Result<()> {
     if s.is_empty() {
-        Err(ContentError::EmptyField(field))
-    } else {
-        Ok(())
+        return Err(ContentError::EmptyField(field));
     }
+    if !is_nfc(s) {
+        return Err(ContentError::NotNfc(field));
+    }
+    lp_into(out, s.as_bytes(), field)
 }
 
 /// `profile_table` preimage bytes.
 pub fn profile_table_bytes(t: &[ProfileEntry]) -> Result<Vec<u8>> {
     let mut b = table_len(t.len(), "profile")?.to_vec();
     for e in t {
-        non_empty(&e.id, "profile_id")?;
-        non_empty(&e.implementation_id, "implementation_id")?;
-        lp_into(&mut b, e.id.as_bytes());
+        text_field(&mut b, &e.id, "profile_id")?;
         b.extend_from_slice(&e.version.to_be_bytes());
-        lp_into(&mut b, e.implementation_id.as_bytes());
+        text_field(&mut b, &e.implementation_id, "implementation_id")?;
     }
     Ok(b)
 }
@@ -80,11 +85,9 @@ pub fn profile_table_bytes(t: &[ProfileEntry]) -> Result<Vec<u8>> {
 pub fn fp_profile_table_bytes(t: &[FpProfileEntry]) -> Result<Vec<u8>> {
     let mut b = table_len(t.len(), "fp_profile")?.to_vec();
     for e in t {
-        non_empty(&e.id, "fp_profile_id")?;
-        non_empty(&e.implementation_id, "implementation_id")?;
-        lp_into(&mut b, e.id.as_bytes());
+        text_field(&mut b, &e.id, "fp_profile_id")?;
         b.extend_from_slice(&e.version.to_be_bytes());
-        lp_into(&mut b, e.implementation_id.as_bytes());
+        text_field(&mut b, &e.implementation_id, "implementation_id")?;
         b.extend_from_slice(&e.bands.to_be_bytes());
         b.extend_from_slice(&e.rows.to_be_bytes());
         b.extend_from_slice(&e.threshold.to_be_bytes());
@@ -98,22 +101,25 @@ pub fn fp_profile_table_bytes(t: &[FpProfileEntry]) -> Result<Vec<u8>> {
 pub fn extraction_table_bytes(t: &[ExtractionEntry]) -> Result<Vec<u8>> {
     let mut b = table_len(t.len(), "extraction")?.to_vec();
     for e in t {
-        non_empty(&e.id, "extraction_id")?;
-        non_empty(&e.implementation_id, "implementation_id")?;
-        let mut params = e.params.clone();
+        // Sort references, not copies: no parameter string is duplicated
+        // before its length has been checked by `text_field`.
+        table_len(e.params.len(), "extraction params")?;
+        for (k, v) in &e.params {
+            check_lp_len(k.as_bytes(), "param_name")?;
+            check_lp_len(v.as_bytes(), "param_value")?;
+        }
+        let mut params: Vec<&(String, String)> = e.params.iter().collect();
         params.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
         if let Some(w) = params.windows(2).find(|w| w[0].0 == w[1].0) {
             return Err(ContentError::DuplicateParam(w[0].0.clone()));
         }
-        lp_into(&mut b, e.id.as_bytes());
+        text_field(&mut b, &e.id, "extraction_id")?;
         b.extend_from_slice(&e.version.to_be_bytes());
-        lp_into(&mut b, e.implementation_id.as_bytes());
+        text_field(&mut b, &e.implementation_id, "implementation_id")?;
         b.extend_from_slice(&table_len(params.len(), "extraction params")?);
-        for (k, v) in &params {
-            non_empty(k, "param_name")?;
-            non_empty(v, "param_value")?;
-            lp_into(&mut b, k.as_bytes());
-            lp_into(&mut b, v.as_bytes());
+        for (k, v) in params {
+            text_field(&mut b, k, "param_name")?;
+            text_field(&mut b, v, "param_value")?;
         }
     }
     Ok(b)
@@ -169,15 +175,12 @@ pub struct GlobalRootInput {
 impl GlobalRootInput {
     /// `global_root`.
     pub fn compute(&self) -> Result<[u8; 32]> {
-        if self.dataset_id.is_empty() {
-            return Err(ContentError::EmptyField("dataset_id"));
-        }
         if self.p > 16 {
             return Err(ContentError::BadPartitionExponent(self.p));
         }
         let mut m = Vec::with_capacity(256);
-        lp_into(&mut m, TREE_FORMAT.as_bytes());
-        lp_into(&mut m, self.dataset_id.as_bytes());
+        text_field(&mut m, TREE_FORMAT, "format")?;
+        text_field(&mut m, &self.dataset_id, "dataset_id")?;
         m.extend_from_slice(&self.version.to_be_bytes());
         m.push(self.p);
         m.extend_from_slice(&self.item_count.to_be_bytes());
@@ -304,6 +307,29 @@ mod tests {
             extraction_table_bytes(&[e(vec![("field", "")])]),
             Err(ContentError::EmptyField("param_value"))
         );
+    }
+
+    #[test]
+    fn non_nfc_strings_are_rejected_not_normalized() {
+        assert_eq!(
+            GlobalRootInput {
+                dataset_id: "e\u{0301}".into(),
+                ..base()
+            }
+            .compute(),
+            Err(ContentError::NotNfc("dataset_id"))
+        );
+        let row = |id: &str| ProfileEntry {
+            id: id.into(),
+            version: 1,
+            implementation_id: "x=1".into(),
+        };
+        assert_eq!(
+            profile_table_bytes(&[row("text/e\u{0301}")]),
+            Err(ContentError::NotNfc("profile_id"))
+        );
+        // The NFC spelling of the same id is accepted.
+        assert!(profile_table_bytes(&[row("text/\u{00E9}")]).is_ok());
     }
 
     #[test]

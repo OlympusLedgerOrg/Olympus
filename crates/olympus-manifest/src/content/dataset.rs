@@ -4,8 +4,8 @@
 //! M1, M1-open, N1 and MD1 (RFC §2, §10).
 //!
 //! Header encoding, signing and the ledger commit are deliberately not here;
-//! these functions verify against an `item_root` the caller has already
-//! taken from a verified header (and recomputed via
+//! these functions verify against an `item_root` and tables the caller has
+//! already taken from a verified header (and recomputed via
 //! [`super::version::GlobalRootInput`]).
 
 use std::collections::{BTreeMap, HashSet};
@@ -50,13 +50,28 @@ pub struct DatasetBuilder {
 
 impl DatasetBuilder {
     /// `profiles` becomes the version's canonicalization table, in order.
-    pub fn new(profiles: Vec<CanonProfile>) -> Self {
-        Self {
+    ///
+    /// A profile listed twice is rejected: two rows with the same
+    /// `(profile_id, profile_version)` give the same content key, so the
+    /// profile index committed for an item would depend on which row its
+    /// first occurrence used, and the global root on add order.
+    pub fn new(profiles: Vec<CanonProfile>) -> Result<Self> {
+        let mut seen = HashSet::new();
+        for p in &profiles {
+            if !seen.insert((p.id(), p.version())) {
+                return Err(ContentError::DuplicateProfile(format!(
+                    "{}@{}",
+                    p.id(),
+                    p.version()
+                )));
+            }
+        }
+        Ok(Self {
             profiles,
             items: BTreeMap::new(),
             blinders: HashSet::new(),
             rejected: 0,
-        }
+        })
     }
 
     /// Offer one occurrence. `meta` must already be sanitized and carry a
@@ -85,7 +100,7 @@ impl DatasetBuilder {
             }
         };
         let digest = content_digest(&canonical);
-        let key = content_key(profile.id(), profile.version(), &digest);
+        let key = content_key(profile.id(), profile.version(), &digest)?;
         let entry = self.items.entry(key).or_insert(Pending {
             profile_index,
             canonical_len: canonical.len() as u64,
@@ -101,7 +116,8 @@ impl DatasetBuilder {
         Ok(AddOutcome::Committed(key))
     }
 
-    /// Seal the version. `p` is the partition exponent.
+    /// Seal the version. `p` is the partition exponent; `extraction` is the
+    /// version's extraction table, which every metadata entry must index.
     pub fn finish(
         self,
         dataset_id: &str,
@@ -128,6 +144,13 @@ impl DatasetBuilder {
                     with,
                     total: pend.occurrences,
                 });
+            }
+            if let Some(m) = pend
+                .meta
+                .iter()
+                .find(|m| m.extraction_index as usize >= extraction.len())
+            {
+                return Err(ContentError::UnknownExtraction(m.extraction_index));
             }
             let meta = MetaSet::new(pend.meta)?;
             let preimage = ItemPreimage {
@@ -158,6 +181,7 @@ impl DatasetBuilder {
             tree,
             items,
             profile_table,
+            extraction_table: extraction.to_vec(),
             root_input,
             global_root,
             rejected_count: self.rejected,
@@ -172,6 +196,8 @@ pub struct BuiltVersion {
     items: BTreeMap<[u8; 32], (ItemPreimage, MetaSet)>,
     /// The canonicalization profile table.
     pub profile_table: Vec<ProfileEntry>,
+    /// The extraction table.
+    pub extraction_table: Vec<ExtractionEntry>,
     /// Everything the global root binds.
     pub root_input: GlobalRootInput,
     /// `global_root`.
@@ -248,8 +274,8 @@ impl BuiltVersion {
 }
 
 /// M1-open: `opened.key` is a member of `item_root`, its commitment opens to
-/// `opened.preimage`, and the key is derived from the opened profile and
-/// digest. Returns the verified preimage.
+/// `opened.preimage`, the item has at least one occurrence, and the key is
+/// derived from the opened profile and digest. Returns the verified preimage.
 pub fn verify_m1_open(
     p: u8,
     item_root: &[u8; 32],
@@ -260,6 +286,9 @@ pub fn verify_m1_open(
     if opened.preimage.commitment() != commitment {
         return Err(ContentError::CommitmentMismatch);
     }
+    if opened.preimage.occurrence_count == 0 {
+        return Err(ContentError::ZeroOccurrences);
+    }
     let profile = profile_table
         .get(opened.preimage.profile_index as usize)
         .ok_or(ContentError::UnknownProfile(opened.preimage.profile_index))?;
@@ -267,7 +296,7 @@ pub fn verify_m1_open(
         &profile.id,
         profile.version,
         &opened.preimage.content_digest,
-    ) != opened.key
+    )? != opened.key
     {
         return Err(ContentError::ContentKeyMismatch);
     }
@@ -280,12 +309,19 @@ pub fn verify_n1(p: u8, item_root: &[u8; 32], key: &[u8; 32], path: &ItemPath) -
 }
 
 /// MD1: M1-open, then the metadata path under the opened `meta_root` with
-/// `n = occurrence_count`, then field validation. There is no standalone
+/// `n = occurrence_count`, then the entry's extraction index against the
+/// version's extraction table, then field validation. There is no standalone
 /// metadata-path verifier, so a path cannot be checked outside its item.
+///
+/// `profile_table` and `extraction_table` must come from the same verified
+/// header as `item_root`. The extraction check is repeated here, not left to
+/// the builder, because a verifier cannot assume the commitment it is given
+/// was produced by a conforming builder.
 pub fn verify_md1(
     p: u8,
     item_root: &[u8; 32],
     profile_table: &[ProfileEntry],
+    extraction_table: &[ExtractionEntry],
     d: &MetaDisclosure,
 ) -> Result<()> {
     let pre = verify_m1_open(p, item_root, profile_table, &d.item)?;
@@ -298,5 +334,159 @@ pub fn verify_md1(
     if meta_root_from_path(&d.entry, d.j, d.n, &d.meta_path)? != pre.meta_root {
         return Err(ContentError::MetaRootMismatch);
     }
+    if d.entry.extraction_index as usize >= extraction_table.len() {
+        return Err(ContentError::UnknownExtraction(d.entry.extraction_index));
+    }
     d.entry.validate()
+}
+
+#[cfg(test)]
+mod tests {
+    //! Verifier-boundary cases. Each builds a *consistent* commitment over an
+    //! entry the builder would refuse, using the low-level helpers, so the
+    //! assertion is about what `verify_m1_open` / `verify_md1` reject on their
+    //! own, not what the builder prevents.
+
+    use super::*;
+    use crate::content::commit::{empty_meta_root, promoted_merkle_root};
+    use crate::content::domains::Domain;
+
+    fn extraction() -> Vec<ExtractionEntry> {
+        vec![ExtractionEntry {
+            id: "jsonl/field".into(),
+            version: 1,
+            implementation_id: "olympus-manifest=0.1.0".into(),
+            params: vec![("field".into(), "/text".into())],
+        }]
+    }
+
+    fn profile_table() -> Vec<ProfileEntry> {
+        let c = CanonProfile::TextUtf8Nfc;
+        vec![ProfileEntry {
+            id: c.id().into(),
+            version: c.version(),
+            implementation_id: c.implementation_id(),
+        }]
+    }
+
+    fn entry(status: u8, uri: &str, extraction_index: u16) -> MetaEntry {
+        MetaEntry {
+            blinding: [7; 32],
+            extraction_index,
+            source_uri: uri.into(),
+            license: String::new(),
+            retrieved_at_unix_s: 1,
+            opt_out_status: status,
+        }
+    }
+
+    /// A one-item, one-occurrence tree whose metadata set is exactly
+    /// `entries` (or empty), committed without builder validation.
+    fn commit_raw(occurrence_count: u64, entries: &[MetaEntry]) -> ([u8; 32], OpenedItem) {
+        let digest = content_digest(b"work");
+        let key = content_key("text/utf8-nfc", 1, &digest).unwrap();
+        let leaves: Vec<_> = entries.iter().map(|e| e.leaf().unwrap()).collect();
+        let meta_root = promoted_merkle_root(&leaves, Domain::MetaNode, empty_meta_root());
+        let preimage = ItemPreimage {
+            profile_index: 0,
+            canonical_len: 4,
+            content_digest: digest,
+            fp_set_root: empty_fp_set_root(),
+            occurrence_count,
+            meta_root,
+        };
+        let tree = ItemTree::build(0, vec![(key, preimage.commitment())]).unwrap();
+        let opened = OpenedItem {
+            key,
+            path: tree.path(&key),
+            preimage,
+        };
+        (tree.root(), opened)
+    }
+
+    fn md1(item: OpenedItem, e: MetaEntry) -> MetaDisclosure {
+        MetaDisclosure {
+            item,
+            j: 0,
+            n: 1,
+            entry: e,
+            meta_path: vec![],
+        }
+    }
+
+    #[test]
+    fn md1_rejects_an_invalid_opt_out_status_at_the_verifier() {
+        let e = entry(3, "https://x/", 0);
+        let (root, item) = commit_raw(1, std::slice::from_ref(&e));
+        assert_eq!(
+            verify_md1(0, &root, &profile_table(), &extraction(), &md1(item, e)),
+            Err(ContentError::InvalidOptOutStatus(3))
+        );
+    }
+
+    #[test]
+    fn md1_rejects_a_non_nfc_uri_at_the_verifier() {
+        let e = entry(0, "e\u{0301}", 0);
+        let (root, item) = commit_raw(1, std::slice::from_ref(&e));
+        assert_eq!(
+            verify_md1(0, &root, &profile_table(), &extraction(), &md1(item, e)),
+            Err(ContentError::NotNfc("source_uri"))
+        );
+    }
+
+    #[test]
+    fn md1_rejects_an_extraction_index_outside_the_table() {
+        let e = entry(0, "https://x/", 1);
+        let (root, item) = commit_raw(1, std::slice::from_ref(&e));
+        assert_eq!(
+            verify_md1(
+                0,
+                &root,
+                &profile_table(),
+                &extraction(),
+                &md1(item.clone(), e.clone())
+            ),
+            Err(ContentError::UnknownExtraction(1))
+        );
+        // The same disclosure is accepted against a two-row table, so the
+        // rejection above is the index check and nothing else.
+        let mut two = extraction();
+        two.push(ExtractionEntry {
+            id: "file/whole".into(),
+            ..two[0].clone()
+        });
+        assert_eq!(
+            verify_md1(0, &root, &profile_table(), &two, &md1(item, e)),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn m1_open_rejects_a_zero_occurrence_item() {
+        let (root, item) = commit_raw(0, &[]);
+        assert_eq!(
+            verify_m1_open(0, &root, &profile_table(), &item),
+            Err(ContentError::ZeroOccurrences)
+        );
+        let (root, item) = commit_raw(1, &[]);
+        assert!(verify_m1_open(0, &root, &profile_table(), &item).is_ok());
+    }
+
+    #[test]
+    fn builder_rejects_a_profile_listed_twice() {
+        assert_eq!(
+            DatasetBuilder::new(vec![CanonProfile::BytesRaw, CanonProfile::BytesRaw]).err(),
+            Some(ContentError::DuplicateProfile("bytes/raw@1".into()))
+        );
+    }
+
+    #[test]
+    fn builder_rejects_metadata_naming_a_missing_extraction_row() {
+        let mut b = DatasetBuilder::new(vec![CanonProfile::TextUtf8Nfc]).unwrap();
+        b.add(0, b"w", Some(entry(0, "u", 1))).unwrap();
+        assert_eq!(
+            b.finish("d", 1, 0, &extraction()).err(),
+            Some(ContentError::UnknownExtraction(1))
+        );
+    }
 }

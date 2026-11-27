@@ -82,6 +82,25 @@ compatibility decision, updated verifier constants and fixtures, and review of
 the journal/version contract. It does not silently inherit trust from an older
 guest merely because both guests call a function with the same Rust name.
 
+### Verifier and prover version
+
+The guest and the verifier are pinned separately. The guest stays on RISC Zero
+3.0.5 as described above, so its image ID is unchanged. The desktop verifier,
+the offline Rust verifier, and the host-side prover tools pin
+`risc0-zkvm = "=3.1.0"` (`risc0-circuit-recursion` 4.1.0). RISC Zero yanked
+every earlier 3.x and 4.x release of those crates, and the recursion-circuit
+artifacts the 4.0.x build scripts downloaded are no longer served. 4.1.0 ships
+its circuits as crates instead.
+
+4.1.0 is a different recursion circuit. Every recursion control ID changed,
+including the allowed control root (`a54dc85a…` under 4.0.5, `e6feef13…` under
+4.1.0). All three verifiers build their context with the crate-default succinct
+verifier parameters, which carry that crate's allowed control root. Receipts
+proven with RISC Zero 3.0.x therefore do not verify under this pin. The
+committed receipt fixture was re-proven with 3.1.0. Any other 3.0.x receipt,
+including one held outside the repository, has to be re-proven. There is
+deliberately no path that accepts both control roots.
+
 ## Canonicalization claim journal
 
 The journal is exactly 96 bytes. It uses fixed-width big-endian integers and a

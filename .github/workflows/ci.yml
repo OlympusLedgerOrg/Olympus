@@ -736,15 +736,25 @@ jobs:
   # committed parity vectors tied to the Rust source of truth.
   python-client:
     name: Python client tests (${{ matrix.python-version }})
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     needs: changes
     if: needs.changes.outputs.python-client == 'true' || needs.changes.outputs.ci == 'true'
     permissions:
       contents: read
     strategy:
       fail-fast: false
+      # `ubuntu-latest` moved to 26.04, and actions/setup-python's manifest has
+      # no 3.9 build for 26.04 at all (only 3.10+). 24.04 still carries 3.9
+      # builds (up to 3.9.25), so the lower-bound leg gets its own image rather
+      # than dropping the bound or pinning a deprecated one: ubuntu-22.04 has
+      # been in deprecation since 2026-09-17 and retires 2027-04-17. The 3.14
+      # leg stays on `ubuntu-latest` so it keeps tracking the current image.
       matrix:
-        python-version: ["3.9", "3.14"]
+        include:
+          - python-version: "3.9"
+            os: ubuntu-24.04
+          - python-version: "3.14"
+            os: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -755,7 +765,9 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
-          cache-dependency-path: clients/python/pyproject.toml
+          cache-dependency-path: |
+            clients/python/pyproject.toml
+            clients/python/native/pyproject.toml
 
       - name: Install client + test dependencies
         run: python -m pip install -e "./clients/python[dev]"
@@ -763,11 +775,33 @@ jobs:
       - name: Run Python parity and adversarial tests
         run: python -m pytest -q clients/python/tests
 
-      - name: Install Rust stable for parity-vector drift check
-        if: matrix.python-version == '3.14'
+      # Rust is installed on every matrix leg: the native backend is built
+      # with abi3-py39, so the 3.9 leg is what proves the declared ABI floor.
+      - name: Install Rust stable for native backend and vector drift check
         uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # stable
         with:
           toolchain: 1.95.0
+          components: rustfmt, clippy
+
+      - name: Lint native backend (fmt + clippy)
+        if: matrix.python-version == '3.14'
+        run: |
+          cargo fmt --manifest-path clients/python/native/Cargo.toml --check
+          cargo clippy --locked --manifest-path clients/python/native/Cargo.toml -- -D warnings
+
+      - name: Build and install native backend
+        shell: bash
+        run: |
+          python -m pip install "maturin==1.16.0"
+          python -m maturin build --locked --release -m clients/python/native/Cargo.toml -o native-dist
+          python -m pip install native-dist/*.whl
+
+      # test_native_parity.py uses importorskip, so an install that silently
+      # failed would turn the job green with skips; import it first to fail loud.
+      - name: Run cross-backend parity tests
+        run: |
+          python -c "import olympus_manifest_native"
+          python -m pytest -q clients/python/tests/test_native_parity.py
 
       - name: Verify committed Python vectors match Rust
         if: matrix.python-version == '3.14'
@@ -957,6 +991,19 @@ jobs:
 
       - name: cargo check (federation feature)
         run: cargo check --locked -p olympus-desktop --no-default-features --features federation
+
+      # `federation_equivocation` boots embedded PostgreSQL, and without this
+      # cache every run downloads the binaries afresh. The PR #1750 run lost
+      # all 8 tests to an HTTP 429 from that download. The cache is safe for
+      # the same reason as in the jobs below: pg_fetch verifies the restored
+      # tree against the SHA-256 digests pinned in pg_fetch.rs and fails closed
+      # on a mismatch. This job does not test the cold download path; the
+      # uncached `pg-embed-integration` job does.
+      - name: Cache embedded PostgreSQL binaries
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ~/.cache/pg-embed
+          key: pg-embed-bin-${{ runner.os }}-${{ hashFiles('pg-embed-local/src/pg_fetch.rs') }}
 
       - name: Federation unit + equivocation tests
         run: >-

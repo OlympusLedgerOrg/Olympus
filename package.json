@@ -33,6 +33,6 @@
   "devDependencies": {
     "prettier": "^3.9.6",
     "eslint": "^9.39.5",
-    "js-yaml": "^5.2.3"
+    "js-yaml": "^5.4.1"
   }
 }

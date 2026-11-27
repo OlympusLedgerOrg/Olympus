@@ -4,7 +4,7 @@
 
 use unicode_normalization::is_nfc;
 
-use super::domains::{h, lp_into, Domain, CONTENT_KEY_CONTEXT};
+use super::domains::{check_lp_len, h, lp_into, Domain, CONTENT_KEY_CONTEXT};
 use super::error::{ContentError, Result};
 
 /// `content_digest = BLAKE3(canonical_bytes)` — plain and unkeyed, so any
@@ -15,12 +15,13 @@ pub fn content_digest(canonical: &[u8]) -> [u8; 32] {
 
 /// `content_key` (§3). Depends only on the canonicalization profile and the
 /// content, never on the dataset, version or committer.
-pub fn content_key(profile_id: &str, profile_version: u32, digest: &[u8; 32]) -> [u8; 32] {
+pub fn content_key(profile_id: &str, profile_version: u32, digest: &[u8; 32]) -> Result<[u8; 32]> {
+    check_lp_len(profile_id.as_bytes(), "profile_id")?;
     let mut m = Vec::with_capacity(4 + profile_id.len() + 4 + 32);
-    lp_into(&mut m, profile_id.as_bytes());
+    lp_into(&mut m, profile_id.as_bytes(), "profile_id")?;
     m.extend_from_slice(&profile_version.to_be_bytes());
     m.extend_from_slice(digest);
-    blake3::derive_key(CONTENT_KEY_CONTEXT, &m)
+    Ok(blake3::derive_key(CONTENT_KEY_CONTEXT, &m))
 }
 
 /// Root of an empty fingerprint set, `H_fp("")`. v1 exact-only items use it.
@@ -137,29 +138,40 @@ impl MetaEntry {
         Ok(())
     }
 
-    /// `meta_entry` bytes.
-    pub fn to_bytes(&self) -> Vec<u8> {
-        let mut b = Vec::with_capacity(32 + 2 + 8 + self.source_uri.len() + self.license.len() + 9);
+    /// `meta_entry` bytes. Fails, before anything is hashed, if a string does
+    /// not fit its `u32` length prefix.
+    pub fn to_bytes(&self) -> Result<Vec<u8>> {
+        // Both lengths are checked before the buffer is sized from them.
+        check_lp_len(self.source_uri.as_bytes(), "source_uri")?;
+        check_lp_len(self.license.as_bytes(), "license")?;
+        let mut b =
+            Vec::with_capacity(32 + 2 + 4 + self.source_uri.len() + 4 + self.license.len() + 9);
         b.extend_from_slice(&self.blinding);
         b.extend_from_slice(&self.extraction_index.to_be_bytes());
-        lp_into(&mut b, self.source_uri.as_bytes());
-        lp_into(&mut b, self.license.as_bytes());
+        lp_into(&mut b, self.source_uri.as_bytes(), "source_uri")?;
+        lp_into(&mut b, self.license.as_bytes(), "license")?;
         b.extend_from_slice(&self.retrieved_at_unix_s.to_be_bytes());
         b.push(self.opt_out_status);
-        b
+        Ok(b)
     }
 
-    /// `meta_leaf = H_meta(meta_entry)`.
-    pub fn leaf(&self) -> [u8; 32] {
-        h(Domain::Meta, &[&self.to_bytes()])
+    /// `meta_leaf = H_meta(meta_entry)`. Applies only the length check, so a
+    /// verifier can fold a structurally sound entry and then report *which*
+    /// field rule it breaks via [`MetaEntry::validate`].
+    pub fn leaf(&self) -> Result<[u8; 32]> {
+        Ok(h(Domain::Meta, &[&self.to_bytes()?]))
     }
 }
 
 /// A fresh blinder from the operating system CSPRNG (lifecycle rule 1).
-pub fn fresh_blinding() -> [u8; 32] {
+///
+/// An entropy failure, including a partial read, returns
+/// [`ContentError::Entropy`] and yields no blinder, so the caller can stop the
+/// build cleanly or retry.
+pub fn fresh_blinding() -> Result<[u8; 32]> {
     let mut b = [0u8; 32];
-    getrandom::fill(&mut b).expect("operating system CSPRNG unavailable");
-    b
+    getrandom::fill(&mut b).map_err(|e| ContentError::Entropy(e.to_string()))?;
+    Ok(b)
 }
 
 // ---------------------------------------------------------------------------
@@ -204,7 +216,10 @@ pub(crate) fn promoted_shape(mut j: u64, mut n: u64) -> Vec<Option<bool>> {
     shape
 }
 
-/// Siblings for position `j` (bottom-up, promoted levels omitted).
+/// Siblings for position `j` (bottom-up, promoted levels omitted),
+/// recomputed from scratch. Test-only: an independent check on
+/// [`MetaSet::path`], which reads cached levels.
+#[cfg(test)]
 pub(crate) fn promoted_path(leaves: &[[u8; 32]], j: usize, node: Domain) -> Vec<[u8; 32]> {
     let mut path = Vec::new();
     let mut level = leaves.to_vec();
@@ -258,19 +273,40 @@ pub(crate) fn fold_promoted(
 }
 
 /// A metadata set in position (strictly ascending blinder) order.
+///
+/// The Merkle levels are built once, so producing a disclosure for every
+/// position of an item with many occurrences costs `O(n)` hashing in total,
+/// not `O(n)` per disclosure.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MetaSet {
     entries: Vec<MetaEntry>,
+    /// `levels[0]` = leaves in position order; the last level is `[root]`.
+    /// Empty for an empty set.
+    levels: Vec<Vec<[u8; 32]>>,
 }
 
 impl MetaSet {
-    /// Sort entries into position order. Rejects a repeated blinder.
+    /// Sort entries into position order and build the tree. Rejects a
+    /// repeated blinder and any entry that fails [`MetaEntry::validate`], so a
+    /// builder can never commit an entry a verifier would refuse.
     pub fn new(mut entries: Vec<MetaEntry>) -> Result<Self> {
         entries.sort_by_key(|e| e.blinding);
         if entries.windows(2).any(|w| w[0].blinding == w[1].blinding) {
             return Err(ContentError::DuplicateBlinder);
         }
-        Ok(Self { entries })
+        for e in &entries {
+            e.validate()?;
+        }
+        let leaves = entries
+            .iter()
+            .map(MetaEntry::leaf)
+            .collect::<Result<Vec<_>>>()?;
+        let levels = if leaves.is_empty() {
+            Vec::new()
+        } else {
+            promoted_levels(leaves, Domain::MetaNode)
+        };
+        Ok(Self { entries, levels })
     }
 
     /// Entries in position order.
@@ -278,19 +314,45 @@ impl MetaSet {
         &self.entries
     }
 
-    fn leaves(&self) -> Vec<[u8; 32]> {
-        self.entries.iter().map(MetaEntry::leaf).collect()
-    }
-
     /// `meta_root`.
     pub fn root(&self) -> [u8; 32] {
-        promoted_merkle_root(&self.leaves(), Domain::MetaNode, empty_meta_root())
+        self.levels
+            .last()
+            .map_or_else(empty_meta_root, |top| top[0])
     }
 
-    /// Siblings for the entry at position `j`.
+    /// Siblings for the entry at position `j` (bottom-up, promoted levels
+    /// omitted), read from the cached levels.
     pub fn path(&self, j: usize) -> Vec<[u8; 32]> {
-        promoted_path(&self.leaves(), j, Domain::MetaNode)
+        let mut path = Vec::new();
+        let mut idx = j;
+        for level in self.levels.iter().take(self.levels.len().saturating_sub(1)) {
+            if let Some(sib) = level.get(idx ^ 1) {
+                path.push(*sib);
+            }
+            idx /= 2;
+        }
+        path
     }
+}
+
+/// Every level of a promoted binary Merkle tree over non-empty `leaves`.
+fn promoted_levels(leaves: Vec<[u8; 32]>, node: Domain) -> Vec<Vec<[u8; 32]>> {
+    let mut levels = vec![leaves];
+    while levels.last().is_some_and(|l| l.len() > 1) {
+        let next = levels
+            .last()
+            .expect("checked non-empty")
+            .chunks(2)
+            .map(|pair| match pair {
+                [l, r] => h(node, &[l, r]),
+                [only] => *only,
+                _ => unreachable!(),
+            })
+            .collect();
+        levels.push(next);
+    }
+    levels
 }
 
 /// Fold a disclosed entry to a `meta_root` (the metadata half of MD1).
@@ -303,7 +365,9 @@ pub fn meta_root_from_path(
     if j >= n {
         return Err(ContentError::MetaPositionOutOfRange { j, n });
     }
-    fold_promoted(entry.leaf(), j, n, siblings, Domain::MetaNode)
+    // `leaf()` length-checks the entry before hashing it, so an oversized
+    // field is a `FieldTooLong` error here, never a panic.
+    fold_promoted(entry.leaf()?, j, n, siblings, Domain::MetaNode)
 }
 
 /// Auditor check (RFC §2 completeness): a full opened metadata set is either
@@ -334,7 +398,10 @@ pub fn audit_meta_set(preimage: &ItemPreimage, entries: &[MetaEntry]) -> Result<
     for e in entries {
         e.validate()?;
     }
-    let leaves: Vec<_> = entries.iter().map(MetaEntry::leaf).collect();
+    let leaves = entries
+        .iter()
+        .map(MetaEntry::leaf)
+        .collect::<Result<Vec<_>>>()?;
     if promoted_merkle_root(&leaves, Domain::MetaNode, empty_meta_root()) != preimage.meta_root {
         return Err(ContentError::MetaRootMismatch);
     }
@@ -359,16 +426,24 @@ mod tests {
     #[test]
     fn content_key_binds_profile_id_version_and_digest() {
         let d = content_digest(b"hello");
-        let k = content_key("text/utf8-nfc", 1, &d);
-        assert_ne!(k, content_key("bytes/raw", 1, &d), "profile id not bound");
+        let k = content_key("text/utf8-nfc", 1, &d).unwrap();
         assert_ne!(
             k,
-            content_key("text/utf8-nfc", 2, &d),
+            content_key("bytes/raw", 1, &d).unwrap(),
+            "profile id not bound"
+        );
+        assert_ne!(
+            k,
+            content_key("text/utf8-nfc", 2, &d).unwrap(),
             "profile version not bound"
         );
         let mut d2 = d;
         d2[31] ^= 1;
-        assert_ne!(k, content_key("text/utf8-nfc", 1, &d2), "digest not bound");
+        assert_ne!(
+            k,
+            content_key("text/utf8-nfc", 1, &d2).unwrap(),
+            "digest not bound"
+        );
     }
 
     #[test]
@@ -455,6 +530,12 @@ mod tests {
             for j in 0..n {
                 let e = &set.entries()[j as usize];
                 let p = set.path(j as usize);
+                let leaves: Vec<_> = set.entries().iter().map(|e| e.leaf().unwrap()).collect();
+                assert_eq!(
+                    p,
+                    promoted_path(&leaves, j as usize, Domain::MetaNode),
+                    "cached path differs from a fresh recomputation, n={n} j={j}"
+                );
                 assert_eq!(
                     meta_root_from_path(e, j, n, &p).unwrap(),
                     root,

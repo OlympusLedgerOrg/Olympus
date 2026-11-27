@@ -9,7 +9,14 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprot
 import { callModel, effectiveNumCtx, modelForTool, DEFAULT_OLLAMA_MODEL } from "./backend.mjs";
 import { budgetCharsFor } from "./budget.mjs";
 import { verifyCitations, formatMissingCitations } from "./citations.mjs";
-import { readRepoFile, gitDiff, gitGrep, truncateText, wouldTruncate } from "./repo.mjs";
+import {
+  DEFAULT_DIFF_MAX_CHARS,
+  readRepoFile,
+  gitDiff,
+  gitGrep,
+  truncateText,
+  wouldTruncate,
+} from "./repo.mjs";
 import { getOlympusContext, getCircuitStatus, checkInvariants } from "./olympus.mjs";
 // The same module the router and the Qwen wrapper use. The local model never
 // gets to decide what it may read, so this is enforced here, at the one point
@@ -179,7 +186,10 @@ export async function gatherContext({
     );
   }
 
-  const budget = budgetCharsFor(await effectiveNumCtx(model ?? DEFAULT_OLLAMA_MODEL));
+  const budget = Math.max(
+    0,
+    budgetCharsFor(await effectiveNumCtx(model ?? DEFAULT_OLLAMA_MODEL)) - (question?.length ?? 0),
+  );
   const parts = [];
   let runningChars = 0;
   const dropped = [];
@@ -357,7 +367,9 @@ export async function runTool(name, args = {}, { onPrompt } = {}) {
 
   if (name === "review_diff") {
     const diffArgs = args.diffArgs?.length ? args.diffArgs : ["HEAD"];
-    const diff = await gitDiff(diffArgs);
+    // Inspect the full diff before cutting it for the prompt. gitDiff still
+    // bounds subprocess output; its usual text cap is applied below instead.
+    const diff = await gitDiff(diffArgs, { maxBytes: Infinity });
     assertPathsAllowed(extractDiffPaths(diff), "review");
     let standards = "";
     try {
@@ -370,7 +382,8 @@ export async function runTool(name, args = {}, { onPrompt } = {}) {
       // review that looks standards-checked but never actually was.
       if (err.code !== "ENOENT") throw err;
     }
-    const prompt =
+    const model = modelForTool("review");
+    const promptStart =
       `Review this diff against the project's engineering standards below. ` +
       `Flag correctness bugs, invariant violations, and missed test coverage. Be concise, most-severe first. ` +
       // The fixture now carries two separated hunks, so per-hunk coverage is
@@ -387,13 +400,38 @@ export async function runTool(name, args = {}, { onPrompt } = {}) {
       `are code it ADDS, and a \`-\`/\`+\` pair at one position is a single change to read as a ` +
       `fix. Judge the code as it stands after the diff, and describe removed code as removed, ` +
       `never as current behaviour.\n\n` +
-      (standards ? `## AGENTS.md (standards)\n\`\`\`\n${standards}\n\`\`\`\n\n` : "") +
-      `## Diff\n\`\`\`diff\n${diff || "(empty diff)"}\n\`\`\``;
-    const model = modelForTool("review");
+      (standards ? `## AGENTS.md (standards)\n\`\`\`\n${standards}\n\`\`\`\n\n` : "");
+    const diffStart = "## Diff\n```diff\n";
+    const diffEnd = "\n```";
+    const contextBudget =
+      budgetCharsFor(await effectiveNumCtx(model)) -
+      SYSTEM_PROMPT.length -
+      promptStart.length -
+      diffStart.length -
+      diffEnd.length;
+    const partialNote = wouldTruncate(
+      diff,
+      Math.max(0, Math.min(DEFAULT_DIFF_MAX_CHARS, contextBudget)),
+    )
+      ? "[wiserepo: partial diff; review only the supplied prefix]\n\n"
+      : "";
+    const diffBudget = Math.min(DEFAULT_DIFF_MAX_CHARS, contextBudget - partialNote.length);
+    if (diff && diffBudget <= 0) {
+      throw new Error(
+        "No diff content fits in the model context; use a larger context window or shorten AGENTS.md",
+      );
+    }
+    const boundedDiff = diff.slice(0, Math.max(0, diffBudget));
+    const prompt =
+      promptStart + partialNote + diffStart + (boundedDiff || "(empty diff)") + diffEnd;
     onPrompt?.({ system: SYSTEM_PROMPT, prompt, model });
-    return withVerifiedCitations(
+    const answer = await withVerifiedCitations(
       await callModel({ system: SYSTEM_PROMPT, prompt, maxTokens: 8192, model }),
     );
+    const omitted = diff.length - boundedDiff.length;
+    return omitted > 0
+      ? `[wiserepo: partial review — omitted ${omitted} of ${diff.length} diff chars; narrow the diff for full coverage]\n\n${answer}`
+      : answer;
   }
 
   if (name === "summarize") {

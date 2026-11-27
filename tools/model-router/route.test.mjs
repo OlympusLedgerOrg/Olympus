@@ -4,7 +4,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-import { inferTaskClass, legacyHeuristic, routeTask } from "./route.mjs";
+import { claudeSessionFor, inferTaskClass, legacyHeuristic, routeTask } from "./route.mjs";
 
 describe("routeTask", () => {
   it("routes allowlisted prose work to the local model", () => {
@@ -49,7 +49,7 @@ describe("routeTask", () => {
     assert.equal(result.taskClass, null);
     assert.equal(result.tier, "mid");
     assert.equal(result.route, "codex");
-    assert.equal(result.model, "gpt-5-codex");
+    assert.equal(result.model, "GPT-6.2 Astra");
   });
 
   it("maps the tier to the routed agent's model table", () => {
@@ -57,7 +57,7 @@ describe("routeTask", () => {
     assert.equal(result.tier, "top");
     assert.equal(result.route, "codex");
     assert.equal(result.agent, "codex");
-    assert.equal(result.model, "gpt-5-codex-max");
+    assert.equal(result.model, "GPT-6.2 Sol");
   });
 
   it("declines a review with no path list, because a diff can touch anything", () => {
@@ -127,5 +127,30 @@ describe("inferTaskClass", () => {
     assert.equal(inferTaskClass("review this diff"), "review");
     assert.equal(inferTaskClass("summarize the vault docs"), "summarize");
     assert.equal(inferTaskClass("add a settings page to the UI"), null);
+  });
+});
+
+describe("claude session suggestion", () => {
+  it("suggests a Claude model and effort for every tier, not just claude routes", () => {
+    const top = routeTask({ task: "change the leaf hash layout" });
+    assert.equal(top.route, "codex");
+    assert.equal(top.tier, "top");
+    assert.deepEqual(top.claude, {
+      model: "claude-opus-5-5",
+      effort: "high",
+      suggestion: "opus 5.5 high",
+    });
+
+    const mid = routeTask({ task: "review this diff" });
+    assert.equal(mid.tier, "mid");
+    assert.equal(mid.claude.suggestion, "sonnet 5.5 medium");
+
+    const local = routeTask({ task: "summarize docs/architecture.md" });
+    assert.equal(local.tier, "local");
+    assert.equal(local.claude.suggestion, "haiku 5.5 low");
+  });
+
+  it("returns null when the policy has no claudeSession table", () => {
+    assert.equal(claudeSessionFor("top", { claudeSession: undefined }), null);
   });
 });

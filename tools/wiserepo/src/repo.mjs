@@ -205,7 +205,9 @@ export function sanitizeDiffArgs(args) {
   return [...flags, ...revs, "--", ...paths];
 }
 
-export async function gitDiff(args = ["HEAD"], { maxBytes = 100_000 } = {}) {
+export const DEFAULT_DIFF_MAX_CHARS = 100_000;
+
+export async function gitDiff(args = ["HEAD"], { maxBytes = DEFAULT_DIFF_MAX_CHARS } = {}) {
   const safe = sanitizeDiffArgs(args);
   const { stdout } = await execFileAsync("git", ["diff", ...safe], {
     cwd: repoRoot(),

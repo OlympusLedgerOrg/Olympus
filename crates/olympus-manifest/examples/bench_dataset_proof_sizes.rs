@@ -84,9 +84,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let leaves = (0..ITEMS)
         .map(|number| {
             let preimage = item(number);
-            (key(&preimage), preimage.commitment())
+            Ok((key(&preimage)?, preimage.commitment()))
         })
-        .collect();
+        .collect::<Result<_, olympus_manifest::content::error::ContentError>>()?;
     let tree = ItemTree::build(PARTITION_BITS, leaves)?;
 
     let mut memberships = Vec::new();
@@ -94,7 +94,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut similarities = Vec::new();
     for query in 0..QUERIES {
         let preimage = item(query * (ITEMS / QUERIES));
-        let member = key(&preimage);
+        let member = key(&preimage)?;
         let proof = ExactProof::Membership(OpenedItem {
             key: member,
             path: tree.path(&member),
@@ -116,7 +116,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         m2.extend_from_slice(&fingerprint);
         similarities.push(m2.len());
 
-        let absent = key(&item(ITEMS + query));
+        let absent = key(&item(ITEMS + query))?;
         let proof = ExactProof::NonMembership {
             key: absent,
             path: tree.path(&absent),

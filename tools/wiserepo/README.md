@@ -58,21 +58,11 @@ Avoid the 14B and larger models on this machine: they may fit on disk but leave
 too little RAM for Windows, Tauri, and Wiserepo at the same time.
 
 Note that Ollama drops the Intel Arc iGPU here ("dropping integrated GPU; to
-enable, set OLLAMA_IGPU_ENABLE=1"), so inference is CPU-only unless you opt in.
-With the iGPU still disabled (before the opt-in below), 7B generation on CPU is
-slow: 17.7 s to load the model (`load_duration`), then **5.7 tok/s** on a
-68-token prompt (`num_ctx 16384`, 5.5–5.9 over three runs), falling to **3.0
-tok/s** once the prompt fills 9,440 tokens (2.6 and 3.3 over two runs). So a full
-context costs roughly 1.9× on CPU generation — measurable, but not the dominant
-cost. An earlier revision of this file quoted "~10 tokens/sec" here; that came
-from a 6-token sample (`eval_count` 6 in 0.61 s) and was too short to stand
-behind, so it has been replaced by the two measurements above. A `qa` call over
-`crates/olympus-crypto/src/lib.rs` (34 KB) used to be killed at 300 s by Node
-fetch's default timeout; with that raised (`src/backend.mjs`), the same call now
-**completes and returns a correct answer**, taking somewhere between 10 and 14
-minutes of wall clock. That range is from polling a background run, not a timer —
-`bin/eval.mjs` prints per-question seconds and is the cheap way to get an exact
-number.
+enable, set OLLAMA_IGPU_ENABLE=1"), so inference is CPU-only unless you opt in —
+and CPU is slow enough that a `qa` call over `crates/olympus-crypto/src/lib.rs`
+(34 KB) takes **10–14 minutes** of wall clock (polled from a background run, not
+timed; `bin/eval.mjs` prints exact per-question seconds). The rates behind that
+are in the measured A/B below.
 
 ### `qwen3.5:4b` is not recommended here (settled — read before re-proposing)
 
@@ -155,9 +145,7 @@ as the honest statement. Generation stopped at 31 tokens in every run, so that
 ratio rests on ~3 s of timed output per run and is the softest number here. The
 CPU arm ran first, leaving the model file in the OS page cache for the iGPU arm,
 which flatters the iGPU's load time but not its prefill or generation rate.
-Prefill is the rate that decides whether this tool is usable, and the gap on an
-identical 9,440-token prompt is the difference between ~8 minutes of prompt
-processing and ~1.
+Prefill is the rate that decides whether this tool is usable.
 
 Two separate facts about the hardware:
 
@@ -167,8 +155,7 @@ Two separate facts about the hardware:
   OLLAMA_IGPU_ENABLE 1`, then restart the daemon), and the daemon proves it took
   by logging `inference compute … library=Vulkan … type=iGPU` at startup instead
   of `dropping integrated GPU`. The gain is almost entirely **prefill** (see the
-  table above); generation improves ~2.9×, and published Arc 140V figures
-  (~173 tok/s prefill) are consistent with the 112–148 tok/s measured here.
+  table above), consistent with published Arc 140V figures (~173 tok/s).
 - **NPU is not usable.** Ollama has no Intel NPU backend (ollama/ollama #19535
   confirms there is still no path), so no environment variable reaches it. Even
   where reachable — llama.cpp's OpenVINO backend supports Intel NPUs — a 7B
@@ -186,18 +173,15 @@ node bin/eval.mjs --limit 1
 
 Two model behaviours the backend has to account for (`src/backend.mjs`):
 
-- **Thinking is off by default.** `qwen3.5` is thinking-capable and Ollama
-  enables reasoning for such models unless told not to; on CPU that is thousands
-  of tokens before the first answer token. The default `qwen2.5-coder` model is
-  not a thinking model and ignores the flag; `WISEREPO_THINK=1` turns reasoning
-  on for a qwen3.5 run (worth it for a hard `review_diff`, and it costs minutes).
+- **Thinking is off by default.** Ollama enables reasoning for thinking-capable
+  models unless told not to, and on CPU that is thousands of tokens before the
+  first answer token; the default `qwen2.5-coder` is not one and ignores the
+  flag. `WISEREPO_THINK=1` opts in (worth it for a hard `review_diff`).
 - **`num_ctx` is pinned, not inherited.** Ollama sizes its default window from
-  available VRAM and lands at 4096 here; an oversized prompt is truncated by the
-  daemon *silently*, so the model would answer from a partial view with nothing
-  in the output saying so. Wiserepo sends `WISEREPO_NUM_CTX` (default 16384),
-  clamped to the window the model declares in `/api/show` (32 K for the default
-  tag), and sizes its context budget from that clamped number, so the two cannot
-  disagree.
+  available VRAM (4096 here) and truncates an oversized prompt *silently*, so the
+  model would answer from a partial view with nothing saying so. The window sent
+  — and the context budget derived from it — is `WISEREPO_NUM_CTX` clamped to
+  what `/api/show` declares (see the knob below), so the two cannot disagree.
 
 If generation fails with `llama-server binary not found`, the install is missing
 its runners — `Programs\Ollama\lib\ollama\` should hold `llama-server.exe` and
@@ -226,6 +210,10 @@ No API key, no per-token cost, nothing to rotate or leak. Other knobs:
 - `WISEREPO_PROGRESS` — `0` disables the progress dots written to stderr during
   generation (on by default when stderr is a TTY)
 - `WISEREPO_TEMPERATURE` — default `0`
+- `WISEREPO_TIMEOUT_MS` — default `300000` (5 min). Local generation is far
+  slower per token than a cloud API, and a `review_diff` or a full
+  `AGENTS.md`-sized rewrite can emit thousands of tokens; raise it (or drop to a
+  smaller model) if a bigger run still times out.
 
 ### Streaming, progress and honesty about what was sent
 
@@ -343,11 +331,6 @@ The baseline is what makes prompt changes measurable: record one with
 without the flag and read the comparison. Do not edit `eval/baseline.json` or a
 run file by hand — the scores are derived from the recorded cases, and editing
 one side would only make them disagree.
-- `WISEREPO_TIMEOUT_MS` — default `300000` (5 min). Much larger than a
-  cloud-backed tool would need: local generation on a 30B model is far
-  slower per token, and `review_diff` / AGENTS.md regeneration can emit
-  thousands of tokens. Raise it (or drop to a smaller model) if a big
-  regeneration still times out.
 
 Low temperature reduces wording churn between runs — it does **not** make
 output byte-reproducible, and re-pulling a model tag can change the weights
@@ -406,8 +389,8 @@ Parsing JSON is not registration. Check the host, in this order:
 1. **The server is listed and connected.** Claude Code: `claude mcp list`, or
    `/mcp` in-session; VS Code: `MCP: List Servers`. Expect `wiserepo` with its
    six tools, not a red "failed".
-2. **It reads *this* tree.** Call `olympus_context` and check `data.version` is
-   this repo's version (`v0.10.0` at time of writing). That is the
+2. **It reads *this* tree.** Call `olympus_context` and check `data.version`
+   matches the version this checkout declares. That is the
    cwd-independence probe: a server launched from a foreign directory still has
    to report this repo's version. A wrong or empty answer means `args` resolved
    somewhere else and the launch silently failed.
@@ -479,24 +462,18 @@ carries the regression test.
 
 ## AGENTS.md is hand-maintained
 
-There is exactly **one** agent-instructions file in this repo: the root
-`AGENTS.md`. Codex reads it natively, and the other CLIs do too — so there is no
-second copy to drift. Claude Code reads `AGENTS.md` itself from v2.1.277, but
-only when no `CLAUDE.md` exists; the installed binary here is **2.1.185**, older
-than that, so a one-line `CLAUDE.md` (`@AGENTS.md`) provides the import bridge.
-It is a pointer, not a copy: there is still exactly one document to maintain.
-Upgrading past 2.1.277 does not break it, since the import still resolves.
+`review_diff` grounds on the root `AGENTS.md` (see `AGENTS_MD` in
+`src/mcp-server.mjs`). Nothing regenerates or gates that file, so keep it current
+by hand. That there is exactly **one** instructions document is stated in
+AGENTS.md's opening paragraph; the `.coderabbit.yaml` custom check "AGENTS.md
+stays the only instructions document" enforces it and pins what the `CLAUDE.md`
+bridge may contain. This file does not restate either.
 
-An earlier design generated `AGENTS.md` from a `CLAUDE.md` source, stamped a
-`sha256` trailer, regenerated from a pre-commit hook and hard-gated drift in a
-`docs-agent-sync` CI job. It was retired because the generated copy was **lossy**:
-it paraphrased the invariants and dropped real content (the Python-SDK copy of
-the leaf layout and its second vector set, the exact quorum co-sign preimage).
-One file, edited directly, removes both the drift and the paraphrase.
-
-Consequence worth knowing: `review_diff` grounds on `AGENTS.md` (see
-`AGENTS_MD` in `src/mcp-server.mjs`). Nothing regenerates or gates that file
-now, so keep it current by hand.
+The earlier design generated `AGENTS.md` from a `CLAUDE.md` source with a
+`sha256` trailer and a drift gate. It was retired because the generated copy was
+**lossy**: it paraphrased the invariants and dropped real content (the Python-SDK
+copy of the leaf layout and its second vector set, the exact quorum co-sign
+preimage).
 
 ## Tests
 
@@ -505,7 +482,7 @@ cd tools/wiserepo
 npm test
 ```
 
-144 tests covering the places a bug is silent rather than loud:
+The suite covers the places a bug is silent rather than loud:
 
 - `resolveInRepo` path-traversal guard, including the sibling-prefix case
   (`Olympus-evil` must not count as inside `Olympus`) — and
