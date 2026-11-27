@@ -314,3 +314,66 @@ test("review_diff sends the files as they stand after the diff", async (t) => {
   // presented as the post-diff content.
   assert.doesNotMatch(prompt, /WORKTREE_ONLY/);
 });
+
+// A staged deletion has no blob in the index. Reading it must not fail the tool:
+// the review is told the path is gone, which is what the diff means.
+test("review_diff names a staged deletion instead of failing on it", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "wiserepo-review-delete-"));
+  const previousRoot = process.env.WISEREPO_ROOT;
+  const previousModel = process.env.WISEREPO_MODEL_REVIEW;
+  process.env.WISEREPO_ROOT = root;
+  process.env.WISEREPO_MODEL_REVIEW = "wiserepo-test-review-deletion";
+  t.after(() => {
+    if (previousRoot === undefined) delete process.env.WISEREPO_ROOT;
+    else process.env.WISEREPO_ROOT = previousRoot;
+    if (previousModel === undefined) delete process.env.WISEREPO_MODEL_REVIEW;
+    else process.env.WISEREPO_MODEL_REVIEW = previousModel;
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  execFileSync("git", ["init", "-q"], { cwd: root });
+  mkdirSync(join(root, "docs"));
+  const file = "docs/gone.md";
+  writeFileSync(join(root, file), "export const gone = true;\n");
+  execFileSync("git", ["add", "--", file], { cwd: root });
+  execFileSync(
+    "git",
+    [
+      "-c",
+      "user.name=wiserepo-test",
+      "-c",
+      "user.email=test@localhost",
+      "commit",
+      "-q",
+      "-m",
+      "add gone",
+    ],
+    { cwd: root },
+  );
+  // Stages the deletion: the file is in HEAD and absent from the index.
+  execFileSync("git", ["rm", "-q", "--", file], { cwd: root });
+
+  t.mock.method(globalThis, "fetch", async (url) => {
+    if (url.endsWith("/api/show")) {
+      return Response.json({ digest: "test", model_info: { "test.context_length": 16384 } });
+    }
+    return new Response(
+      JSON.stringify({ message: { content: "Model answer" }, done: true }) + "\n",
+    );
+  });
+
+  let prompt;
+  const answer = await runTool(
+    "review_diff",
+    { diffArgs: ["--cached"] },
+    {
+      onPrompt: ({ prompt: captured }) => {
+        prompt = captured;
+      },
+    },
+  );
+
+  assert.equal(answer, "Model answer");
+  assert.match(prompt, /### docs\/gone\.md \(index\)/);
+  assert.match(prompt, /this change deletes this path; it is not in the post-diff tree/);
+});
