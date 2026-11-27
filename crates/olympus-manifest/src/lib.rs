@@ -34,10 +34,13 @@
 //! * [`proof`] — generate and verify record-level inclusion / exclusion proofs.
 //! * [`diff`] — incremental version commits and version-link verification.
 //! * [`smt_batch`] — the memory-light batch SMT builder used by the above.
+//! * [`content`] — content-addressed dataset commitments (RFC-0000 draft), a
+//!   separate format keyed by item content rather than record id.
 
 #![forbid(unsafe_code)]
 
 pub mod commit;
+pub mod content;
 pub mod diff;
 pub mod error;
 pub mod proof;

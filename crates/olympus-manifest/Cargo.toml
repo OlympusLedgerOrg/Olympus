@@ -32,6 +32,11 @@ serde = { version = "1", features = [ "derive" ] }
 serde_json = "1"
 thiserror = "2"
 rayon = { version = "1", optional = true }
+# Content-addressed commitments (RFC-0000 draft): text/utf8-nfc pins the
+# Unicode version this crate implements (checked at compile time in
+# content::canon), and metadata blinders come from the OS CSPRNG.
+unicode-normalization = "0.1"
+getrandom = "0.3"
 
 [dev-dependencies]
 serde_json = "1"
