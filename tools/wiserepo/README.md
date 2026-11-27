@@ -325,6 +325,7 @@ smoke review here once produced.
 node bin/eval.mjs                            # all three suites
 node bin/eval.mjs --task qa                  # the cheap suite (real repo, no fixture)
 node bin/eval.mjs --limit 2                  # first 2 cases per suite
+node bin/eval.mjs --repeat 3                 # 3 samples per case, so 3/3 is not one draw
 node bin/eval.mjs --model qwen2.5-coder:3b   # compare tags on the same cases
 node bin/eval.mjs --write-baseline           # record eval/baseline.json
 node bin/eval.mjs --show-answers             # print each raw answer under its verdict
@@ -341,6 +342,16 @@ unavailable, and `3` when nothing could be scored because the agent policy
 refused every case (see below). Runs are slow: one case is one full model call,
 so `--limit` exists for smoke tests and `--task qa` for a model-only check that
 needs no fixture repo.
+
+`--repeat N` runs each case N times and prints `passed/N samples`; the case
+passes only when **every** sample does. The suite's denominator stays in cases,
+so a repeat run still compares against a one-sample baseline as a score rather
+than as a changed case set, and flakiness shows on the case line instead of
+disappearing into a percentage. Temperature 0 is not reproducibility (see
+`src/backend.mjs`), and a three-case suite makes one draw per case weak evidence,
+so a prompt change worth keeping should be measured at `--repeat 3`. The count is
+recorded in `provenance.repeat`, and a comparison between runs with different
+sample counts says so.
 
 #### Recorded scores
 
