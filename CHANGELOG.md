@@ -219,8 +219,8 @@ All notable changes to the Olympus protocol are documented in this file.
   3.0.x proofs are rejected.** The desktop verifier, the offline Rust verifier,
   and the host-side prover tools now pin `risc0-zkvm = "=3.1.0"`
   (`risc0-circuit-recursion` 4.1.0), because RISC Zero yanked every earlier 3.x
-  and 4.x release and stopped serving the recursion-circuit artifacts the 4.0.x
-  build scripts downloaded. 4.1.0 ships a different recursion circuit, so the
+  and 4.x release of those crates and stopped serving the recursion-circuit
+  artifacts the 4.0.x build scripts downloaded. 4.1.0 ships a different recursion circuit, so the
   allowed control root moved (`a54dc85a…` → `e6feef13…`) and the succinct
   verifier parameters digest moved with it (`ece5e9b8…` → `f57f355f…`). RISC
   Zero binds that digest into verification, so a receipt proven under 3.0.x

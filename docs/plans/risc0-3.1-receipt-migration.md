@@ -22,8 +22,8 @@ change.
   and after the migration; only the receipt bytes changed.
 - The committed fixture was re-proven by the `measure cycles and generate
 receipt fixture` job (run 45935028508) and both verifiers accept it:
-  `committed_succinct_receipt_fixture_verifies_offline` (`verifiers/rust`, 9/9)
-  and `committed_succinct_receipt_fixture_verifies` (`olympus-desktop`, 6/6).
+  `committed_succinct_receipt_fixture_verifies_offline` (`verifiers/rust`, 10/10)
+  and `committed_succinct_receipt_fixture_verifies` (`olympus-desktop`, 7/7).
 - ADR-0040 gained a **Verifier and prover version** section recording the split
   pins, the changed control IDs, and the no-dual-root rule.
 - The `rebuild pinned guest ELF` job in `zkvm-guest.yml` still installs
@@ -180,7 +180,11 @@ boundary.
 3. No open Dependabot alert for `zip` (already true) and `cargo tree -i zip`
    shows nothing below 9.0.5 on a shipped path.
 4. ADR-0040, README, and CHANGELOG tell the same story: 3.0.x receipts are
-   rejected, re-proving is required, and there is no dual-root path.
+   rejected, re-proving is required, and there is no dual-root path. Compared
+   against all three — ADR-0040 §"Verifier and prover version", the README's
+   "Receipt compatibility and re-proving", and the Unreleased CHANGELOG entry —
+   they agree on the split pins, the rejected receipt class, and the absence of
+   a dual-root path.
 
 **Explicitly not in scope:** changing the journal, the Groth16 circuit, the
 ceremony artifacts, or the receipt's base64/JSON envelope.
