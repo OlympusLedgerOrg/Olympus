@@ -269,12 +269,38 @@ impl FpProfile {
 /// token. Both follow from the v1 definition and are recorded as open
 /// questions in the similarity companion.
 pub fn normalize_text(text: &str) -> String {
+    if text.is_ascii() {
+        // Exact shortcut, not an approximation: NFKC maps every ASCII
+        // character to itself, full case folding of ASCII is exactly A–Z to
+        // a–z, and the only ASCII characters in L* or N* are letters and
+        // digits. `ascii_fast_path_equals_the_general_path` checks all 128.
+        return collapse(
+            text.bytes().map(|b| char::from(b.to_ascii_lowercase())),
+            |c| c.is_ascii_alphanumeric(),
+            text.len(),
+        );
+    }
+    normalize_general(text)
+}
+
+/// The full definition, for any input.
+fn normalize_general(text: &str) -> String {
     let nfkc: String = text.nfkc().collect();
     let folded = CaseMapper::new().fold_string(&nfkc);
-    let mut out = String::with_capacity(folded.len());
+    collapse(folded.chars(), is_letter_or_number, folded.len())
+}
+
+/// Keep the characters `keep` accepts; every maximal run of the others
+/// becomes one U+0020, with none leading or trailing.
+fn collapse(
+    chars: impl Iterator<Item = char>,
+    keep: impl Fn(char) -> bool,
+    capacity: usize,
+) -> String {
+    let mut out = String::with_capacity(capacity);
     let mut gap = false;
-    for c in folded.chars() {
-        if is_letter_or_number(c) {
+    for c in chars {
+        if keep(c) {
             if gap && !out.is_empty() {
                 out.push(' ');
             }
@@ -718,6 +744,21 @@ mod tests {
             let got = u32::from_be_bytes(fp[i * 4..i * 4 + 4].try_into().unwrap());
             assert_eq!(got, naive_slot(&toks, i), "slot {i}");
         }
+    }
+
+    #[test]
+    fn ascii_fast_path_equals_the_general_path() {
+        // Every ASCII character alone and between letters, then mixed runs.
+        for b in 0u8..128 {
+            let c = char::from(b);
+            for s in [c.to_string(), format!("Ab{c}Cd"), format!("{c}{c}x{c}")] {
+                assert!(s.is_ascii());
+                assert_eq!(normalize_text(&s), normalize_general(&s), "byte {b:#04x}");
+            }
+        }
+        let mixed = "  The QUICK, brown fox\t(jumps)\r\nover 42 lazy-dogs!!  \x00\x7f~ ";
+        assert_eq!(normalize_text(mixed), normalize_general(mixed));
+        assert_eq!(normalize_text(""), normalize_general(""));
     }
 
     #[test]
