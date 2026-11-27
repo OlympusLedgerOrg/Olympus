@@ -428,6 +428,17 @@ reverted. `increases the page count` stays accepted because it states the
 consequence; `off-by-one` and `+ 1` do not, so a review that only describes the
 `clampPage` hunk cannot pass.
 
+A fifth attempt kept the per-hunk restatement and asked for the consequence
+directly: "for a defect, say what goes wrong for the caller — the wrong value or
+result it produces — not just that the change looks wrong". At `--repeat 3` it
+held `no-phantom-removed-line` and `clean-fix-not-flagged` at 3/3 and left
+`planted-off-by-one` at 0/3. The answers named `pageCount` and even walked
+through an example ("the modified function would return 3"), but called the
+result "an incorrect number of pages" and got the surrounding arithmetic muddled,
+so they never stated that it returns one page too many. The expectation group was
+left alone and the sentence reverted: the case is scoring the direction of the
+error, and those reviews did not state it.
+
 `eval/baseline.json` is this `--repeat 3` run (answers in `eval/runs/`), so the
 comparison point is the honest rate rather than a single draw, and it was
 recorded on the prompt the tool now sends. A one-sample run is still allowed; it
