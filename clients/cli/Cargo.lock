@@ -52,7 +52,7 @@ dependencies = [
  "fnv",
  "hashbrown 0.17.1",
  "itertools",
- "num-bigint",
+ "num-bigint 0.4.8",
  "num-integer",
  "num-traits",
  "zeroize",
@@ -70,7 +70,7 @@ dependencies = [
  "ark-std",
  "digest 0.10.7",
  "educe",
- "num-bigint",
+ "num-bigint 0.4.8",
  "num-traits",
  "zeroize",
 ]
@@ -91,7 +91,7 @@ version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4a0691ed21ef00ef89c1e9bda832eba493dda3ec2f8d892fb25b705f73f06bb8"
 dependencies = [
- "num-bigint",
+ "num-bigint 0.4.8",
  "num-traits",
  "proc-macro2",
  "quote",
@@ -122,7 +122,7 @@ dependencies = [
  "ark-serialize-derive",
  "ark-std",
  "digest 0.10.7",
- "num-bigint",
+ "num-bigint 0.4.8",
 ]
 
 [[package]]
@@ -175,7 +175,7 @@ dependencies = [
  "blake-hash",
  "crypto-bigint",
  "light-poseidon",
- "num-bigint",
+ "num-bigint 0.4.8",
  "subtle",
  "zeroize",
 ]
@@ -845,7 +845,7 @@ version = "0.4.0"
 dependencies = [
  "ark-bn254",
  "ark-ff",
- "num-bigint",
+ "num-bigint 0.4.8",
  "thiserror",
 ]
 
@@ -917,6 +917,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "num-bigint"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "93e7820bc0a80a0238e650327316f929ba18d5be054b647490a3a6a339f3e7c0"
+dependencies = [
+ "num-integer",
+ "num-traits",
+]
+
+[[package]]
 name = "num-integer"
 version = "0.1.47"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -959,7 +969,7 @@ dependencies = [
  "babyjubjub-permissive",
  "blake3",
  "hex",
- "num-bigint",
+ "num-bigint 0.5.1",
  "serde",
  "thiserror",
  "unicode-normalization",
