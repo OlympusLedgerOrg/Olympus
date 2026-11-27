@@ -6,6 +6,7 @@
 //! (ZIP) that is later unpacked by [`crate::pg_unpack`].
 
 use std::path::Path;
+use std::time::Duration;
 
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
@@ -53,6 +54,60 @@ const PG_V15_DARWIN_AMD64_SHA256: &str =
     "600b3c07a268d8f5b24b175cc4bd0dbdc875ac9d9dbff8740f86164923f402e3";
 const PG_V15_DARWIN_ARM64V8_SHA256: &str =
     "e26068293bdd21dcee5771c813248deee8271c7b6eb01768647d40b85c7c95c5";
+
+/// HTTP statuses worth retrying: rate limiting, request timeout, the transient
+/// 5xx family, and `404 Not Found`.
+///
+/// A 404 is normally permanent — the requested release has no build for this
+/// platform — but `repo1.maven.org` also serves spurious 404s for paths it
+/// answers with 200 minutes later: the `vendored pg_embed unit tests` job lost a
+/// run to exactly that on 2026-11-27, and the same URL downloaded fine on a
+/// rerun. Retrying it is bounded by [`DOWNLOAD_ATTEMPTS`], so a release that is
+/// genuinely absent still fails in about a minute instead of hanging.
+///
+/// 401/403 stay permanent: the mirror rejected the request and will keep
+/// rejecting it, so those fail on the first response instead of spending the
+/// retry budget.
+///
+/// Retries also exist because a cold binary cache is fetched from Maven Central,
+/// which answers a burst of CI runners with `429 Too Many Requests`: the
+/// `api_db` job lost a run to exactly that on 2026-11-27 while the package
+/// itself was fine, and the embedded-Postgres cache only hides the download
+/// until its key changes.
+fn is_retryable_status(status: reqwest::StatusCode) -> bool {
+    matches!(status.as_u16(), 404 | 408 | 429 | 500 | 502 | 503 | 504)
+}
+
+/// Attempts per download, including the first one.
+///
+/// Six attempts at the backoff below wait at most ~60 s in total, which is
+/// noise beside the 20-minute cap the `api_db` job puts on the whole step.
+const DOWNLOAD_ATTEMPTS: u32 = 6;
+
+/// First retry delay; doubles per failure.
+const RETRY_BASE_DELAY: Duration = Duration::from_secs(2);
+
+/// Ceiling for a single wait, including a server-supplied `Retry-After`.
+const RETRY_MAX_DELAY: Duration = Duration::from_secs(60);
+
+/// Delay before the next attempt after `attempt` failures.
+///
+/// `Retry-After` wins when present in its delta-seconds form (the HTTP-date
+/// form falls back to backoff — parsing dates for a retry hint is not worth a
+/// dependency). Either way the wait is capped by [`RETRY_MAX_DELAY`], so a
+/// mirror asking for an hour cannot stall the caller.
+fn retry_delay(attempt: u32, retry_after: Option<&reqwest::header::HeaderValue>) -> Duration {
+    let server_hint = retry_after
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .map(Duration::from_secs);
+    if let Some(hint) = server_hint {
+        return hint.min(RETRY_MAX_DELAY);
+    }
+    RETRY_BASE_DELAY
+        .saturating_mul(1 << attempt.saturating_sub(1))
+        .min(RETRY_MAX_DELAY)
+}
 
 /// Settings that determine which PostgreSQL binary package to download.
 ///
@@ -165,10 +220,19 @@ impl PgFetchSettings {
     /// [`Self::platform`], and [`Self::version`] and issues the request.
     /// The caller streams the response body.
     ///
+    /// # Retries
+    ///
+    /// Transient failures are retried — see [`is_retryable_status`] and
+    /// [`retry_delay`] — so a rate-limited or briefly unavailable mirror does
+    /// not fail an otherwise healthy build. The final attempt's error is what
+    /// the caller sees, and every attempt after the first logs a warning with
+    /// the status and the wait, so a retried run leaves a trace in CI.
+    ///
     /// # Errors
     ///
-    /// Returns [`Error::DownloadFailure`] if the request fails or the server
-    /// returns a non-2xx status.
+    /// Returns [`Error::DownloadFailure`] if every attempt fails, or on the
+    /// first response whose status is permanent (e.g. 410 when the requested
+    /// PostgreSQL version was removed from the mirror).
     async fn start_download(&self) -> Result<reqwest::Response> {
         let platform = self.platform();
         let version = self.version.0;
@@ -178,20 +242,45 @@ impl PgFetchSettings {
             &self.host, &platform, version, &platform, version
         );
 
-        let response = reqwest::get(download_url)
-            .await
-            .map_err(|e| Error::DownloadFailure(e.to_string()))?;
-
-        let status = response.status();
-        if !status.is_success() {
-            return Err(Error::DownloadFailure(format!(
-                "HTTP {status} fetching PostgreSQL {version} for platform '{platform}'. This \
-                 version may not be available for the current OS/architecture. Note: \
-                 darwin-arm64v8 (Apple Silicon) only has binaries for PG 14 and newer.",
-            )));
+        let mut attempt = 0u32;
+        loop {
+            attempt += 1;
+            match reqwest::get(&download_url).await {
+                Ok(response) if response.status().is_success() => return Ok(response),
+                Ok(response) => {
+                    let status = response.status();
+                    let failure = Error::DownloadFailure(format!(
+                        "HTTP {status} fetching PostgreSQL {version} for platform '{platform}'. This \
+                         version may not be available for the current OS/architecture. Note: \
+                         darwin-arm64v8 (Apple Silicon) only has binaries for PG 14 and newer.",
+                    ));
+                    if !is_retryable_status(status) || attempt >= DOWNLOAD_ATTEMPTS {
+                        return Err(failure);
+                    }
+                    let delay = retry_delay(
+                        attempt,
+                        response.headers().get(reqwest::header::RETRY_AFTER),
+                    );
+                    log::warn!(
+                        "PostgreSQL download attempt {attempt}/{DOWNLOAD_ATTEMPTS} failed with \
+                         HTTP {status}; retrying in {delay:?}"
+                    );
+                    tokio::time::sleep(delay).await;
+                }
+                Err(err) => {
+                    let failure = Error::DownloadFailure(err.to_string());
+                    if attempt >= DOWNLOAD_ATTEMPTS {
+                        return Err(failure);
+                    }
+                    let delay = retry_delay(attempt, None);
+                    log::warn!(
+                        "PostgreSQL download attempt {attempt}/{DOWNLOAD_ATTEMPTS} failed \
+                         ({err}); retrying in {delay:?}"
+                    );
+                    tokio::time::sleep(delay).await;
+                }
+            }
         }
-
-        Ok(response)
     }
 
     /// Downloads the PostgreSQL binaries JAR from Maven Central.
@@ -213,8 +302,9 @@ impl PgFetchSettings {
     /// # Errors
     ///
     /// Returns [`Error::DownloadFailure`] if the HTTP request fails or the
-    /// server returns a non-2xx status (e.g. 404 when the requested
-    /// PostgreSQL version is not available for the current platform).
+    /// server returns a non-2xx status after the bounded retries (e.g. 404
+    /// when the requested PostgreSQL version is not available for the current
+    /// platform).
     /// Returns [`Error::ConversionFailure`] if reading the response body fails.
     pub async fn fetch_postgres(&self) -> Result<Vec<u8>> {
         self.expected_sha256()?;
@@ -337,6 +427,44 @@ mod tests {
             };
             assert_eq!(settings.expected_sha256().unwrap(), expected);
         }
+    }
+
+    #[test]
+    fn transient_download_statuses_are_retried_and_permanent_ones_are_not() {
+        // 404 is retried because Maven Central serves spurious 404s for
+        // artifacts it answers with 200 moments later; the attempt cap, not the
+        // status class, bounds a genuinely missing release.
+        for status in [404, 408, 429, 500, 502, 503, 504] {
+            let status = reqwest::StatusCode::from_u16(status).unwrap();
+            assert!(is_retryable_status(status), "{status} must be retried");
+        }
+        // Rejections and definitive removals are permanent.
+        for status in [400, 401, 403, 410, 501] {
+            let status = reqwest::StatusCode::from_u16(status).unwrap();
+            assert!(!is_retryable_status(status), "{status} must fail fast");
+        }
+    }
+
+    #[test]
+    fn retry_delay_backs_off_caps_and_honours_retry_after() {
+        assert_eq!(retry_delay(1, None), Duration::from_secs(2));
+        assert_eq!(retry_delay(2, None), Duration::from_secs(4));
+        assert_eq!(retry_delay(3, None), Duration::from_secs(8));
+        assert_eq!(retry_delay(4, None), Duration::from_secs(16));
+        assert_eq!(retry_delay(5, None), Duration::from_secs(32));
+        // Doubling would reach 64 s here; the ceiling wins.
+        assert_eq!(retry_delay(6, None), RETRY_MAX_DELAY);
+
+        let hint = reqwest::header::HeaderValue::from_static("7");
+        assert_eq!(retry_delay(1, Some(&hint)), Duration::from_secs(7));
+
+        // A mirror asking for a day must not stall the caller.
+        let huge = reqwest::header::HeaderValue::from_static("86400");
+        assert_eq!(retry_delay(1, Some(&huge)), RETRY_MAX_DELAY);
+
+        // The HTTP-date form is not parsed; the backoff applies instead.
+        let date = reqwest::header::HeaderValue::from_static("Wed, 21 Oct 2015 07:28:00 GMT");
+        assert_eq!(retry_delay(2, Some(&date)), Duration::from_secs(4));
     }
 
     #[test]

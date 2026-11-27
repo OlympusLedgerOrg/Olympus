@@ -113,6 +113,21 @@ export function inferTaskClass(task) {
 /** Which agent owns a legacy route word. `route` decides the model family. */
 const AGENT_FOR_ROUTE = { ollama: "local", codex: "codex", claude: "claude-code" };
 
+/**
+ * What a Claude Code session should run this task on, whatever `route` says.
+ * `route` names the preferred agent; this answers "if Claude does it, which
+ * model and effort". Null when the policy has no `claudeSession` table.
+ */
+export function claudeSessionFor(tier, policy = loadPolicy()) {
+  const entry = policy.claudeSession?.[tier];
+  if (!entry) return null;
+  return {
+    model: entry.model,
+    effort: entry.effort,
+    suggestion: `${entry.label ?? entry.model} ${entry.effort}`,
+  };
+}
+
 export function routeTask({ task, paths = [], taskClass = undefined, policy = loadPolicy() } = {}) {
   if (typeof task !== "string" || task.trim() === "") {
     throw new Error("a task description is required");
@@ -176,6 +191,7 @@ export function routeTask({ task, paths = [], taskClass = undefined, policy = lo
 
   return {
     task,
+    claude: claudeSessionFor(tier, policy),
     route,
     reasoning,
     review,
@@ -258,6 +274,8 @@ async function main() {
     process.stderr.write(`model-router: could not write the route log: ${error.message}\n`);
   }
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+  if (result.claude)
+    process.stderr.write(`claude: ${result.claude.suggestion} (tier ${result.tier})\n`);
   return 0;
 }
 
