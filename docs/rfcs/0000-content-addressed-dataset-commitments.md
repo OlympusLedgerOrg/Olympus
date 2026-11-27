@@ -30,7 +30,7 @@ two forms over the same bytes. A *plain* proof is a Merkle path. It is cheap,
 and checking it against a known root needs no signature, so its strength
 against a quantum adversary is that of BLAKE3's second-preimage and
 collision resistance. Trusting *which* root is the dataset's still rests
-on the header signature and its ledger timestamp. A *zero-knowledge* proof
+on the header signature and its ledger inclusion. A *zero-knowledge* proof
 runs in Ligetron and reveals nothing beyond the yes/no answer. Every hash,
 including those inside the zero-knowledge statements, is BLAKE3.
 
@@ -45,7 +45,7 @@ stronger one.
 |---|---|---|---|
 | **A. Commitment** | Which exact canonical items a signed dataset version contains, and which it does not. Which items changed between two versions. | Cryptographic: reduces to BLAKE3 and the header signature | M1, N1, D1, D2 |
 | **B. Candidate retrieval** | That the committed fingerprint index holds a segment within a stated distance of the query (M2), or holds none among the buckets the query maps to (N2). | Cryptographic *about the committed index*. Whether a fingerprint match means a human-recognizable copy is an **operating characteristic** with measured recall and precision, not a guarantee. | M2, N2 |
-| **C. Recorded statements** | What the committer stated about each occurrence: source, license, retrieval time, opt-out status, repetition count. | Attributable: signed and ledger-timestamped. **Not** evidence that the statement is true. | M1-open with metadata |
+| **C. Recorded statements** | What the committer stated about each occurrence: source, license, retrieval time, opt-out status, repetition count. | Attributable: signed and included in the insert-only ledger. **Not** evidence that the statement is true. | M1-open with metadata |
 
 Consequences that every implementation and document MUST respect:
 
@@ -381,7 +381,7 @@ before anyone may rely on the absence of an undisclosed source.
    fixed.
 
 `opt_out_status = 1` on a committed item is not a violation of this format.
-It is a signed, timestamped record that the committer's *own records*
+It is a signed record, included in the ledger, that the committer's *own records*
 marked the source as opted out when it included the item. It is not proof
 that a valid opt-out request was made (§Guarantee classes, class C).
 
@@ -557,9 +557,21 @@ committed through `POST /ingest/files` into `ledger_shard_id`. The resulting
 ledger leaf binds `ledger_shard_id` via ADR-0005 and the bundle's BLAKE3
 content hash as `value_hash`. It is covered by the shard's
 `SmtRootAttestation` and the checkpoint `TransitionAttestation`. That gives
-the version an append-only, attested timestamp and makes a re-signed,
-backdated header detectable. `parent_header_digest` chains versions; a fork
-appears as two headers naming the same parent.
+the version an append-only **inclusion position** in the shard. The
+attestations bind roots and sizes, not times. A wall-clock bound exists only
+through a checkpoint that signs one: a V2 ledger snapshot signs
+`signed_at_unix`, and a V1 snapshot signs no time at all. So inclusion shows
+that the bundle existed no later than the first V2 checkpoint covering it.
+
+`created_at_unix_s` is a value the committer chose. It is signed, but no rule
+in this RFC compares it with an authenticated time, and no verifier reads
+it. It is therefore display metadata and MUST NOT be presented as a
+timestamp. A backdated `created_at_unix_s` is not detectable by this format.
+What the format does make visible is a header *re-signed later over an
+earlier version*: it appears after the original in inclusion order.
+Relating `created_at_unix_s` to checkpoint time is left open
+(§Unresolved 10). `parent_header_digest` chains versions; a fork appears as
+two headers naming the same parent.
 
 ### 7. Signed-message envelope
 
@@ -591,9 +603,11 @@ second time. Neither the suite of an existing header nor the leg set of a
 hybrid envelope can be changed without invalidating the Ed25519 signature. What
 the `ed25519` suite does *not* give is post-quantum strength. An adversary
 who can forge Ed25519 could sign a *new* `ed25519` header. Two things limit
-that. Every honest header is already in the insert-only ledger with an
-attested timestamp (§6), so a forged header cannot pretend to predate the
-real one. And a relying party sets its own minimum suite, and SHOULD require
+that. Every honest header already has a position in the insert-only ledger
+(§6), so a forged header cannot take an *earlier inclusion position* than
+the real one. That is the whole of the protection: it is about ledger
+inclusion order, and it says nothing about the `created_at_unix_s` either
+header claims. And a relying party sets its own minimum suite, and SHOULD require
 the hybrid suite for any version created after hybrid signing becomes
 available. Committers SHOULD re-sign their live versions under the hybrid
 suite once it ships. A re-signed header is a new header over the same
@@ -858,14 +872,14 @@ format means, and are not bugs to be fixed later:
    was computed correctly from its item. A committer could store a wrong
    fingerprint for a work it holds. The defences are that a wrong
    fingerprint is *attributable* (it sits under a signed header and a
-   ledger timestamp), that M1-open lets a holder of an exact copy check it,
+   ledger inclusion), that M1-open lets a holder of an exact copy check it,
    and that sampled audits (3 below) check it. Removing this trust needs
    in-circuit fingerprint recomputation from canonical bytes. That looks
    feasible for short text and is impractical for decoded images (§Unresolved 3).
    **Provenance metadata and occurrence counts are trusted the same way.**
    The format proves what the committer *stated* about sources, licenses,
    opt-out status and repetition, not that the statement is true. A false
-   statement is signed, timestamped and attributable, and a sampled audit
+   statement is signed, included in the ledger and attributable, and a sampled audit
    that re-runs extraction (§0) over the opened source files detects it.
 2. **Complete index.** N2 shows absence only from `similarity_root`. The
    index is a deterministic function of the item set and its fingerprints,
@@ -943,8 +957,8 @@ exposure as follows:
   grows linearly with dataset size (§8). Plain proofs cover most uses.
   Zero-knowledge is for committers who must not reveal neighbouring items.
 - v1 headers are signed with Ed25519 only, until ML-DSA-65 is accepted (§7).
-  Their protection against a future quantum forger rests on the ledger
-  timestamp and on re-signing under the hybrid suite, not on the signature
+  Their protection against a future quantum forger rests on ledger
+  inclusion order and on re-signing under the hybrid suite, not on the signature
   itself.
 - Per-occurrence metadata makes the record index larger: about 100–300
   bytes per occurrence, depending on URI length. It lives in the
@@ -985,3 +999,8 @@ exposure as follows:
 9. Extraction profiles beyond v1: HuggingFace `datasets` Arrow shards,
    multi-field items (an image–caption pair as one item), and conversation
    formats.
+10. Whether to add a verifier rule tying `created_at_unix_s` to an
+    authenticated time, for example rejecting a header whose claimed time is
+    later than the `signed_at_unix` of the first V2 checkpoint that includes
+    it, or earlier than its parent's. Without such a rule the field is
+    display metadata (§6).

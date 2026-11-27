@@ -13,6 +13,8 @@
 
 use std::sync::OnceLock;
 
+use super::error::{ContentError, Result};
+
 /// One keyed-hash domain. The discriminant order is irrelevant to the wire
 /// format; only [`Domain::name`] is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -128,13 +130,14 @@ pub const CONTENT_KEY_CONTEXT: &str = "olympus 2026-11 dataset content-key v1";
 
 /// `lp(x) = u32_be(len(x)) ‖ x`, appended to `out`.
 ///
-/// # Panics
-/// If `x` is longer than `u32::MAX` bytes. Every framed field in this format
-/// is a short identifier or string; callers validate lengths before framing.
-pub fn lp_into(out: &mut Vec<u8>, x: &[u8]) {
-    let len = u32::try_from(x.len()).expect("lp field exceeds u32::MAX bytes");
+/// Fails with [`ContentError::FieldTooLong`] naming `field` when `x` does not
+/// fit the `u32` prefix. Nothing is appended in that case, and nothing ever
+/// panics: framed fields can come from untrusted openings.
+pub fn lp_into(out: &mut Vec<u8>, x: &[u8], field: &'static str) -> Result<()> {
+    let len = u32::try_from(x.len()).map_err(|_| ContentError::FieldTooLong(field))?;
     out.extend_from_slice(&len.to_be_bytes());
     out.extend_from_slice(x);
+    Ok(())
 }
 
 #[cfg(test)]

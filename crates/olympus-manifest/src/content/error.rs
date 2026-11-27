@@ -159,6 +159,25 @@ pub enum ContentError {
     /// A table has more than `u16::MAX` entries.
     #[error("table {0} has more than 65535 entries")]
     TableTooLarge(&'static str),
+
+    /// The operating-system CSPRNG failed; no blinder was produced.
+    #[error("entropy source failed: {0}")]
+    Entropy(String),
+
+    /// The canonicalization table names one `(profile_id, profile_version)`
+    /// twice, which would make the committed profile index depend on add order.
+    #[error("canonicalization profile {0:?} appears twice in the table")]
+    DuplicateProfile(String),
+
+    /// A metadata entry's `extraction_index` names no row of the version's
+    /// extraction table.
+    #[error("extraction index {0} is out of range")]
+    UnknownExtraction(u16),
+
+    /// An item opening claims `occurrence_count = 0`; every committed item has
+    /// at least one occurrence (§2).
+    #[error("item opening has occurrence_count = 0")]
+    ZeroOccurrences,
 }
 
 /// Result alias.

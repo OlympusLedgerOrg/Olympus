@@ -27,7 +27,7 @@ fn extraction() -> Vec<ExtractionEntry> {
 
 fn meta(uri: &str, status: u8) -> MetaEntry {
     MetaEntry {
-        blinding: fresh_blinding(),
+        blinding: fresh_blinding().unwrap(),
         extraction_index: 0,
         source_uri: uri.into(),
         license: "CC-BY-4.0".into(),
@@ -40,13 +40,13 @@ fn text_key(s: &str) -> [u8; 32] {
     let canon = CanonProfile::TextUtf8Nfc
         .canonicalize(s.as_bytes())
         .unwrap();
-    content_key("text/utf8-nfc", 1, &content_digest(&canon))
+    content_key("text/utf8-nfc", 1, &content_digest(&canon)).unwrap()
 }
 
 /// Items A (3 occurrences, with metadata), B (1, with), C (2, without), plus
 /// filler so the tree has real depth.
 fn build() -> BuiltVersion {
-    let mut b = DatasetBuilder::new(vec![CanonProfile::TextUtf8Nfc]);
+    let mut b = DatasetBuilder::new(vec![CanonProfile::TextUtf8Nfc]).unwrap();
     for (i, uri) in [
         "https://a.example/1",
         "https://a.example/2",
@@ -89,7 +89,7 @@ fn duplicates_merge_and_counts_are_committed() {
 
 #[test]
 fn rejected_items_are_counted_not_committed() {
-    let mut b = DatasetBuilder::new(vec![CanonProfile::TextUtf8Nfc]);
+    let mut b = DatasetBuilder::new(vec![CanonProfile::TextUtf8Nfc]).unwrap();
     assert_eq!(
         b.add(0, &[0xff], None).unwrap(),
         AddOutcome::Rejected(ContentError::InvalidUtf8)
@@ -144,7 +144,7 @@ fn md1_verifies_every_entry_of_every_item_with_metadata() {
         for j in 0..n {
             let d = v.disclose(&key, j).unwrap();
             assert_eq!(
-                verify_md1(P, &root, &v.profile_table, &d),
+                verify_md1(P, &root, &v.profile_table, &v.extraction_table, &d),
                 Ok(()),
                 "{work} j={j}"
             );
@@ -160,7 +160,7 @@ fn neg_wrong_blinder() {
     let mut d = v.disclose(&text_key("work A\nline 2"), 1).unwrap();
     d.entry.blinding[0] ^= 1;
     assert_eq!(
-        verify_md1(P, &item_root(&v), &v.profile_table, &d),
+        verify_md1(P, &item_root(&v), &v.profile_table, &v.extraction_table, &d),
         Err(ContentError::MetaRootMismatch)
     );
 }
@@ -172,7 +172,7 @@ fn neg_swapped_entry() {
     let mut d = v.disclose(&key, 0).unwrap();
     d.entry = v.meta_set(&key).unwrap().entries()[1].clone();
     assert_eq!(
-        verify_md1(P, &item_root(&v), &v.profile_table, &d),
+        verify_md1(P, &item_root(&v), &v.profile_table, &v.extraction_table, &d),
         Err(ContentError::MetaRootMismatch)
     );
 }
@@ -186,7 +186,7 @@ fn neg_entry_from_another_item() {
     // own path shape so the failure is the fold, not the length check.
     d.entry = from_b.entry;
     assert_eq!(
-        verify_md1(P, &item_root(&v), &v.profile_table, &d),
+        verify_md1(P, &item_root(&v), &v.profile_table, &v.extraction_table, &d),
         Err(ContentError::MetaRootMismatch)
     );
     // And B's whole (entry, path) pair, which has the wrong shape for A.
@@ -195,7 +195,7 @@ fn neg_entry_from_another_item() {
     d.entry = from_b.entry;
     d.meta_path = from_b.meta_path;
     assert!(matches!(
-        verify_md1(P, &item_root(&v), &v.profile_table, &d),
+        verify_md1(P, &item_root(&v), &v.profile_table, &v.extraction_table, &d),
         Err(ContentError::MetaPathLength { .. })
     ));
 }
@@ -206,7 +206,7 @@ fn neg_wrong_set_size() {
     let mut d = v.disclose(&text_key("work A\nline 2"), 0).unwrap();
     d.n = 2;
     assert_eq!(
-        verify_md1(P, &item_root(&v), &v.profile_table, &d),
+        verify_md1(P, &item_root(&v), &v.profile_table, &v.extraction_table, &d),
         Err(ContentError::MetaCountMismatch {
             n: 2,
             occurrence_count: 3
@@ -220,14 +220,14 @@ fn neg_out_of_range_position() {
     let mut d = v.disclose(&text_key("work A\nline 2"), 0).unwrap();
     d.j = 3;
     assert_eq!(
-        verify_md1(P, &item_root(&v), &v.profile_table, &d),
+        verify_md1(P, &item_root(&v), &v.profile_table, &v.extraction_table, &d),
         Err(ContentError::MetaPositionOutOfRange { j: 3, n: 3 })
     );
 }
 
 #[test]
 fn neg_invalid_fields_are_rejected_by_the_builder() {
-    let mut b = DatasetBuilder::new(vec![CanonProfile::TextUtf8Nfc]);
+    let mut b = DatasetBuilder::new(vec![CanonProfile::TextUtf8Nfc]).unwrap();
     assert_eq!(
         b.add(0, b"x", Some(meta("u", 3))),
         Err(ContentError::InvalidOptOutStatus(3))
@@ -243,7 +243,7 @@ fn guessed_uri_cannot_be_confirmed_from_a_sibling_hash() {
     // Positive test of hiding: a holder of a valid MD1 for entry 0 sees the
     // sibling leaf hash of entry 1. Knowing entry 1's every field *except*
     // its blinder must not reproduce that hash.
-    let mut b = DatasetBuilder::new(vec![CanonProfile::TextUtf8Nfc]);
+    let mut b = DatasetBuilder::new(vec![CanonProfile::TextUtf8Nfc]).unwrap();
     let e0 = meta("https://known.example/", 0);
     let e1 = meta("https://secret.example/private", 0);
     b.add(0, b"pair", Some(e0)).unwrap();
@@ -263,19 +263,19 @@ fn guessed_uri_cannot_be_confirmed_from_a_sibling_hash() {
     for attempt in 0..64u8 {
         guess.blinding = [attempt; 32];
         assert_ne!(
-            guess.leaf(),
+            guess.leaf().unwrap(),
             sibling,
             "a guessed blinder reproduced the sibling"
         );
     }
     // Sanity: with the true blinder the guess *would* match, so the test is
     // exercising the right hash.
-    assert_eq!(e1.leaf(), sibling);
+    assert_eq!(e1.leaf().unwrap(), sibling);
 }
 
 #[test]
 fn neg_reused_blinder_is_rejected_across_items() {
-    let mut b = DatasetBuilder::new(vec![CanonProfile::TextUtf8Nfc]);
+    let mut b = DatasetBuilder::new(vec![CanonProfile::TextUtf8Nfc]).unwrap();
     let m = meta("u", 0);
     b.add(0, b"one", Some(m.clone())).unwrap();
     assert_eq!(
@@ -286,7 +286,7 @@ fn neg_reused_blinder_is_rejected_across_items() {
 
 #[test]
 fn neg_partial_metadata_set_is_refused_at_build() {
-    let mut b = DatasetBuilder::new(vec![CanonProfile::TextUtf8Nfc]);
+    let mut b = DatasetBuilder::new(vec![CanonProfile::TextUtf8Nfc]).unwrap();
     b.add(0, b"w", Some(meta("u", 0))).unwrap();
     b.add(0, b"w", None).unwrap();
     assert_eq!(
@@ -343,7 +343,10 @@ fn opt_out_status_is_recorded_not_judged() {
     let v = build();
     let d = v.disclose(&text_key("work A\nline 2"), 0).unwrap();
     assert_eq!(d.entry.opt_out_status, 1);
-    assert_eq!(verify_md1(P, &item_root(&v), &v.profile_table, &d), Ok(()));
+    assert_eq!(
+        verify_md1(P, &item_root(&v), &v.profile_table, &v.extraction_table, &d),
+        Ok(())
+    );
 }
 
 #[test]
@@ -352,7 +355,7 @@ fn roots_are_reproducible_given_the_same_blinders() {
     // the same global root; regenerated blinders do not.
     let fixed: Vec<MetaEntry> = (0..3).map(|i| meta(&format!("https://x/{i}"), 0)).collect();
     let build_with = |entries: &[MetaEntry]| {
-        let mut b = DatasetBuilder::new(vec![CanonProfile::TextUtf8Nfc]);
+        let mut b = DatasetBuilder::new(vec![CanonProfile::TextUtf8Nfc]).unwrap();
         for e in entries {
             b.add(0, b"same work", Some(e.clone())).unwrap();
         }
@@ -368,7 +371,7 @@ fn roots_are_reproducible_given_the_same_blinders() {
     let regenerated: Vec<MetaEntry> = fixed
         .iter()
         .map(|e| MetaEntry {
-            blinding: fresh_blinding(),
+            blinding: fresh_blinding().unwrap(),
             ..e.clone()
         })
         .collect();

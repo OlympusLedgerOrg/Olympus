@@ -49,7 +49,10 @@ pub fn top_hash(l: &[u8; 32], r: &[u8; 32]) -> [u8; 32] {
 }
 
 /// The partition a key belongs to: its first `p` bits.
-pub fn partition_of(key: &[u8; 32], p: u8) -> u32 {
+///
+/// Crate-private: it is only meaningful for `p <= 16`, and every caller
+/// (`ItemTree::build`, `fold_item_path`) has already rejected larger `p`.
+pub(crate) fn partition_of(key: &[u8; 32], p: u8) -> u32 {
     (0..p as usize).fold(0u32, |acc, i| (acc << 1) | u32::from(bit(key, i)))
 }
 
