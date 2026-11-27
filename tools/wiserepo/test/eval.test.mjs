@@ -167,6 +167,19 @@ test("every review case requires the review to address the diff", async () => {
     missingExpectations("The change increases the page count by 1.", [consequence]),
     [],
   );
+  // Restating the added line, or judging it, is not the consequence: a review
+  // that only says the function adds 1 (or that adding 1 is unnecessary) is
+  // echoing the hunk, so the case must not score it as a finding.
+  for (const echo of [
+    "The function now adds 1 to the result of `Math.ceil`.",
+    "Adding 1 to the result is unnecessary and incorrect.",
+  ]) {
+    assert.equal(
+      missingExpectations(echo, [consequence]).length,
+      1,
+      `the planted-bug case accepted an echo of the added line: ${echo}`,
+    );
+  }
 
   // A clean range whose only change is a correct fix: the review must not turn
   // the removed `+ 1` into a live defect. Without `expect` it would pass on a
