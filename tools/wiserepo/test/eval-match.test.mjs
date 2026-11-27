@@ -147,6 +147,46 @@ test("unexpectedMentions reads a negated value as attribution, not a live claim"
   );
 });
 
+// A review that RECOMMENDS undoing a correct fix is asserting the removed value
+// belongs in the new code. "revert" attributed that away, so a sample that said
+// "Revert the change … adding `+ 1` back" scored PASS on the clean-fix case.
+test("unexpectedMentions does not count a recommendation to undo as attribution", () => {
+  assert.deepEqual(
+    unexpectedMentions(
+      "**Recommendation:** Revert the change and add `+ 1` back to the return statement.",
+      ["+ 1"],
+    ),
+    ["+ 1"],
+  );
+  assert.deepEqual(
+    unexpectedMentions("Restore the removed `lastPage - 1` line.", ["lastPage - 1"]),
+    ["lastPage - 1"],
+  );
+  assert.deepEqual(
+    unexpectedMentions("Recommendation: reinstate `lastPage - 1` for the final page.", [
+      "lastPage - 1",
+    ]),
+    ["lastPage - 1"],
+  );
+
+  // Describing a revert is still attribution: this sentence reports what the
+  // diff does, not what the code should do.
+  assert.deepEqual(
+    unexpectedMentions(
+      "The diff reverts `clampPage` to return `lastPage` instead of `lastPage - 1`.",
+      ["lastPage - 1"],
+    ),
+    [],
+  );
+  // Past-tense description of the same action, too.
+  assert.deepEqual(
+    unexpectedMentions("`clampPage` reverted to `lastPage`, dropping `lastPage - 1`.", [
+      "lastPage - 1",
+    ]),
+    [],
+  );
+});
+
 // ...but a removal word in the same sentence must not launder a claim that the
 // value is still live, and the attribution has to sit near the mention.
 test("unexpectedMentions still flags a live claim beside a removal word", () => {

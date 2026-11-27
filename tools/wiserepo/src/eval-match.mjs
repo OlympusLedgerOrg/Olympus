@@ -56,7 +56,8 @@ const ATTRIBUTION = [
   "fixes",
   "fixed",
   "fixing",
-  // "Restore the removed line" is still describing a change, not citing one.
+  // "restore"/"revert"/"reinstate" describe the diff too ("the diff reverts X to
+  // Y"), but as an IMPERATIVE they propose undoing it — see RECOMMENDATION.
   "restore",
   "revert",
   "reinstate",
@@ -106,6 +107,31 @@ const CURRENT_OVERRIDES = ["still", "keeps", "continues", "remains"];
 // Matched as WHOLE WORDS in the raw sentence. The haystack is normalised with
 // spaces squeezed out, so a substring test for "not" also matches "Note:" —
 // which would excuse the very claim this function exists to catch.
+/**
+ * Whether the sentence PROPOSES undoing the change rather than describing it.
+ *
+ * "**Recommendation:** Revert the change and add `+ 1` back" asserts the removed
+ * value belongs in the new code, so its "revert" must not excuse the mention —
+ * that is how a review recommending the restoration of a removed bug scored
+ * PASS on the clean-fix case. A sentence that describes a revert ("the diff
+ * reverts `clampPage` to `lastPage`") is attribution and stays one: the test is
+ * the sentence's mood, which is why this looks at how it STARTS, not at whether
+ * a revert word appears.
+ */
+function isRecommendation(sentence) {
+  const stripped = String(sentence ?? "")
+    .trimStart()
+    // Headings, quotes and bullets, but not "*": bold labels come next.
+    .replace(/^[#>\s-]+/, "")
+    .replace(/^\*\*[^*]{1,40}\*\*\s*:?/, "")
+    .replace(/^[A-Za-z][A-Za-z /-]{0,30}:\s*/, "")
+    .replace(/^[:\s]+/, "")
+    .trimStart();
+  // Base/imperative forms only: "reverted" or "reverting" describes a past
+  // action or its consequence, which is attribution.
+  return /^(?:revert|restore|reinstate)\b/i.test(stripped);
+}
+
 const NEGATION_PATTERN = /\b(?:without|not|never)\b/g;
 const NEGATION_WINDOW = 40;
 
@@ -159,13 +185,16 @@ export function unexpectedMentions(answer, absent) {
       DIFF_LINE.test(sentence.trimStart()) ||
       ATTRIBUTION.some((marker) => haystack.includes(marker));
     const override = CURRENT_OVERRIDES.some((marker) => haystack.includes(marker));
+    const recommendation = isRecommendation(sentence);
     for (const [original, needle] of needles) {
       if (!needle || phantoms.has(original)) continue;
       // A present-tense override beats both: "it never removes the guard, so
-      // `clampPage` still returns `lastPage - 1`" is a phantom.
+      // `clampPage` still returns `lastPage - 1`" is a phantom. So does a
+      // recommendation to undo the change, however many attribution words it
+      // contains.
       if (
         haystack.includes(needle) &&
-        (override || (!attributed && !negatedBefore(sentence, needle)))
+        (override || recommendation || (!attributed && !negatedBefore(sentence, needle)))
       ) {
         phantoms.add(original);
       }

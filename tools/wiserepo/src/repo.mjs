@@ -238,6 +238,24 @@ export async function gitShowFile(rev, relPath, { maxBytes = 60_000 } = {}) {
   return truncateText(stdout, maxBytes, `${relPath} at ${rev}`);
 }
 
+/**
+ * One file's content as STAGED in the index.
+ *
+ * `git diff --cached` compares a revision to the index, so reading the working
+ * tree would show a tree the diff never mentioned — a file edited after staging
+ * would be described to the model as if the diff produced it. `git show :<path>`
+ * reads stage 0 of the index.
+ */
+export async function gitShowIndexFile(relPath, { maxBytes = 60_000 } = {}) {
+  resolveInRepo(relPath);
+  const { stdout } = await execFileAsync("git", ["show", `:${relPath}`], {
+    cwd: repoRoot(),
+    maxBuffer: 20 * 1024 * 1024,
+    timeout: GIT_SUBPROCESS_TIMEOUT_MS,
+  });
+  return truncateText(stdout, maxBytes, `${relPath} (index)`);
+}
+
 export async function gitGrep(pattern, { globs = [], maxBytes = 30_000 } = {}) {
   if (typeof pattern !== "string") {
     throw new Error("grep pattern must be a string");
