@@ -129,7 +129,10 @@ open its fingerprint leaf against the resulting `fp_set_root`. The
 fingerprint profile in the header determines the fingerprint width,
 distance rule and threshold. Use the bottom-up odd-promotion shape from
 `(leaf_index, leaf_count)`, require `leaf_index < leaf_count`, consume all
-expected siblings and reject trailing bytes. The shape fields guide
+expected siblings and reject trailing bytes. Reject a candidate whose
+fingerprint profile does not apply to its canonicalization profile, for
+example a `text/minhash-120` fingerprint on a `bytes/raw` item. A
+conforming builder never commits one. The shape fields guide
 folding and do not attest to the total number of fingerprints. Check that
 the candidate passes the signed profile's threshold against the query
 fingerprint. The verifier obtains the query fingerprint from the claimant

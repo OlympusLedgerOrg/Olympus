@@ -244,6 +244,22 @@ pub enum ContentError {
         threshold: u32,
     },
 
+    /// Bucket entries are not strictly ordered by `(content_key,
+    /// fp_profile_index, segment_index)`, or two different fingerprints claim
+    /// one position.
+    #[error("bucket entries are not strictly ordered or repeat a position")]
+    BucketOrder,
+
+    /// The candidate's fingerprint profile does not apply to its
+    /// canonicalization profile (a text fingerprint on a non-text item).
+    #[error("fingerprint profile {fp:?} does not apply to canonicalization profile {canon:?}")]
+    FpProfileNotApplicable {
+        /// `fp_profile_id`.
+        fp: String,
+        /// `profile_id`.
+        canon: String,
+    },
+
     /// A similarity bucket holds more entries than its `u32` count can frame.
     #[error("similarity bucket exceeds u32 entries")]
     BucketTooLarge,
