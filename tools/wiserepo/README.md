@@ -439,6 +439,16 @@ so they never stated that it returns one page too many. The expectation group wa
 left alone and the sentence reverted: the case is scoring the direction of the
 error, and those reviews did not state it.
 
+A sixth attempt added that direction to the same sentence — "say which way the
+result is wrong for the caller — too high or too low". It fixed the planted case
+(3/3) and held the clean one (3/3) but broke `no-phantom-removed-line` (0/3): on
+the fix-only range the reviews looked for a direction to report and invented one,
+saying "the current implementation will return `lastPage - 1` when the input page
+number is equal to `lastPage`" — the removed code, described as live, which is
+exactly the phantom that case scores. Asking for a direction where there is no
+defect invites one. Reverted, with the planted group still at a stated
+consequence.
+
 `eval/baseline.json` is this `--repeat 3` run (answers in `eval/runs/`), so the
 comparison point is the honest rate rather than a single draw, and it was
 recorded on the prompt the tool now sends. A one-sample run is still allowed; it
