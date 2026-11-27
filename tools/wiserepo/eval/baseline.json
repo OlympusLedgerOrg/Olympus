@@ -1,10 +1,10 @@
 {
-  "recorded_at": "2026-11-25T13:42:53.223Z",
+  "recorded_at": "2026-11-27T19:20:09.316Z",
   "model": "qwen2.5-coder:7b-instruct",
   "provenance": {
-    "git_sha": "2f93aee50d8a17d6d3f3bf54d29226b7cb540287",
-    "git_dirty": false,
-    "prompt_sha256": "bff12c105251f4c02fb4159cc1ff29bff28e3a6652adf2fdeec6ea55f5f5a0fd",
+    "git_sha": "2c8530cb374806ed032de0246e69201f9f0ab27d",
+    "git_dirty": true,
+    "prompt_sha256": "cf158fc313a34d6d4a4a1576797d0b591952010997c593feb1f571ff92b317c9",
     "models": {
       "qwen2.5-coder:7b-instruct": {
         "digest": "dae161e27b0e90dd1856c8bb3209201fd6736d8eb66298e75ed87571486f4364",
@@ -16,18 +16,21 @@
     "qa": {
       "passed": 5,
       "total": 5,
-      "seconds": 64
+      "blocked": 0,
+      "seconds": 74
     },
     "review": {
-      "passed": 1,
+      "passed": 2,
       "total": 3,
-      "seconds": 72
+      "blocked": 0,
+      "seconds": 48
     },
     "summarize": {
       "passed": 1,
       "total": 1,
-      "seconds": 14
+      "blocked": 0,
+      "seconds": 10
     }
   },
-  "answers": "runs/2026-11-25T13-42-53-223Z.json"
+  "answers": "runs/2026-11-27T19-20-09-316Z.json"
 }

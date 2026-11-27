@@ -6,6 +6,8 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import {
+  FIXTURE_PATH,
+  blockedCase,
   buildBaselineRecord,
   buildRunRecord,
   casePassed,
@@ -18,6 +20,7 @@ import {
   suiteScores,
 } from "../bin/eval.mjs";
 import { missingExpectations } from "../src/eval-match.mjs";
+import { PolicyError, decidePaths, refusalMessage } from "../../agent-policy/policy.mjs";
 
 const fixture = (name) =>
   readFile(fileURLToPath(new URL(`../eval/fixtures/${name}`, import.meta.url)), "utf8");
@@ -249,6 +252,78 @@ test("the prompt hash covers the system prompt and the user prompt separately", 
   );
 });
 
+// The review suite could not run at all while its fixture lived at
+// `src/pager.js`: the policy refused the diff, so all three review cases came
+// back BLOCKED and the run scored nothing. Checking the paths against the policy
+// here turns that into a failing test instead of an empty suite.
+test("every golden case and the fixture name only paths the policy allows", async () => {
+  const allowed = (paths, taskClass) => {
+    const { denied } = decidePaths(paths, taskClass);
+    assert.deepEqual(denied, [], `${taskClass} would refuse ${paths.join(", ")}`);
+  };
+
+  allowed([FIXTURE_PATH], "review");
+
+  for (const [taskClass, fileName] of [
+    ["qa", "golden-questions.json"],
+    ["summarize", "golden-summarize.json"],
+  ]) {
+    const cases = JSON.parse(
+      await readFile(fileURLToPath(new URL(`../eval/${fileName}`, import.meta.url)), "utf8"),
+    );
+    for (const item of cases) allowed(item.files, taskClass);
+  }
+});
+
+// A refusal is the agent policy working, not a model result: the case was never
+// asked. Scoring it as a failure would read as a regression, and rethrowing it
+// would end the run before the cases behind it — the failure this harness had.
+test("a policy refusal becomes a blocked record, not a score and not a throw", () => {
+  const denied = [{ path: "crates/olympus-crypto/src/lib.rs", reason: "denied path" }];
+  const error = new PolicyError(refusalMessage(denied), { taskClass: "qa", denied });
+
+  const record = blockedCase("qa", { id: "node-prefix" }, error);
+  assert.equal(record.suite, "qa");
+  assert.equal(record.id, "node-prefix");
+  assert.match(record.blocked, /crates\/olympus-crypto\/src\/lib\.rs \(denied path\)/);
+  assert.deepEqual(record.blocked_paths, denied);
+
+  // Nothing here can pass: there is no answer, no verdict and no `ok`.
+  assert.equal("ok" in record, false);
+  assert.equal("answer" in record, false);
+});
+
+// A blocked case must leave the denominator alone. Counting it in `total`
+// without a pass reports the policy as a model that got every case wrong.
+test("a blocked case is counted beside the score, never in it", () => {
+  assert.deepEqual(
+    suiteScores([
+      { suite: "qa", id: "asked", seconds: 2, ok: true },
+      { suite: "qa", id: "refused", seconds: 0, blocked: "agent policy: …" },
+      { suite: "review", id: "refused", seconds: 0, blocked: "agent policy: …" },
+    ]),
+    {
+      qa: { passed: 1, total: 1, blocked: 1, seconds: 2 },
+      review: { passed: 0, total: 0, blocked: 1, seconds: 0 },
+    },
+  );
+});
+
+// Re-scoring a recorded run must not turn a recorded refusal into a verdict on
+// an answer that was never produced.
+test("re-scoring carries a blocked case through instead of scoring its missing answer", async () => {
+  const goldenById = indexGoldenCases([
+    { suite: "qa", cases: [{ id: "blocked-case", expect: ["x"] }] },
+  ]);
+  const [scored] = await rescoreRecord(
+    [{ suite: "qa", id: "blocked-case", blocked: "agent policy: …", blocked_paths: [] }],
+    goldenById,
+  );
+  assert.equal(scored.blocked, "agent policy: …");
+  assert.equal("ok" in scored, false);
+  assert.equal("verdict" in scored, false);
+});
+
 // The baseline is the comparison point, so it must not quietly become a second
 // copy of the transcript: scores are derived from the cases, and the answers
 // live in the run file the baseline points at.
@@ -259,8 +334,8 @@ test("the run record derives suite scores from the stored cases", () => {
     { suite: "review", id: "c", seconds: 1, ok: true },
   ];
   assert.deepEqual(suiteScores(cases), {
-    qa: { passed: 1, total: 2, seconds: 5 },
-    review: { passed: 1, total: 1, seconds: 1 },
+    qa: { passed: 1, total: 2, blocked: 0, seconds: 5 },
+    review: { passed: 1, total: 1, blocked: 0, seconds: 1 },
   });
 
   const record = buildRunRecord({

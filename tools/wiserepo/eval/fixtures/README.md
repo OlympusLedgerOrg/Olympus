@@ -5,6 +5,14 @@ one state per commit, so every case scores a real two-revision diff of the kind
 `review_diff` is used on. `review` and `summarize` both run inside that single
 repo, so both suites score the same checkout.
 
+The file is committed at **`app/public-ui/src/pager.js`**, not at the repo root:
+`app/public-ui/src/**` is an allowlisted path in
+`tools/agent-policy/policy.json`, and the policy checks the diff's paths before
+any model call. At the old `src/pager.js` the diff was refused, so every review
+case came back `BLOCKED` and the suite scored nothing. The path lives in one
+constant (`FIXTURE_PATH` in `bin/eval.mjs`) and `test/eval.test.mjs` asserts the
+policy still allows it.
+
 | revision | file | state |
 | --- | --- | --- |
 | `HEAD~2` | `pager.before.js` | correct `pageCount`, off-by-one `clampPage` |
