@@ -1,132 +1,41 @@
-# RFC-0000: Content-addressed dataset commitments with near-duplicate proofs
+# RFC-0000: Content-addressed dataset commitments
 
-| Field      | Value                                                              |
-|------------|--------------------------------------------------------------------|
-| Status     | **Draft**                                                          |
-| Author(s)  | Olympus maintainers                                                |
-| Date       | 2026-11-26                                                         |
-| Tracking   | Ligetron feasibility prototype (`olympus-ligetron-prototype`, items 1–4) |
-| Supersedes | None. Adds a format next to ADR-0027; does not replace it.        |
+| Field | Value |
+|---|---|
+| Status | **Draft** |
+| Author(s) | Olympus maintainers |
+| Date | 2026-11-26 |
+| Supersedes | None. Complements ADR-0027. |
 
 ## Summary
 
-A specification, without code, for committing an AI training dataset version
-so that anyone holding a copyrighted work can get a verifiable answer to:
+A rights holder can derive a content key from their copy of a work and verify
+whether that exact canonical item appears in a signed dataset version. The
+committer builds a BLAKE3 sparse Merkle tree. The verifier checks a compact
+binary path against the signed header. One offline bundle can share the
+header and ledger evidence across many answers.
 
-1. **Exact:** is this work, after a stated canonicalization, in dataset `D`
-   version `v`? (membership / non-membership)
-2. **Near-duplicate:** does the committed fingerprint index hold a candidate
-   *close to* this work in `D` version `v`, even if its bytes differ?
-   (similar-membership; similar-non-membership is specified but outside v1,
-   see §Guarantee classes)
+ADR-0027 keys records by a committer-chosen record ID. This RFC keys items by
+their content and canonicalization profile, so the claimant can compute the
+key independently.
 
-Each dataset version is committed as a content-keyed sparse Merkle tree of
-items plus a similarity index of locality-sensitive fingerprints. Both are
-bound into one global root. A versioned header carries that root and is
-signed with an ADR-0035 `SignatureEnvelopeV3`. The header names its suite:
-v1 ships on the existing `ed25519` suite and moves to the hybrid Ed25519 +
-ML-DSA-65 suite once an ML-DSA-65 implementation is accepted (§7). Proofs exist in
-two forms over the same bytes. A *plain* proof is a Merkle path. It is cheap,
-and checking it against a known root needs no signature, so its strength
-against a quantum adversary is that of BLAKE3's second-preimage and
-collision resistance. Trusting *which* root is the dataset's still rests
-on the header signature and its ledger timestamp. A *zero-knowledge* proof
-runs in Ligetron and reveals nothing beyond the yes/no answer. Every hash,
-including those inside the zero-knowledge statements, is BLAKE3.
+## Guarantee classes and scope
 
-## Guarantee classes
+- **A — commitment.** M1-open and N1 establish exact membership and absence
+  under a selected canonicalization profile. D1 and D2 compose these answers
+  across versions. The ledger evidence binds the signed header in time.
+- **B — candidate retrieval.** See the [similarity companion](dataset-similarity.md)
+  for fingerprint profiles, plain M2, and the limits of approximate matching.
+- **C — recorded statements.** MD1 proves what the committer recorded about
+  one occurrence. Recorded provenance, licenses and opt-out state remain
+  attributable statements. D1 is evidence of removal from the committed
+  dataset only after the version chain and fork checks pass.
 
-This format provides three kinds of guarantee. They differ in strength and
-MUST be specified, documented and described to users separately. A tool or
-report built on this format MUST NOT present a weaker class as if it were a
-stronger one.
-
-| Class | What it establishes | Strength | Statements |
-|---|---|---|---|
-| **A. Commitment** | Which exact canonical items a signed dataset version contains, and which it does not. Which items changed between two versions. | Cryptographic: reduces to BLAKE3 and the header signature | M1, N1, D1, D2 |
-| **B. Candidate retrieval** | That the committed fingerprint index holds a segment within a stated distance of the query (M2), or holds none among the buckets the query maps to (N2). | Cryptographic *about the committed index*. Whether a fingerprint match means a human-recognizable copy is an **operating characteristic** with measured recall and precision, not a guarantee. | M2, N2 |
-| **C. Recorded statements** | What the committer stated about each occurrence: source, license, retrieval time, opt-out status, repetition count. | Attributable: signed and ledger-timestamped. **Not** evidence that the statement is true. | M1-open with metadata |
-
-Consequences that every implementation and document MUST respect:
-
-- **N2 claims less than its name suggests.** A valid N2 proof means *no
-  candidate was found under this fingerprint index*. It does **not** mean
-  *no item satisfying a similarity predicate exists*. LSH buckets are a
-  probabilistic retrieval structure, so a near-duplicate can sit in
-  buckets the query does not touch (§9 gives the miss rates). N2 also
-  relies on the committer having indexed every item honestly (trust
-  assumptions 1–2). For this reason **N2 is not part of v1** (§Scope). It
-  stays specified so that its encoding is fixed, and it may be enabled
-  later under the label "no candidate under index", never "no
-  near-duplicate".
-- **Thresholds are operating parameters.** `m ≥ 84` of 120 and Hamming `≤ 31`
-  are published with their measured recall and precision on named
-  evaluation sets (§Unresolved 2). They are not security parameters, and a
-  proof that a fingerprint passes or fails them says nothing about whether a
-  court or a person would call the two works copies.
-- **Class C is evidence, not compliance.** `opt_out_status = 1` records
-  that the *committer's own records* marked the source as opted out. It is
-  not proof that a valid opt-out request was made, and `0` is not proof that
-  none was. No statement in this format decides a legal question. It fixes,
-  attributably and in time, what the committer held and what it said.
-- **Wording in derived documents.** Compliance mappings, product copy and
-  reports MUST describe class C results as "evidence of recorded provenance"
-  or "evidence of recorded opt-out state", never as "proof of provenance". A
-  D1 result may be described as "evidence the work was removed from the
-  committed dataset" only when its header chain and fork check also passed
-  (§10). It is never "proof an opt-out was honoured".
-
-## Scope
-
-This RFC fixes the encoding of everything below, so that later stages need
-no format change. Only the **v1** column may ship as a supported feature.
-
-| Area | v1 | Later, gated |
-|---|---|---|
-| Statements | M1, M1-open, N1, D1, D2 (class A); M2, plain only (class B) | N2 as "no candidate under index"; every zero-knowledge statement |
-| Extraction | `file/whole`, `jsonl/field` | `parquet/column`, `webdataset/member` (dependency and license review first) |
-| Canonicalization | `bytes/raw`, `text/utf8-nfc` | `image/rgba8` (pinned decoder, license review first) |
-| Fingerprints | `text/minhash-120`, after the threshold study (§Unresolved 2) | `image/pdq-256` |
-| Signing | `ed25519` suite | `hybrid-ed25519-ml-dsa-65`, plus re-signing. This is a separate cryptographic milestone that needs an accepted, independently tested ML-DSA-65 implementation (§7). |
-| Audit | full rebuild, sampled audit | — |
-| Verifiers | Rust, JavaScript, Python, verify-only, against shared vectors | — |
-
-Zero-knowledge work proceeds in this order, and each step starts only if
-the previous step's measurements justify it:
-
-1. Benchmark Ligetron path cost at depths 30–40 on real hardware.
-2. Fix the exact public/private boundary (§8) from those numbers.
-3. Prototype M1/N1, behind a cargo feature and not in production.
-4. Only then consider M2.
-
-N2 in zero knowledge stays deferred. The image estimate alone is about
-2.6 h per query (§8), and N2 is out of v1 scope in any form.
-
-## Motivation
-
-ADR-0027 already commits datasets, but it keys each record by
-`record_key("olympus.dataset-record", record_id, version)`, with `record_id`
-chosen by the committer. A rights holder does not know the committer's
-`record_id`, so "is *my work* in this dataset?" cannot be asked. Exclusion in
-ADR-0027 means "no record with this ID", not "no copy of this content".
-
-A copy also rarely matches byte for byte. It may be re-encoded, resized,
-reformatted, or embedded as an excerpt in a larger web page. An exact-hash
-commitment alone answers the question rights holders care about almost
-never.
-
-The Ligetron prototype (items 1–4) established:
-
-- Merkle membership and non-membership statements prove at depth 20.
-- BLAKE3 can be computed inside a Ligetron relation. Each additional
-  compression cost between about 0.4 s and 1.6 s on software Vulkan; these
-  are single noisy samples.
-- Proving over raw document bytes grows linearly with size, about 15 s per
-  KiB, so whole items must **never** be hashed in-circuit.
-
-This RFC is shaped by those results. Items are hashed outside any proof.
-Proofs only touch fixed-size digests and fingerprints, so proof cost depends
-on dataset size (tree depth) and never on item size.
+The core v1 profiles are `file/whole`, `jsonl/field`, `bytes/raw` and
+`text/utf8-nfc`. Ed25519 is the launch signing suite. The hybrid suite needs
+a separate implementation and review. Rust, JavaScript and Python verifiers
+share conformance vectors. [Research notes](dataset-proof-research.md) track
+additional profiles, private proofs and measurements.
 
 ## Terms
 
@@ -155,14 +64,12 @@ lines, Parquet rows or tar members, and two committers reading the same
 files with different field choices would commit different items. An
 extraction profile pins that step.
 
-v1 extraction profiles:
+Core v1 extraction profiles:
 
 | `extraction_id` | v | Parameters | Items | Occurrence provenance |
 |---|---|---|---|---|
 | `file/whole` | 1 | none | Each file is one item. | `source_uri` = the file's path within the dataset |
 | `jsonl/field` | 1 | `field` (a JSON Pointer, RFC 6901), `uri_field`, `license_field` (both optional pointers) | Each line is parsed as one JSON object. The item is the UTF-8 encoding of the string at `field`. A line that is not an object, or whose `field` is absent or not a string, is rejected. | values at `uri_field` / `license_field`, else empty |
-| `parquet/column` | 1 | `column`, `uri_column`, `license_column` (optional) | Each row is one item. The item is the `column` value, which must be `BYTE_ARRAY` (`STRING` or binary). A null is rejected. | values in `uri_column` / `license_column`, else empty |
-| `webdataset/member` | 1 | `extension` (for example `jpg`, `txt`) | Each tar member whose name ends in `.extension` is one item, grouped by WebDataset key | `source_uri` = `<tar path>#<key>` |
 
 Rules:
 
@@ -175,7 +82,7 @@ Rules:
   source files. The sidecar file list maps each source file to its
   extraction table index. That list is committed only by reference, like
   ADR-0027's record index, and an auditor uses it for the full rebuild
-  (Security §2).
+  (Security and audit).
 - Extraction is a committer-side step. A rights holder never runs it, because
   they query with their own copy of the work, starting at §1.
 
@@ -193,7 +100,7 @@ items a file holds:
 ### 0a. Profile reproducibility
 
 Every profile, whether extraction (§0), canonicalization (§1) or
-fingerprint (§1a), is defined by two separate things:
+fingerprint (see the [similarity companion](dataset-similarity.md)), is defined by two separate things:
 
 - **`(id, version)` names the output function.** It is the bytes a
   conforming implementation must produce, and the inputs it must reject.
@@ -238,62 +145,19 @@ Rules (MUST):
 A canonicalization profile maps raw bytes to canonical bytes, or **rejects**
 them. A rejected item is never silently repaired: it is excluded from the
 version and counted in the header's `rejected_count`. Each profile pins its
-implementation. A decoder change, such as a different JPEG IDCT, is a new
-`profile_version`, because the canonical bytes would differ.
+implementation. A change to the canonical bytes requires a new `profile_version`.
 
-v1 profiles:
+Core v1 profiles:
 
 | `profile_id` | v | Canonical bytes |
 |---|---|---|
 | `bytes/raw` | 1 | The raw bytes, unchanged. |
 | `text/utf8-nfc` | 1 | Reject invalid UTF-8. Strip one leading U+FEFF. Convert CRLF and lone CR to LF. Apply Unicode 17.0.0 NFC. No trimming, case change or whitespace collapsing. |
-| `image/rgba8` | 1 | Decode with the pinned decoder. Reject multi-frame images. Apply EXIF orientation. Convert to 8-bit sRGB RGBA (opaque if there is no alpha). Discard all metadata. Bytes = `"RGBA8\0" ‖ u32_be(width) ‖ u32_be(height) ‖ pixels, row-major, top-to-bottom`. |
 
 Exact matching is defined only over canonical bytes. Two items are the "same"
 exactly when one profile produces identical canonical bytes for both. Any
-looser notion belongs to §1a and §9–10.
+looser notion belongs to the [similarity companion](dataset-similarity.md).
 
-### 1a. Fingerprints (the near-duplicate layer)
-
-A fingerprint profile emits zero or more **segment fingerprints** per item.
-Using segments rather than one fingerprint per item is what catches an excerpt
-inside a larger item, such as a book chapter embedded in a crawled page.
-
-| `fp_profile_id` | v | Fingerprint | Distance | Default threshold |
-|---|---|---|---|---|
-| `text/minhash-120` | 1 | 120 × u32 MinHash per segment | matching slots `m` (Jaccard ≈ m/120) | `m ≥ 84` (J ≈ 0.7) |
-| `image/pdq-256` | 1 | 256-bit PDQ hash, one segment | Hamming | `≤ 31` |
-
-`text/minhash-120` v1:
-
-- Normalize with Unicode 17.0.0 NFKC, then full case folding (same version). Replace every maximal
-  run of characters outside Unicode categories L* and N* with one U+0020,
-  then trim.
-- Split into tokens on U+0020. Segments are windows of 256 tokens with stride
-  128. An item shorter than 256 tokens is one segment. An item with fewer than
-  5 tokens gets no fingerprint.
-- Shingles are each run of 5 consecutive tokens, joined with U+0020. Each
-  shingle maps to
-  `x = u64_be(BLAKE3.derive_key("olympus 2026-11 dataset minhash-shingle v1", shingle)[0..8]) mod (2^61−1)`.
-- Slot `i ∈ [0,120)` holds the minimum over the segment's shingles of
-  `((a_i·x + b_i) mod (2^61−1)) mod 2^32`. The coefficients `(a_i, b_i)` are
-  read in order from the BLAKE3 XOF of
-  `derive_key("olympus 2026-11 dataset minhash-coefficients v1", "")`, as
-  u64 values reduced mod `2^61−1`, with `a_i ≠ 0` (skip zeros).
-- The fingerprint is the 120 slots in order, each `u32_be` (480 bytes).
-
-`image/pdq-256` v1 is the reference PDQ algorithm, with the implementation
-pinned by the profile. Items whose PDQ quality score is below 50 get **no**
-fingerprint, because flat or near-blank images cluster and would flood the
-buckets. The fingerprint is 32 bytes, MSB first. The committer stores only
-the PDQ hash of the canonical orientation. A *querier* SHOULD compute the
-eight dihedral variants (rotations and mirror images) of their image's hash,
-which PDQ derives cheaply from one DCT, and query each one, because mirroring
-is a common transformation that PDQ does not absorb.
-
-An item with no fingerprint is still committed exactly. The header counts
-these items (`unfingerprinted_count`) so that a verifier can see how much of
-the dataset falls outside near-duplicate coverage.
 
 ### 2. Dataset-item commitment
 
@@ -324,11 +188,11 @@ bytes (two BLAKE3 compressions) and needs no framing.
 one canonicalization profile has the same `content_key` (§3), and so becomes
 **one** leaf. The builder merges them: `occurrence_count ≥ 1` is the number
 of merged occurrences, and their fingerprints are identical by construction
-because fingerprints are computed from the canonical item. The count is
-committed because repetition matters. A work that appears ten thousand times
-is far more likely to be memorized than one that appears once. `item_count`
-in §5 counts leaves; the header's `occurrence_total` (§6) is the sum of every
-leaf's `occurrence_count`.
+because fingerprints are computed from the canonical item when enabled.
+Exact-only versions use an empty fingerprint table, `H_fp("")` for each
+item's fingerprint root, and `H_s-empty("")` for the similarity root.
+`item_count` in §5 counts leaves. The header's `occurrence_total` (§6) sums
+the leaves' occurrence counts.
 
 **Provenance metadata.** `meta_root` commits per-occurrence provenance: the
 source URI, the license string as found, the retrieval time, and an
@@ -355,7 +219,7 @@ on which side, is computed from `(j, n)`, never taken from the proof.
 *Completeness.* No single proof can show that the set is complete. A
 committer could have built `meta_root` over fewer than `occurrence_count`
 entries, and a disclosure of one entry would not reveal that. A full rebuild
-or a sampled audit (Security §2–3) checks completeness, and is **required**
+or a sampled audit (Security and audit) checks completeness, and is **required**
 before anyone may rely on the absence of an undisclosed source.
 
 *Blinder lifecycle (MUST).*
@@ -383,7 +247,7 @@ before anyone may rely on the absence of an undisclosed source.
 `opt_out_status = 1` on a committed item is not a violation of this format.
 It is a signed, timestamped record that the committer's *own records*
 marked the source as opted out when it included the item. It is not proof
-that a valid opt-out request was made (§Guarantee classes, class C).
+that a valid opt-out request was made (Guarantee classes and scope).
 
 **Metadata privacy.** Source URIs, license strings and retrieval times can
 contain personal data, embedded credentials (`https://user:token@…`),
@@ -399,11 +263,11 @@ them as confidential by default:
   hashing candidates. With it, a sibling hash reveals nothing about its
   entry (lifecycle above).
 - **Disclosure levels.** The committer chooses per request:
-  (a) none, which is M1 or M1-open without metadata;
+  (a) none, which is M1-open without a metadata opening;
   (b) *selective*, where one entry is opened through MD1 (§10), and other
   entries stay hidden;
   (c) *auditor*, where the full sidecar for a sampled or complete set of
-  items is given to an auditor under the audit terms (§Unresolved 4).
+  items is given to an auditor under the audit terms.
   Publishing everything is not a level this format defines.
 - **Sanitize before committing.** Every v1 extraction profile applies the
   fixed policy `uri-sanitize/1` (below) to `source_uri`. The policy is part
@@ -455,8 +319,7 @@ The tree is a keyed sparse Merkle tree: an item's position is determined by
 the bits of its key, so an in-order traversal is sorted by key. Nobody has to
 prove that the tree is sorted, and nobody has to prove it is full. This
 removes the external sortedness and fullness preconditions in the
-prototype's boundary modes (prototype item 5). Non-membership never needs
-neighbouring items.
+prototype's boundary modes (prototype item 5). A non-membership path can reveal one neighboring key and commitment.
 
 ### 4. Leaf and node encodings (`olympus-dataset-tree/v1`)
 
@@ -474,7 +337,8 @@ subtree(S, pfx)  = E               if S empty
 Each `leaf` and `node` hash is exactly **one** BLAKE3 compression, because a
 64-byte keyed-hash input is a single block. That is why `keyed_hash` is used
 here instead of the ASCII-prefix framing (`OLY:NODE:V1|`), which costs two
-compressions. In-circuit cost per level is the dominant term (§8).
+compressions. The [research notes](dataset-proof-research.md#private-proof-experiments)
+detail the impact on private proofs.
 
 Verifier rules (MUST):
 
@@ -490,10 +354,10 @@ Verifier rules (MUST):
   is a leaf or a node. They do not affect soundness: each position holds
   exactly one value, so the prefix check alone makes membership and
   non-membership sound. They break determinism, and the auditor's full
-  rebuild (Security §2) detects that. Builders MUST emit the canonical tree.
+  rebuild detects these shapes. Builders MUST emit the canonical tree.
 - **Depth.** Accept `0 ≤ d ≤ 256 − p` below the partition root.
 
-The similarity index (§9) uses the same tree with its own domains
+The [similarity index](dataset-similarity.md#similarity-index) uses the same tree with its own domains
 (`H_sleaf`, `H_snode`, `E_s`) so that an item proof and an index proof can
 never be swapped.
 
@@ -597,98 +461,67 @@ real one. And a relying party sets its own minimum suite, and SHOULD require
 the hybrid suite for any version created after hybrid signing becomes
 available. Committers SHOULD re-sign their live versions under the hybrid
 suite once it ships. A re-signed header is a new header over the same
-`global_root`, and old proofs stay valid against it.
+`global_root`, so a verifier can use the same proof body with the new authenticated header.
+A bundle referencing the old header digest must update its reference.
 
-### 8. Ligetron public/private input boundary
+### 8. Compact proof bodies (`olympus-dataset-proof/v1`)
 
-All four statements share these rules:
-
-- **Public:** the `global_root` fields needed to recompute it in-circuit
-  (`dataset_id`, `version`, `p`, `item_count`, `occurrence_total`, the three
-  table digests, and the sub-root not being opened), plus the query. The verifier checks
-  the signed header outside the circuit and takes these values from it.
-- **Private:** paths, terminals, commitments, fingerprints of committed
-  items and bucket contents.
-- Byte-length checks use the argument layout (`args_len_get`), as in the
-  prototype's `doc.cpp`. A shape violation fails a constraint and returns
-  before any fixed-size buffer is read.
-- No item bytes enter any circuit.
-
-Estimated BLAKE3 compressions per statement, for `N` items and `2^p`
-partitions. The path below a partition root has expected depth about
-`log2 N − p + 1` for random keys. Above it sit one partition-root hash and
-`p` top-tree levels, so the partition count cancels out. The leaf costs 1,
-`item_commitment` 2 (114 bytes) and `global_root` about 4 (about 250 bytes,
-depending on `dataset_id`):
-
-| Statement | Compressions (≈) | Notes |
-|---|---|---|
-| exact membership / non-membership | `log2 N + 9` | path, partition, top tree, leaf, item commitment, global root |
-| similar membership | `log2 N + log2 S + 9 + ⌈L_fp / 64⌉` | `S` = the item's segment count; `L_fp` = fingerprint-leaf preimage, 486 B text / 38 B image |
-| similar non-membership | `b · (log2 N' + 2) + ⌈Σ bucket bytes / 64⌉ + 4` | `b` bands; `N'` = distinct band keys; bucket entry 518 B text / 70 B image |
-
-Worked figures at `N = 10^9`, using a conservative 1.5 s per compression on
-software Vulkan (the upper end of prototype item 4's samples):
-
-| Statement | Assumptions | Compressions | Time |
-|---|---|---|---|
-| exact (M1, N1) | — | ≈ 39 | ≈ 1 min |
-| similar membership (M2), text | `S ≈ 4` | ≈ 49 | ≈ 1.2 min |
-| similar non-membership (N2), text | about 4 segments per item, so `N' ≈ 20 · 4·10^9 ≈ 2^36`; buckets hold ≈ 1 entry | ≈ 20 · 38 + 20 · 9 + 4 ≈ 950 | ≈ 25 min |
-| similar non-membership (N2), image | every 24-bit band value occupied, so `N' ≈ 64 · 2^24 = 2^30`; ≈ 60 entries per bucket (§9) | ≈ 64 · 32 + ⌈64 · 60 · 70 / 64⌉ + 4 ≈ 6,250 | ≈ **2.6 h** |
-
-The image N2 figure is dominated by bucket contents, not paths, so it grows
-linearly with dataset size, at roughly 4,200 compressions per 10^9 items.
-These are **estimates** extrapolated from prototype measurements.
-§Unresolved 1 requires measuring them.
-
-### 9. Similarity index
-
-For each fingerprint profile with `b` bands of `r` units:
+The enclosing format selects the proof version. Raw digests and sibling
+hashes are exactly 32 bytes. The verifier uses the authenticated header's
+`p` and recomputes the intended query key from the work and profile when it
+has the work. It checks any supplied query key against its intended query.
 
 ```text
-band_value(F, β) = text:  slots [β·r, (β+1)·r) of F, each u32_be                (r = 6, b = 20)
-                   image: the r = 24 bits at positions perm_β[0..24) of F, MSB-first, zero-padded to 3 bytes
-                          (perm_β drawn without replacement per band from the BLAKE3 XOF of
-                           derive_key("olympus 2026-11 dataset pdq-bands v1", ""); bands may overlap; b = 64)
-band_key(F, β)   = BLAKE3.derive_key("olympus 2026-11 dataset band-key v1",
-                                     lp(fp_profile_id) ‖ u32_be(fp_profile_version) ‖ u16_be(β) ‖ band_value(F, β))
-bucket(key)      = all (content_key, fp_profile_index, segment_index, fingerprint) whose band_key = key,
-                   sorted by (content_key, fp_profile_index, segment_index); no duplicates
-bucket_commit    = H_bucket(u32_be(count) ‖ for each entry: content_key ‖ u16_be(fp_profile_index) ‖ u32_be(segment_index) ‖ fingerprint)
-similarity_root  = olympus-dataset-tree/v1 over (band_key → bucket_commit), with the s-domains (§4), no partitions
+M1-open  = u8(1) ‖ key ‖ item_preimage ‖ path
+N1       = u8(2) ‖ query_key ‖ terminal ‖ path
+terminal = u8(0) for E, or u8(1) ‖ neighbor_key ‖ neighbor_commitment
+path     = u64_be(partition_count) ‖ u16_be(d) ‖ bitmap
+           ‖ present_partition_siblings ‖ top_siblings
 ```
 
-Detection probability for a near-duplicate is the chance that it shares at
-least one band with the query:
+- `item_preimage` is the 114-byte preimage in §2. M1-open reconstructs the
+  terminal from the key and preimage, so it sends neither a second key nor a
+  terminal commitment. The verifier derives the key again from the opened
+  digest and the header's named profile.
+- `bitmap` is `ceil(d/8)` bytes. Bit 7 of byte 0 represents the first
+  in-partition level, with bits consumed most-significant first. A zero bit
+  substitutes `E`; a set bit consumes one raw sibling hash. Hashes appear
+  in root-to-terminal order below the partition boundary. The exactly `p`
+  top-tree siblings follow in terminal-to-root order and carry no bitmap.
+  Directions come from the corresponding key bits.
+- Reject unknown tags, depth beyond `256 − p`, nonzero unused bitmap bits,
+  explicit `E` at a set bit, missing bytes and trailing bytes. Fold using
+  all §4 checks. An N1 neighbor must differ from the query key. A plain
+  N1 neighbor opening reveals the neighbor's key and commitment. Plain
+  M1-open reveals the commitment preimage, including the occurrence count
+  and the fingerprint and metadata roots.
+- Exact verification takes the signed header's `item_root` as its expected
+  root. Authenticating a path against a supplied root and authenticating
+  that root as a specific dataset version are both required for a dataset
+  answer.
 
-| text, b=20 r=6: Jaccard | 0.5 | 0.6 | 0.7 | 0.8 | 0.9 |
-|---|---|---|---|---|---|
-| P(detected) | 0.27 | 0.62 | 0.92 | 0.998 | > 0.9999997 |
+#### Bundle sharing and multiproofs
 
-| image, b=64 r=24: Hamming distance | 10 | 20 | 31 |
-|---|---|---|---|
-| P(detected) | ≈ 1 | 0.9999 | 0.92 |
+An offline bundle includes each signed header and its ledger evidence once.
+Each answer references a header by `header_digest`. D1/D2 also require the
+chain and fork-check inputs described in §10. Header and evidence framing
+remains a draft transport detail and is outside the single-body encoding
+above. Caching a verified header is an optional transport optimization.
 
-These probabilities are taken over the content. They assume independent
-MinHash slots, and uniformly distributed PDQ bits with each band's 24
-positions sampled without replacement. With about 10^9 random-looking fingerprints, an unrelated item lands
-in a given image bucket about `10^9 / 2^24 ≈ 60` times. Text buckets are
-near-empty unless documents share boilerplate.
+For a batch under one header, use a Merkle multiproof. Sort opened terminal
+addresses by key prefix, group them by partition and build their union of
+paths. The frontier consists of the child positions immediately outside
+that union. Traverse left before right, using one hash per frontier
+position. Below a partition boundary a bitmap omits frontier hashes equal
+to `E`. Use each partition count once. Fold the covered partition roots
+through a shared top-tree frontier. Query answers may reference the same
+terminal when each independently satisfies its membership or absence
+condition. The verifier derives positions from the terminal depths and
+query keys, rejects inconsistent or overlapping terminals, and checks
+that each answer follows its own key path. The batch wire encoding and
+vectors remain implementation work. [Compact Merkle Multiproofs](https://arxiv.org/abs/2002.07648)
 
-### 10. Proof statements
-
-Below, *"opens to R"* means that the path folds, under §4–5's rules
-including the prefix and canonical-shape checks, to root `R`.
-
-**M1 — exact membership.** Public: global-root fields, `content_key`,
-`profile_index`. Private: partition path, `item_commitment` preimage (minus
-the content digest when hidden). Statement: `leaf(content_key, c)` opens to
-`item_root`, and `c` commits `profile_index`. Variant M1-open makes
-`content_digest`, `fp_set_root`, `occurrence_count` and `meta_root` public,
-so a claimant can check the committed fingerprints against their own copy and
-learn how often the work appears. Individual provenance entries are opened
-only through MD1.
+### 10. Metadata and version change proofs
 
 **MD1 — selective metadata disclosure.** There is no standalone metadata
 path format. A metadata path on its own proves nothing about which item it
@@ -716,58 +549,18 @@ are then validated. An `opt_out_status` outside {0, 1, 2}, or non-NFC
 strings, are rejected. MD1 establishes a class C fact only: the committer
 recorded this entry for one occurrence of this item.
 
-**N1 — exact non-membership.** Public: global-root fields, `content_key`.
-Private: the path along `content_key`'s bits. Statement: the path ends at
-either (a) `E`, or (b) `leaf(k′, c′)` with `k′ ≠ content_key`, where `k′`
-passes the prefix check; it opens to `item_root`. Because a position holds
-exactly one value, (a) or (b) excludes `content_key` from the whole version.
-No per-partition bundle is needed, because the partition is fixed by the
-key's first `p` bits.
-
-**M2 — similar membership.** Public: global-root fields, `fp_profile_index`,
-query fingerprint `F_q`, threshold `τ`. Private: one item's leaf, path,
-commitment, and one segment fingerprint `F` with its `fp_set_root` path.
-Statement: the item opens to `item_root`, `F` is in its `fp_set_root`, and
-`distance(F, F_q)` satisfies `τ` (matching slots `≥ τ`, or Hamming `≤ τ`).
-This reveals that a close item exists, and nothing about which item it is.
-
-**N2 — similar non-membership.** Public: global-root fields,
-`fp_profile_index`, `F_q`, `τ`, and the `b` band keys of `F_q`. The verifier
-recomputes the band keys from `F_q`, so they are not derived in-circuit.
-Private: per band, a path in the similarity tree and, if present, the
-bucket. Statement: for each band key, either (a) it is absent (N1 shape over
-`similarity_root`), or (b) its `bucket_commit` opens to `similarity_root`
-and **every** entry's fingerprint fails `τ` against `F_q`. Meaning:
-*no committed segment that shares any LSH band with the query is within
-`τ`*. This is a deterministic fact about the committed index, and it is
-all an N2 proof may be reported as: "no candidate under index". §9's
-detection probabilities estimate how often a real near-duplicate would
-still be missed, assuming random-looking fingerprints and an honest,
-complete index. They are a measured property of the fingerprint method,
-not part of what the proof establishes (§Guarantee classes). **Not in v1.**
-
 **D1 — removal between versions.** Public: two verified headers `h_old`
-and `h_new` and `content_key`. Statement: M1 against `h_old`'s `item_root`
+and `h_new` and `content_key`. Statement: M1-open against `h_old`'s `item_root`
 and N1 against `h_new`'s `item_root`, under the same canonicalization
 profile. D1 establishes a class A fact: the canonical work was in the
 committed old version and is in no position of the committed new one.
-Together with a verified header chain (below), it is *evidence* that an
-opt-out or takedown was reflected in the committed dataset. It is not proof
-that the request was honoured in any wider sense. It says nothing about
-copies that differ in canonical bytes (showing those removed would need N2,
-which is outside v1), about other datasets
-or versions outside the chain, or about models already trained (trust
-assumption 5). **D2 —
-addition** is the reverse (N1 old, M1 new). Neither needs a new primitive.
-The verifier also checks the header chain: `h_new` must reach `h_old`
-through `parent_header_digest` links. A committer could still answer a
-removal request with a fork, a sibling version that drops the work while the
-version actually used for training keeps it. Every header is in the
-insert-only ledger, though, and a fork shows there as two headers naming the
-same parent (§6). So a relying party also checks, from the ledger shard,
-that each header on the chain is the only child of its parent, and treats a
-fork as a finding in its own right. A *near-duplicate* removal is the same pairing
-with M2 and N2.
+**D2 — addition** reverses the openings (N1 old, M1-open new).
+For both statements, `h_new` must reach `h_old` through authenticated
+`parent_header_digest` links within the same dataset and ledger shard.
+For a removal claim, the relying party also checks from the ledger shard
+that each header on the chain is its parent's only published child as of
+the relied-on checkpoint. A bundle carrying a header chain by itself
+supplies no evidence about omitted sibling headers.
 
 The chain says that versions follow each other. It does not say which items
 changed. A committer MAY publish a diff commitment beside the header, using
@@ -776,11 +569,6 @@ ADR-0027's construction under its own domain:
 with `op` = 0 for removed and 1 for added. That lets an auditor check the
 diff against both trees in one pass. It is optional because D1 and D2 do
 not depend on it.
-
-A long work, such as a book, is queried per segment. A whole-work claim is a
-bundle of per-segment proofs against one `global_root`: a few hundred plain
-proofs, which is cheap, or the same number of zero-knowledge proofs, which
-is expensive (§Drawbacks).
 
 ### 11. Domain-separation rules
 
@@ -840,148 +628,24 @@ cannot be seen in a single proof.
 | reused blinder | a dataset version in which two entries share a blinder | duplicate blinder | builder, audit rebuild |
 | incomplete set | `meta_root` built over `n′ < occurrence_count` entries | set size ≠ `occurrence_count` | audit rebuild |
 | sanitization | a URI carrying userinfo and each listed parameter, with mixed case and percent-encoding | output equals the vector byte for byte | builder conformance |
-| item/version transplant | an M1 or N1 proof verified against a header with a different `dataset_id`, `version` or profile table | `global_root` mismatch | every verifier |
+| item/version transplant | an M1-open or N1 proof verified against a header with a different `dataset_id`, `version` or profile table | `global_root` mismatch | every verifier |
 | prefix check, canonical shape, depth | §4's three rules, each violated once | the specific rule | every verifier |
 
-## Security & invariant impact
+Compact encoding vectors also cover both N1 terminals, depth 0 and 256,
+zero and nonzero top paths, omitted empty siblings, nonzero bitmap
+padding, explicit empty hashes, unknown tags, truncation and appended bytes.
+Verify that wire round-trips preserve the original root and exact answer.
 
-No change to any ledger leaf, node, key, checkpoint, circuit or ceremony. The
-dataset tree is a separate, client-built structure, as in ADR-0027. The only
-ledger touchpoint is an ordinary file ingest. Signatures reuse
-`SignatureEnvelopeV3` without modification.
+## Security and audit
 
-**What a verifier must still trust.** These limits are part of what the
-format means, and are not bugs to be fixed later:
+The dataset tree is separate from the ledger. It uses ordinary ingest for
+the signed header and reuses `SignatureEnvelopeV3`. A full audit rebuilds
+the extraction, canonical items, sidecars and roots. A sampled audit
+opens drawn items and their source data so an auditor can check fidelity.
+The committed set documents the version that the committer identified.
+It provides no evidence by itself about which data a model used in training.
 
-1. **Honest fingerprints.** Proofs show that committed fingerprints are, or
-   are not, near the query. They do not show that a committed fingerprint
-   was computed correctly from its item. A committer could store a wrong
-   fingerprint for a work it holds. The defences are that a wrong
-   fingerprint is *attributable* (it sits under a signed header and a
-   ledger timestamp), that M1-open lets a holder of an exact copy check it,
-   and that sampled audits (3 below) check it. Removing this trust needs
-   in-circuit fingerprint recomputation from canonical bytes. That looks
-   feasible for short text and is impractical for decoded images (§Unresolved 3).
-   **Provenance metadata and occurrence counts are trusted the same way.**
-   The format proves what the committer *stated* about sources, licenses,
-   opt-out status and repetition, not that the statement is true. A false
-   statement is signed, timestamped and attributable, and a sampled audit
-   that re-runs extraction (§0) over the opened source files detects it.
-2. **Complete index.** N2 shows absence only from `similarity_root`. The
-   index is a deterministic function of the item set and its fingerprints,
-   so an auditor holding the record index rebuilds both roots bit for bit,
-   which the canonical-shape rule makes possible. Nobody else can check
-   completeness.
-3. **Sampled audits.** An auditor picks `k` random content keys or positions
-   from the published partition roots. The committer must open those items,
-   meaning canonical bytes and an M1-open proof, so their fingerprints and
-   bucket entries can be checked. Undetected cheating on a fraction `f` of
-   items survives with probability `(1 − f)^k`.
-4. **Ordinary transformations only.** LSH guarantees cover re-encoding,
-   resizing, formatting and light edits. A committer who deliberately alters
-   works to evade public, fixed fingerprint functions will succeed. No
-   hash-based scheme prevents that. It is misconduct the signed record
-   makes attributable after the fact.
-5. **Commitment, not training.** A signed root proves which dataset was
-   committed, and when. It does not prove a model was trained on exactly
-   that set.
-
-**Query exposure.** Content keys are deterministic and independent of the
-dataset, which is what lets a rights holder compute one. The same property
-makes every answer an oracle. Anyone who can obtain an M1 or N1 answer for
-an arbitrary work learns whether the dataset contains it. That can reveal
-confidential contents, collection strategy, or the use of sensitive
-material. Even a non-membership proof gives away information: a plain N1
-proof discloses one neighbouring `content_key`, which a holder of that work
-can recognize. This RFC defines proofs, not a query service, and treats
-exposure as follows:
-
-- **Proofs are produced by the committer.** The committer alone holds the
-  record index. No Olympus node answers content queries for a dataset it
-  did not build, and the ledger holds only the header.
-- **A query service is a deployment decision**, and is expected to
-  authenticate requesters, rate-limit them, and log queries. A committer may
-  instead distribute proofs for a list of works, such as a rights holder's
-  catalogue, without running any interactive service.
-- **Leaked neighbours.** Where a disclosed neighbouring key is itself
-  sensitive, the committer answers with a zero-knowledge proof (once one
-  exists) instead of a plain one. The salted-key mode (§Unresolved 5) would
-  remove the oracle for outsiders entirely, at the cost of rights holders
-  needing the committer's help to compute their key.
-- **Refusal is not denial.** A committer that declines to answer has made no
-  claim. A committer that answers must answer truthfully: the proof cannot
-  lie, and the signed header cannot be swapped.
-
-## Alternatives considered
-
-- **Reuse ADR-0027 unchanged.** Its keys are chosen by the committer, so it
-  cannot answer content questions. Its 256-level fixed-depth tree with
-  ASCII-prefixed nodes costs about 512 compressions per in-circuit path,
-  against about 39 for a whole exact statement here (§8). ADR-0027 stays the right tool for "is record ID X
-  in the set?".
-- **Sorted-leaf tree with adjacent-pair non-membership** (the prototype's
-  modes 1–3). This needs proof of global sortedness and, at the boundaries,
-  fullness. A keyed tree gets both by construction.
-- **Poseidon in-circuit tree (prototype).** Cheaper per hash in a SNARK, but
-  it would need a second tree beside the BLAKE3 one, and a proof that the two
-  agree. Prototype measurements put an extra BLAKE3 compression at 0.4–1.6 s
-  against about 1.2 s per Poseidon level (depth 8 → 20). That is close enough
-  that one BLAKE3 tree wins. To be confirmed (§Unresolved 1).
-- **Embedding-based semantic similarity.** It catches paraphrase and style,
-  but thresholds are contestable, models change, and approximate
-  nearest-neighbour indexes have no sound non-membership. Out of scope; it
-  could be a separate profile later with weaker, clearly labelled claims.
-- **Pigeonhole banding for deterministic image recall** (`τ+1` bands). At
-  `τ = 31` the bands are 8 bits wide, so every bucket holds millions of items
-  at 10^9 scale. Rejected.
-
-## Drawbacks & risks
-
-- Zero-knowledge similar-non-membership and whole-work bundles are slow on
-  current hardware. The estimate is about 25 minutes per text segment proof
-  and about 2.6 hours per image query at 10^9 items, and the image figure
-  grows linearly with dataset size (§8). Plain proofs cover most uses.
-  Zero-knowledge is for committers who must not reveal neighbouring items.
-- v1 headers are signed with Ed25519 only, until ML-DSA-65 is accepted (§7).
-  Their protection against a future quantum forger rests on the ledger
-  timestamp and on re-signing under the hybrid suite, not on the signature
-  itself.
-- Per-occurrence metadata makes the record index larger: about 100–300
-  bytes per occurrence, depending on URI length. It lives in the
-  committer's sidecar, not in the header or the ledger.
-- Plain proofs leak: an N1 proof shows a neighbouring `content_key`, and an
-  N2 proof shows bucket contents, including other items' fingerprints.
-  Anyone holding a candidate item can test it against leaked keys.
-- Image canonicalization pins a decoder, so a decoder security fix forces a
-  new profile version and a re-commit.
-- New verifier surface: the Rust and JavaScript verifiers and the Python SDK
-  each need the tree, header and statement checks, plus cross-language vectors.
-
-## Unresolved questions
-
-1. Measure in-circuit BLAKE3 path cost at depths 30–40, and the N2 cost at
-   `b = 20` and `b = 64`, ideally on real GPU hardware (prototype item 3),
-   before accepting the zero-knowledge half.
-2. Whether the default thresholds (`m ≥ 84`, Hamming `≤ 31`) and band
-   parameters fit real corpora. They need false-positive and recall
-   measurements on labelled near-duplicate sets.
-3. Whether to require in-circuit MinHash recomputation for short text items,
-   which would remove trust assumption 1 for text.
-4. Sampled-audit protocol details: who chooses the sample, which randomness
-   beacon, and the response deadline.
-5. An optional salted-key mode that keeps outsiders from testing guessed
-   items against leaked keys, with the salt committed and the key derivation
-   proven in-circuit.
-6. More profiles: audio (Chromaprint-style), source code (winnowing), and
-   cropped-image robustness (PDQ is weak against crops).
-7. Reducing image N2 cost, which is dominated by bucket contents (§8).
-   Options include wider bands (`r > 24`) with more of them, or committing a
-   per-bucket sub-tree so that a proof opens only the entries it has to rule
-   out. Each option changes the detection-probability table in §9 and needs
-   re-deriving.
-8. Whether `license` should be normalized to an SPDX expression where one
-   applies, with the raw string kept alongside, so licenses can be compared
-   across datasets. v1 commits the string as found.
-9. Extraction profiles beyond v1: HuggingFace `datasets` Arrow shards,
-   multi-field items (an image–caption pair as one item), and conversation
-   formats.
+Content keys are deterministic. A committer who answers arbitrary exact
+queries exposes membership information, and a plain N1 answer may expose a
+neighboring key. The committer holds the record index and supplies proofs.
+A committer who declines to answer has made no claim.
