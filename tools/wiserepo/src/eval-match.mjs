@@ -109,13 +109,20 @@ const CURRENT_OVERRIDES = ["still", "keeps", "continues", "remains"];
 const NEGATION_PATTERN = /\b(?:without|not|never)\b/g;
 const NEGATION_WINDOW = 40;
 
+// A negation governs its own clause. "The diff does not touch `clampPage`, so it
+// returns `lastPage - 1`" negates the touching, not the return: proximity alone
+// excused that live claim. The value has to appear after the negation AND before
+// the next clause break.
+const CLAUSE_BREAK = /[,;:.!?]|\b(?:so|but|then|therefore|which|while|whereas)\b/;
+
 function negatedBefore(sentence, needle) {
   const raw = String(sentence ?? "").toLowerCase();
   for (const match of raw.matchAll(NEGATION_PATTERN)) {
     const from = match.index + match[0].length;
-    if (normaliseForExpect(raw.slice(from, from + NEGATION_WINDOW)).includes(needle)) {
-      return true;
-    }
+    const rest = raw.slice(from, from + NEGATION_WINDOW);
+    const breakAt = rest.search(CLAUSE_BREAK);
+    const clause = breakAt === -1 ? rest : rest.slice(0, breakAt);
+    if (normaliseForExpect(clause).includes(needle)) return true;
   }
   return false;
 }

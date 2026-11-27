@@ -122,6 +122,14 @@ test("unexpectedMentions reads a negated value as attribution, not a live claim"
     unexpectedMentions("clampPage returns lastPage - 1 without a guard.", ["lastPage - 1"]),
     ["lastPage - 1"],
   );
+  // A negation governs its own clause. Here "not" negates the touching, and the
+  // return in the next clause is a live claim about the value.
+  assert.deepEqual(
+    unexpectedMentions("The diff does not touch clampPage, so it returns lastPage - 1.", [
+      "lastPage - 1",
+    ]),
+    ["lastPage - 1"],
+  );
   // Whole words: the haystack is normalised with its spaces squeezed out, so a
   // substring test for "not" also matches "Note:" and would excuse this claim.
   assert.deepEqual(unexpectedMentions("Note: clampPage returns lastPage - 1.", ["lastPage - 1"]), [
