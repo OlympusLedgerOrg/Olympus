@@ -355,15 +355,16 @@ sample counts says so.
 
 #### Recorded scores
 
-`qwen2.5-coder:7b-instruct` at `num_ctx 16384`, on the re-scoped case set
-(2026-11-27), `--model` set so all three suites run the same tag:
+`qwen2.5-coder:7b-instruct` at `num_ctx 16384`, `--repeat 3` and `--model` set so
+all three suites run the same tag and the same number of samples, on the
+re-scoped case set (2026-11-27):
 
 | suite | score | time | what failed |
 | --- | --- | --- | --- |
-| `qa` | 5/5 | 74 s | — |
-| `review` | 2/3 | 48 s | `no-phantom-removed-line`: the review stated `lastPage - 1` as current behaviour |
-| `summarize` | 1/1 | 10 s | — |
-| **overall** | **8/9 (89 %)** | 132 s | |
+| `qa` | 5/5 (3/3 samples each) | 71 s | — |
+| `review` | 2/3 (planted 3/3, phantom 0/3, clean 3/3) | 131 s | `no-phantom-removed-line`: every sample stated `lastPage - 1` as current behaviour |
+| `summarize` | 1/1 (3/3 samples) | 26 s | — |
+| **overall** | **8/9 (89 %)** | 228 s | |
 
 The failure is the one this fixture was built to catch: the review read the
 `clampPage` fix as a live defect. The answer names the change correctly

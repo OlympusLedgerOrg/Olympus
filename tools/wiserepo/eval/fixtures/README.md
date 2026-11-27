@@ -75,7 +75,7 @@ list, because `expect_absent` alone is satisfied by a review that never mentions
 `clampPage` at all — and that list is matched against the answer's prose, so a
 pasted diff does not satisfy it. See `src/eval-match.mjs`: attribution is judged
 per sentence (removed/replaced/restored/previously returned/the original code's
-behaviour/past tense all count), a
+behaviour/past tense/a value negated just before it all count), a
 unified-diff `-` line counts as removal, and a present-tense marker such as
 "still" overrides attribution in the same sentence.
 

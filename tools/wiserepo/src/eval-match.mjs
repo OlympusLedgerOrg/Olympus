@@ -92,6 +92,34 @@ const DIFF_LINE = /^-\s{2,}|^-\t/;
 // though "removes" is right there.
 const CURRENT_OVERRIDES = ["still", "keeps", "continues", "remains"];
 
+// Negation immediately BEFORE the value describes what the code does NOT do:
+// "should return the page count without adding an extra page", "never returns
+// `lastPage - 1`". A real review of the removed `+ 1` phrased the correct post-
+// diff behaviour that way, with no removal word anywhere in the sentence, and
+// the case scored it as a live claim.
+//
+// Proximity, not a marker on the whole sentence: a blanket "without" would
+// excuse "clampPage returns `lastPage - 1` without a guard", which is exactly
+// the live claim this function exists to catch. The value is searched in the
+// text AFTER the negation, so the negation has to precede it.
+//
+// Matched as WHOLE WORDS in the raw sentence. The haystack is normalised with
+// spaces squeezed out, so a substring test for "not" also matches "Note:" —
+// which would excuse the very claim this function exists to catch.
+const NEGATION_PATTERN = /\b(?:without|not|never)\b/g;
+const NEGATION_WINDOW = 40;
+
+function negatedBefore(sentence, needle) {
+  const raw = String(sentence ?? "").toLowerCase();
+  for (const match of raw.matchAll(NEGATION_PATTERN)) {
+    const from = match.index + match[0].length;
+    if (normaliseForExpect(raw.slice(from, from + NEGATION_WINDOW)).includes(needle)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function sentencesOf(text) {
   return String(text ?? "")
     .split(/(?<=[.!?])\s+|\n+/)
@@ -104,7 +132,9 @@ function sentencesOf(text) {
  * For a review of a diff the failure worth scoring is reading a deleted line as
  * current: no positive expectation catches it, because an answer can name every
  * real bug correctly and still invent a phantom beside it. A mention alone is
- * not that failure — the failure is an UNATTRIBUTED mention. Judging per
+ * not that failure — the failure is an UNATTRIBUTED mention. A value negated just
+ * before it ("without adding an extra page") is attributed too, unless the same
+ * sentence also claims it is still the case. Judging per
  * sentence, not per occurrence, is deliberate: the score needs "does the review
  * describe this value as gone", and a per-occurrence window made a correct
  * "Restore the line `lastPage - 1`" recommendation read as a live claim.
@@ -124,7 +154,14 @@ export function unexpectedMentions(answer, absent) {
     const override = CURRENT_OVERRIDES.some((marker) => haystack.includes(marker));
     for (const [original, needle] of needles) {
       if (!needle || phantoms.has(original)) continue;
-      if (haystack.includes(needle) && (override || !attributed)) phantoms.add(original);
+      // A present-tense override beats both: "it never removes the guard, so
+      // `clampPage` still returns `lastPage - 1`" is a phantom.
+      if (
+        haystack.includes(needle) &&
+        (override || (!attributed && !negatedBefore(sentence, needle)))
+      ) {
+        phantoms.add(original);
+      }
     }
   }
   return (absent ?? []).filter((needle) => phantoms.has(needle));
