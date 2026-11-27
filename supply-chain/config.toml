@@ -693,7 +693,7 @@ version = "0.10.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.cookie]]
-version = "0.18.1"
+version = "0.18.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.cookie-factory]]
