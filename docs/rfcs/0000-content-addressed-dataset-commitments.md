@@ -29,12 +29,16 @@ key independently.
 - **C — recorded statements.** MD1 proves what the committer recorded about
   one occurrence. Recorded provenance, licenses and opt-out state remain
   attributable statements. D1 is evidence of removal from the committed
-  dataset only after the version chain and fork checks pass.
+  dataset only after the version chain check passes. It does not establish
+  the absence of a fork (§10).
 
 The core v1 profiles are `file/whole`, `jsonl/field`, `bytes/raw` and
 `text/utf8-nfc`. Ed25519 is the launch signing suite. The hybrid suite needs
-a separate implementation and review. Rust, JavaScript and Python verifiers
-share conformance vectors. [Research notes](dataset-proof-research.md) track
+a separate implementation and review. The Rust implementation in
+`olympus-manifest` is the only dataset verifier today. JavaScript and Python
+dataset verifiers are planned. Before either is relied on, it MUST pass the
+same vector files in `verifiers/test_vectors/` as the Rust verifier. Only the
+compact exact-proof vectors (§13) are published so far. [Research notes](dataset-proof-research.md) track
 additional profiles, private proofs and measurements.
 
 ## Terms
@@ -393,6 +397,12 @@ proof under one canonicalization cannot be replayed under another.
 
 ### 6. Header payload (`olympus-dataset-header/v1`)
 
+*Status: design, not implemented.* `olympus-manifest` does not yet encode,
+sign, ledger-commit or chain headers. Its verifiers take `item_root` and the
+tables from a header the caller has already verified. `parent_header_digest`,
+`created_at_unix_s`, the §7 envelope and the §10 chain check are
+specification only.
+
 The authoritative form is binary, so no JSON canonicalizer sits in the trust
 path. A JSON rendering is display-only, and it MUST round-trip to these bytes.
 
@@ -505,12 +515,21 @@ path     = u64_be(partition_count) ‖ u16_be(d) ‖ bitmap
   root. Authenticating a path against a supplied root and authenticating
   that root as a specific dataset version are both required for a dataset
   answer.
+- A body names no header, dataset or version. It is reusable: it verifies
+  against every header whose `item_root` it folds to. Two versions with the
+  same items and partition counts have the same `item_root` and accept the
+  same bodies, although their `global_root`s differ. A re-signed header (§7)
+  relies on this. The binding to a dataset version is therefore the
+  verifier's, not the body's. The relying party authenticates the header it
+  intends (its `dataset_id`, `version`, `ledger_shard_id` and profile table),
+  checks that the answer references that header, and only then folds the
+  body against that header's `item_root`.
 
 #### Bundle sharing and multiproofs
 
 An offline bundle includes each signed header and its ledger evidence once.
 Each answer references a header by `header_digest`. D1/D2 also require the
-chain and fork-check inputs described in §10. Header and evidence framing
+version-chain inputs described in §10. Header and evidence framing
 remains a draft transport detail and is outside the single-body encoding
 above. Caching a verified header is an optional transport optimization.
 
@@ -564,10 +583,19 @@ committed old version and is in no position of the committed new one.
 **D2 — addition** reverses the openings (N1 old, M1-open new).
 For both statements, `h_new` must reach `h_old` through authenticated
 `parent_header_digest` links within the same dataset and ledger shard.
-For a removal claim, the relying party also checks from the ledger shard
-that each header on the chain is its parent's only published child as of
-the relied-on checkpoint. A bundle carrying a header chain by itself
-supplies no evidence about omitted sibling headers.
+
+*Forks are out of reach of the ledger alone.* The ledger shard is keyed by
+each bundle's content hash (§6). It proves that a given header was committed,
+but it has no authenticated index from a parent digest to its children, so no
+proof can show that a parent has only one child. A removal claim therefore
+establishes three things: the work was in `h_old`, it is absent from `h_new`,
+and `h_new` descends from `h_old`. It does **not** establish that no other
+child of a header on the chain still contains the work. A bundle carrying a
+header chain supplies no evidence about omitted sibling headers either. A
+relying party that needs fork absence must obtain it outside this format,
+for example from a full audit of the committer's ledger shard. An
+authenticated parent-to-children index would be a new ledger feature and a
+new version of this RFC.
 
 The chain says that versions follow each other. It does not say which items
 changed. A committer MAY publish a diff commitment beside the header, using
@@ -635,18 +663,31 @@ cannot be seen in a single proof.
 | reused blinder | a dataset version in which two entries share a blinder | duplicate blinder | builder, audit rebuild |
 | incomplete set | `meta_root` built over `n′ < occurrence_count` entries | set size ≠ `occurrence_count` | audit rebuild |
 | sanitization | a URI carrying userinfo and each listed parameter, with mixed case and percent-encoding | output equals the vector byte for byte | builder conformance |
-| item/version transplant | an M1-open or N1 proof verified against a header with a different `dataset_id`, `version` or profile table | `global_root` mismatch | every verifier |
+| header substitution, different items | a valid M1-open or N1 body verified against a header whose `item_root` differs | root mismatch | every verifier |
+| header substitution, same items | a valid body whose answer references header B, presented to a relying party that intends header A with a different `dataset_id` or `version` but the same `item_root` | intended-header mismatch. The body itself still folds (§8), so the rejection must come from the header comparison. | every verifier |
+| profile substitution | a valid M1-open checked with a profile table whose entry at the opened `profile_index` names another profile | content key mismatch | every verifier |
 | prefix check, canonical shape, depth | §4's three rules, each violated once | the specific rule | every verifier |
 
-Compact encoding vectors also cover both N1 terminals, depth 0 and 256,
-zero and nonzero top paths, omitted empty siblings, nonzero bitmap
-padding, explicit empty hashes, unknown tags, truncation and appended bytes.
-Verify that wire round-trips preserve the original root and exact answer.
+The table's cases are required and not yet published, because the header
+and MD1 wire formats are not implemented.
+
+The compact encoding vectors are published in
+`verifiers/test_vectors/dataset_compact_proof_vectors.json`, generated by
+`cargo run -p olympus-manifest --example gen_dataset_proof_vectors`. They
+cover both N1 terminals, depth 0 and 256, zero and nonzero (`p = 2`) top
+paths, omitted empty siblings, nonzero bitmap padding, explicit empty
+hashes, unknown tags, depth beyond `256 − p`, `p > 16`, an N1 neighbor equal
+to the query, truncation, appended bytes, and the §4 prefix, shape and root
+checks. Each negative case names its rule, the stage that rejects it and the
+exact rejection. Positive bodies must re-encode byte for byte and fold to the
+recorded `item_root`. The Rust tests replay the file. No other verifier
+implements these bodies yet.
 
 ## Security and audit
 
-The dataset tree is separate from the ledger. It uses ordinary ingest for
-the signed header and reuses `SignatureEnvelopeV3`. A full audit rebuilds
+The dataset tree is separate from the ledger. The design commits the signed
+header through ordinary ingest and reuses `SignatureEnvelopeV3`. Neither step
+is implemented yet (§6). A full audit rebuilds
 the extraction, canonical items, sidecars and roots. A sampled audit
 opens drawn items and their source data so an auditor can check fidelity.
 The committed set documents the version that the committer identified.

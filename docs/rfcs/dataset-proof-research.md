@@ -64,9 +64,13 @@ Private: per band, a path in the similarity tree and, if present, the
 bucket. Statement: for each band key, either (a) it is absent (N1 shape over
 `similarity_root`), or (b) its `bucket_commit` opens to `similarity_root`
 and **every** entry's fingerprint fails `τ` against `F_q`. Meaning:
-*no committed segment that shares any LSH band with the query is within
-`τ`*. This is a deterministic fact about the committed index, and it is
-all an N2 result can establish. Label it "no candidate under index".
+*no segment entry in the committed similarity index that shares an LSH band
+with the query is within `τ`*. This is a deterministic fact about the
+committed index only, and it is all an N2 result can establish. A segment
+the committer left out of the index, or filed under the wrong band key, is
+not covered. Extending the claim to the dataset's items requires a full
+rebuild or a sampled audit that checks the index against the item
+commitments. Label it "no candidate under index".
 The similarity companion estimates retrieval probabilities under assumptions
 about the fingerprints and index. N2 remains outside v1.
 

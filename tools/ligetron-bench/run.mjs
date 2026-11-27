@@ -35,6 +35,13 @@ function invoke(tool, cwd, config, label = tool) {
   return { status: result.status, log, ms };
 }
 
+// The process's "Selected adapter" line, only if it names both the Vulkan
+// backend and hardware acceleration. A software or non-Vulkan run is rejected.
+function hardwareVulkan(log) {
+  const line = log.match(/Selected adapter:.*/)?.[0];
+  return line && /acceleration=HARDWARE/.test(line) && /vulkan/i.test(line) ? line : undefined;
+}
+
 const rows = [];
 for (const name of cases) {
   const args = fixtures[name];
@@ -49,16 +56,23 @@ for (const name of cases) {
   };
   writeFileSync(join(cwd, "config.json"), JSON.stringify(config, null, 2));
   const prover = invoke("webgpu_prover", cwd, config);
-  const adapter = prover.log.match(/Selected adapter:.*acceleration=HARDWARE.*/)?.[0];
+  const adapter = hardwareVulkan(prover.log);
   if (prover.status !== 0 || !/Final prove result:\s+true/.test(prover.log) || !adapter) {
-    throw new Error(name + ": proving failed on hardware\n" + prover.log.slice(-3000));
+    throw new Error(name + ": proving failed on hardware Vulkan\n" + prover.log.slice(-3000));
   }
   const hidden = args.map((arg, index) =>
     index < 5 ? arg : { hex: "00".repeat(arg.hex.length / 2) },
   );
   const verifier = invoke("webgpu_verifier", cwd, { ...config, args: hidden });
-  if (verifier.status !== 0 || !/Final Verify Result:\s+true/.test(verifier.log)) {
-    throw new Error(name + ": verification failed\n" + verifier.log.slice(-3000));
+  const verifierAdapter = hardwareVulkan(verifier.log);
+  if (
+    verifier.status !== 0 ||
+    !/Final Verify Result:\s+true/.test(verifier.log) ||
+    !verifierAdapter
+  ) {
+    throw new Error(
+      name + ": verification failed on hardware Vulkan\n" + verifier.log.slice(-3000),
+    );
   }
   const row = {
     name,
@@ -67,6 +81,7 @@ for (const name of cases) {
     prover_ms: prover.ms,
     verifier_ms: verifier.ms,
     adapter,
+    verifier_adapter: verifierAdapter,
   };
   if (name === "membership-50") {
     const changed = structuredClone(hidden);

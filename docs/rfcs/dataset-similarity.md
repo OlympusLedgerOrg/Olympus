@@ -28,8 +28,12 @@ inside a larger item, such as a book chapter embedded in a crawled page.
   run of characters outside Unicode categories L* and N* with one U+0020,
   then trim.
 - Split into tokens on U+0020. Segments are windows of 256 tokens with stride
-  128. An item shorter than 256 tokens is one segment. An item with fewer than
-  5 tokens gets no fingerprint.
+  128. Segment `k` is tokens `[128k, min(128k + 256, n))`, for
+  `k = 0 .. K−1`, where `K = 1` if `n ≤ 256` and `K = 1 + ⌈(n − 256) / 128⌉`
+  otherwise. This is the fewest windows that cover every token, so the final
+  tokens of a long item always fall in a fingerprinted segment. The last
+  window of a longer item can be shorter than 256 tokens, but never shorter
+  than 129. An item with fewer than 5 tokens gets no fingerprint.
 - Shingles are each run of 5 consecutive tokens, joined with U+0020. Each
   shingle maps to
   `x = u64_be(BLAKE3.derive_key("olympus 2026-11 dataset minhash-shingle v1", shingle)[0..8]) mod (2^61−1)`.
@@ -59,9 +63,8 @@ For each fingerprint profile with `b` bands of `r` units:
 
 ```text
 band_value(F, β) = text:  slots [β·r, (β+1)·r) of F, each u32_be                (r = 6, b = 20)
-                   image: the r = 24 bits at positions perm_β[0..24) of F, MSB-first, zero-padded to 3 bytes
-                          (perm_β drawn without replacement per band from the BLAKE3 XOF of
-                           derive_key("olympus 2026-11 dataset pdq-bands v1", ""); bands may overlap; b = 64)
+                   image: the r = 24 bits of F at positions perm_β[0], …, perm_β[23], in that order,
+                          packed MSB-first into 3 bytes (b = 64; perm_β is defined below)
 band_key(F, β)   = BLAKE3.derive_key("olympus 2026-11 dataset band-key v1",
                                      lp(fp_profile_id) ‖ u32_be(fp_profile_version) ‖ u16_be(β) ‖ band_value(F, β))
 bucket(key)      = all (content_key, fp_profile_index, segment_index, fingerprint) whose band_key = key,
@@ -69,6 +72,20 @@ bucket(key)      = all (content_key, fp_profile_index, segment_index, fingerprin
 bucket_commit    = H_bucket(u32_be(count) ‖ for each entry: content_key ‖ u16_be(fp_profile_index) ‖ u32_be(segment_index) ‖ fingerprint)
 similarity_root  = olympus-dataset-tree/v1 over (band_key → bucket_commit), with the core RFC’s similarity domains (§4), no partitions
 ```
+
+`perm_β` for `image/pdq-256` v1. Bit position `q ∈ [0, 256)` of the 32-byte
+fingerprint `F` is bit `7 − (q mod 8)` of byte `⌊q / 8⌋`, so position 0 is the
+most significant bit of byte 0. Let `S` be the extended output of
+`BLAKE3.derive_key("olympus 2026-11 dataset pdq-bands v1", "")`, read one byte
+at a time from offset 0. Each byte is a candidate position in `[0, 256)`,
+used as is. For `β = 0, 1, …, 63` in order, read the next byte of `S`. If
+that position is already in `perm_β`, reject it and read the next byte.
+Otherwise append it. Stop when `perm_β` holds 24 positions. Band `β + 1`
+starts at the first byte after the last one read for band `β`, including
+rejected bytes. Positions are unique within a band, and different bands may
+share positions. No other rejection rule applies, and there is no modular
+reduction, so builders and queriers derive identical tables. The profile's
+conformance vectors (RFC-0000 §0a) must pin all 64 tables.
 
 Detection probability for a near-duplicate is the chance that it shares at
 least one band with the query:

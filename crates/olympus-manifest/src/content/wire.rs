@@ -262,8 +262,20 @@ mod tests {
             Err(ContentError::InvalidProofEncoding("explicit empty sibling"))
         );
 
+        // depth = 1, so the bitmap is the single byte at `bitmap`. A cut right
+        // before it is a missing bitmap; every other cut misses a fixed field
+        // or hash.
         for length in 0..bytes.len() {
-            assert!(ExactProof::decode(0, &bytes[..length]).is_err());
+            let reason = if length == bitmap {
+                "truncated bitmap"
+            } else {
+                "truncated field"
+            };
+            assert_eq!(
+                ExactProof::decode(0, &bytes[..length]),
+                Err(ContentError::InvalidProofEncoding(reason)),
+                "prefix length {length}"
+            );
         }
         let mut extra = bytes.clone();
         extra.push(0);

@@ -63,6 +63,10 @@ static void member_terminal(const uint8_t* query, const uint8_t* item,
                             uint8_t* digest) {
     // The benchmark pins one authenticated profile, bytes/raw v1 at index 0.
     assert_one((item[0] | item[1]) == 0);
+    // M1-open requires occurrence_count >= 1 (u64_be at item[74..82)).
+    uint8_t occurrences = 0;
+    for (size_t i = 74; i < 82; ++i) occurrences |= item[i];
+    assert_one(occurrences != 0);
     uint8_t key_preimage[49] = {0, 0, 0, 9, 'b', 'y', 't', 'e', 's', '/',
                                'r', 'a', 'w', 0, 0, 0, 1};
     std::memcpy(key_preimage + 17, item + 10, 32);
