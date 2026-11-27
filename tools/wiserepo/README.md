@@ -95,6 +95,44 @@ code-specialised family. If someone does benchmark `qwen3.5:4b` against the
 default with `bin/eval.mjs`, record the numbers here and revisit — until then,
 this is the decision, and a re-pull is not progress.
 
+### `granite4.2:8b`: what a bigger, non-code model costs (measured)
+
+`granite4.2:8b` was pulled and smoke-tested as a plausible replacement for prose
+work — summarizing a doc, answering a question about one — where code
+specialisation matters less than it does for `review_diff`. It works, and it is **not** the default. It has no eval score — the harness runs
+again (see "Recorded scores"), but nothing has put granite through it — so the
+evidence here is memory and latency alone. The numbers decide whether it is even
+an option:
+
+| quantity | value | source |
+| --- | --- | --- |
+| weights | 5.3 GB (8.8B, Q4_K_M) | `ollama pull` |
+| KV cache per token | 160 KiB | `/api/show`: 40 blocks × 8 KV heads × 128 head-dim × 2 tensors × 2 B |
+| KV cache at 8K / 16K / 32K | 1.25 / 2.5 / 5.0 GiB | the line above × window |
+| resident at `num_ctx 16384` | **8.23 GB** | `/api/ps` `size` |
+| of that, in iGPU VRAM | 7.56 GB | `/api/ps` `size_vram` |
+| read from system RAM | 0.67 GB | the difference — the spill |
+| first load / warm answer | 29 s / 7.5 s | smoke run on one allowlisted doc, correct verbatim quotes |
+
+The comparison is the default tag, which is 5.47 GB *fully* in the iGPU at the
+same window. granite spends 8.23 GB there mostly on context, not weights: its KV
+cache is 160 KiB/token against `qwen2.5-coder:7b-instruct`'s 56 KiB (40 blocks ×
+8 KV heads against 28 × 4), i.e. 2.5 GiB of the residency at 16K. The remaining
+≈5.55 GB is weights plus compute buffers, so an 8K window would need ≈6.9 GB —
+still about 1.4 GB more than the 7B, on a machine that measured 1.1 GB of
+15.6 GB RAM free with the 7B loaded. It therefore does not fit an 8 GB card
+(RTX 2070 Super, 8 GB): 8.23 GB at 16K is over the card, and ~6.9 GB at 8K
+leaves nothing for the desktop. The model that does fit 8 GB is the default tag —
+5.47 GB of weights plus 0.94 GB of KV at 16K is ~6.4 GB — which is why the
+2026-11-27 scores above are recorded against it.
+
+It is available on purpose, not wired in: `WISEREPO_MODEL_QA=granite4.2:8b` (or
+`_SUMMARIZE`) runs one tool on it while `review_diff` keeps the code-specialised
+default. Do not change `DEFAULT_OLLAMA_MODEL` before an eval run scores the
+swap — a bigger tag is not a better answer, and the harness is the only thing
+here that could say either way. Digest seen for this tag: `f586c02fdecd…`; a
+re-pull changes it, which is why runs record it.
+
 ### Hardware: iGPU yes, NPU no
 
 This is a Core Ultra (Arc 140V iGPU + NPU) laptop, and Ollama uses neither by
@@ -230,7 +268,7 @@ the repo — treat as unverified: …`). The answer is still returned — a wron
 is not grounds to discard a useful review — but it cannot pass as evidence.
 
 Two things are *not* fabricated citations. Git's diff headers carry `a/` and `b/`
-prefixes (`--- a/src/pager.js`), so a path that does not resolve literally is
+prefixes (`--- a/app/public-ui/src/pager.js`), so a path that does not resolve literally is
 tried again with that prefix stripped — as a fallback, never a rewrite, so a
 repo that really has an `a/` directory still resolves against it. And a file the
 answer is **proposing** (`add a regression test in src/pager.test.js`, "…does not
@@ -260,7 +298,7 @@ Every case in every suite additionally fails if the answer cites a `path` or
 `path:line` that does not resolve in the tree being scored. Citation checking is
 not a separate suite: an invented path is a false claim, and a benchmark that
 printed it beside a `PASS` would report the tool's worst failure mode as a
-correct answer. The fixture repo contains only `src/pager.js` and `AGENTS.md`, so
+correct answer. The fixture repo contains only `app/public-ui/src/pager.js` and `AGENTS.md`, so
 a review that cites a plausible-looking file it never read fails there. The two
 honest exceptions above apply here too — a quoted `a/`/`b/` header and a
 recommended test file — so the case is decided by what the review claims about
@@ -269,7 +307,9 @@ the code, not by how it drew its paths.
 `review_diff` and `summarize` take `git diff` arguments rather than diff text, so
 those two suites share one throwaway git repo built from `eval/fixtures/` per run
 (`qa` stays on this repo, since it grounds on the real tree):
-`pager.before.js` is committed as `src/pager.js`, `pager.after.js` is committed
+`pager.before.js` is committed as `app/public-ui/src/pager.js` (an allowlisted path —
+at `src/pager.js` the agent policy refuses the diff and every review case reports
+`BLOCKED`), `pager.after.js` is committed
 as a second commit, `WISEREPO_ROOT` is pointed at that repo, and the case diffs
 `HEAD~1..HEAD`. Both states are committed because the two fixture files are the
 same byte length — an uncommitted overwrite can fall inside git's racy-clean
@@ -296,10 +336,72 @@ count is a failure), and with `--show-answers` the raw answer beneath each
 verdict — the score says a case moved, never why. It also prints a per-suite
 and overall score, and — when `eval/baseline.json` exists — a per-suite
 comparison (`unchanged` / `improved` / `REGRESSION`). It exits `0` whenever the
-run completed (it is a benchmark, not a gate) and `2` when the backend was
-unavailable. Runs are slow: one case is one full model call, so `--limit`
-exists for smoke tests and `--task qa` for a model-only check that needs no
-fixture repo.
+run completed (it is a benchmark, not a gate), `2` when the backend was
+unavailable, and `3` when nothing could be scored because the agent policy
+refused every case (see below). Runs are slow: one case is one full model call,
+so `--limit` exists for smoke tests and `--task qa` for a model-only check that
+needs no fixture repo.
+
+#### Recorded scores
+
+`qwen2.5-coder:7b-instruct` at `num_ctx 16384`, on the re-scoped case set
+(2026-11-27), `--model` set so all three suites run the same tag:
+
+| suite | score | time | what failed |
+| --- | --- | --- | --- |
+| `qa` | 5/5 | 74 s | — |
+| `review` | 2/3 | 48 s | `no-phantom-removed-line`: the review stated `lastPage - 1` as current behaviour |
+| `summarize` | 1/1 | 10 s | — |
+| **overall** | **8/9 (89 %)** | 132 s | |
+
+The failure is the one this fixture was built to catch: the review read the
+`clampPage` fix as a live defect. The answer names the change correctly
+("the change from `lastPage - 1` to `lastPage`") and contradicts itself one
+sentence later ("the current implementation returns `lastPage - 1`"), so the
+matcher is reporting a real misreading, not a wording difference. That is a model
+result, not a harness one — re-run with `--show-answers` to read what it said.
+
+A prompt clarification naming the two revisions (`git diff A B` shows A earlier
+and B as it stands now) was tried against this failure and scored worse:
+`review` fell to 1/3. The reviews then described the pre-diff code as "the
+original code", which the attribution matcher reads as a live claim, and
+`clean-fix-not-flagged` failed with it. The wording was reverted rather than
+tuned against three cases.
+
+`eval/baseline.json` was recorded from this run (answers in `eval/runs/`), so the
+comparison point now matches the re-scoped case set instead of the replaced `qa`
+subjects. That run reported `worktree dirty`, which is correct — the eval's own
+files were uncommitted at the time.
+
+#### Blocked cases
+
+Every eval tool call goes through the agent policy
+(`tools/agent-policy/policy.json`), exactly as a caller's does. A golden case
+that names a denied path is therefore **refused**: the local model never sees
+the file. The case is recorded as `BLOCKED`, its refused paths are printed, it
+leaves the suite's denominator, and the run continues:
+
+```text
+BLOCKED  qa/node-prefix  (0s, agent policy — not scored)
+      refused: crates/olympus-crypto/src/lib.rs (denied path)
+```
+
+It is deliberately **not** a failure (`0/5` would read like a model that got
+everything wrong, when nothing was asked), **not** a stack trace, and **not**
+overridden. An eval that could bypass the policy would score a model on files
+the tool refuses to read, which measures a build nobody runs. `--write-baseline`
+refuses to record a run containing any blocked case: an incomplete case set must
+not become the comparison point.
+
+This is not hypothetical. The original case set named `crates/`, `src-tauri/`,
+`tools/` and `AGENTS.md`, and its fixture sat at `src/pager.js`; once the policy
+landed, all nine cases blocked and the eval scored nothing. The fix was to
+re-scope the cases, never the policy: the fixture is now committed at
+`app/public-ui/src/pager.js`, and the five `qa` cases read
+`docs/architecture.md`, `docs/quickstart.md`, `docs/development.md`,
+`docs/c2pa-bridge.md` and `app/public-ui/src/App.tsx`. `test/eval.test.mjs`
+asserts every golden case's paths against the policy, so a case that could not
+run fails a test instead of quietly emptying its suite.
 
 Every run also writes its answers to `eval/runs/<timestamp>.json` (gitignored),
 and `eval/baseline.json` points at the run that produced it via `answers`. Along
@@ -324,7 +426,7 @@ verdict changed since it was recorded. That is how a scoring change is checked
 against real answers, and how two recorded runs are compared later. Citations
 are verified against the current tree, so re-score a run from another commit on
 that commit (`git checkout <provenance.git_sha>`); otherwise a recorded
-`src/pager.js` citation resolves nowhere in this repo.
+`app/public-ui/src/pager.js` citation resolves nowhere in this repo.
 
 The baseline is what makes prompt changes measurable: record one with
 `--write-baseline` against the prompt you are about to change, then re-run
@@ -381,6 +483,28 @@ node -e "console.log(process.execPath)"   # -> the absolute interpreter path
   "args": ["C:\\path\\to\\Olympus\\tools\\wiserepo\\bin\\mcp-launcher.mjs"]
 } } }
 ```
+
+### Codex
+
+Codex does **not** read `.mcp.json`, and this repo gitignores `.codex/`, so a
+working registration cannot be committed. Add both servers once per machine in
+`~/.codex/config.toml` (or `.codex/config.toml` in a trusted project):
+
+```toml
+[mcp_servers.wiserepo]
+command = "node"
+args = ["C:/path/to/Olympus/tools/wiserepo/bin/mcp-launcher.mjs"]
+
+[mcp_servers.serena]
+command = "node"
+args = ["C:/path/to/Olympus/tools/serena/bin/mcp-launcher.mjs"]
+```
+
+Use absolute, forward-slash paths. The launchers pin the server's cwd to this
+checkout, so the argument is the only part that must not be relative to
+whatever directory Codex happens to spawn from. Serena additionally needs
+`SERENA_BIN` (see `tools/serena/README.md`) in the environment Codex inherits.
+`codex mcp add <name> -- node <absolute-launcher>` writes the same table.
 
 ### Verifying a host actually registered it
 
