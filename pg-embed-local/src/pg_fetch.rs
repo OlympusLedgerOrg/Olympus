@@ -55,20 +55,27 @@ const PG_V15_DARWIN_AMD64_SHA256: &str =
 const PG_V15_DARWIN_ARM64V8_SHA256: &str =
     "e26068293bdd21dcee5771c813248deee8271c7b6eb01768647d40b85c7c95c5";
 
-/// HTTP statuses worth retrying: rate limiting, request timeout, and the
-/// transient 5xx family.
+/// HTTP statuses worth retrying: rate limiting, request timeout, the transient
+/// 5xx family, and `404 Not Found`.
 ///
-/// Everything else is permanent — a 404 means the requested release has no
-/// build for this platform, and 401/403 means the mirror rejected us — so those
-/// fail on the first response instead of spending the retry budget.
+/// A 404 is normally permanent — the requested release has no build for this
+/// platform — but `repo1.maven.org` also serves spurious 404s for paths it
+/// answers with 200 minutes later: the `vendored pg_embed unit tests` job lost a
+/// run to exactly that on 2026-11-27, and the same URL downloaded fine on a
+/// rerun. Retrying it is bounded by [`DOWNLOAD_ATTEMPTS`], so a release that is
+/// genuinely absent still fails in about a minute instead of hanging.
 ///
-/// This exists because a cold binary cache is fetched from Maven Central, which
-/// answers a burst of CI runners with `429 Too Many Requests`: the `api_db`
-/// job lost a run to exactly that on 2026-11-27 while the package itself was
-/// fine, and the embedded-Postgres cache only hides the download until its key
-/// changes.
+/// 401/403 stay permanent: the mirror rejected the request and will keep
+/// rejecting it, so those fail on the first response instead of spending the
+/// retry budget.
+///
+/// Retries also exist because a cold binary cache is fetched from Maven Central,
+/// which answers a burst of CI runners with `429 Too Many Requests`: the
+/// `api_db` job lost a run to exactly that on 2026-11-27 while the package
+/// itself was fine, and the embedded-Postgres cache only hides the download
+/// until its key changes.
 fn is_retryable_status(status: reqwest::StatusCode) -> bool {
-    matches!(status.as_u16(), 408 | 429 | 500 | 502 | 503 | 504)
+    matches!(status.as_u16(), 404 | 408 | 429 | 500 | 502 | 503 | 504)
 }
 
 /// Attempts per download, including the first one.
@@ -224,8 +231,8 @@ impl PgFetchSettings {
     /// # Errors
     ///
     /// Returns [`Error::DownloadFailure`] if every attempt fails, or on the
-    /// first response whose status is permanent (e.g. 404 when the requested
-    /// PostgreSQL version is not available for this platform).
+    /// first response whose status is permanent (e.g. 410 when the requested
+    /// PostgreSQL version was removed from the mirror).
     async fn start_download(&self) -> Result<reqwest::Response> {
         let platform = self.platform();
         let version = self.version.0;
@@ -295,8 +302,9 @@ impl PgFetchSettings {
     /// # Errors
     ///
     /// Returns [`Error::DownloadFailure`] if the HTTP request fails or the
-    /// server returns a non-2xx status (e.g. 404 when the requested
-    /// PostgreSQL version is not available for the current platform).
+    /// server returns a non-2xx status after the bounded retries (e.g. 404
+    /// when the requested PostgreSQL version is not available for the current
+    /// platform).
     /// Returns [`Error::ConversionFailure`] if reading the response body fails.
     pub async fn fetch_postgres(&self) -> Result<Vec<u8>> {
         self.expected_sha256()?;
@@ -423,13 +431,15 @@ mod tests {
 
     #[test]
     fn transient_download_statuses_are_retried_and_permanent_ones_are_not() {
-        for status in [408, 429, 500, 502, 503, 504] {
+        // 404 is retried because Maven Central serves spurious 404s for
+        // artifacts it answers with 200 moments later; the attempt cap, not the
+        // status class, bounds a genuinely missing release.
+        for status in [404, 408, 429, 500, 502, 503, 504] {
             let status = reqwest::StatusCode::from_u16(status).unwrap();
             assert!(is_retryable_status(status), "{status} must be retried");
         }
-        // 404 is the common real case: no build of that PG version for this
-        // platform. Retrying it only delays the failure the caller must see.
-        for status in [400, 401, 403, 404, 410, 501] {
+        // Rejections and definitive removals are permanent.
+        for status in [400, 401, 403, 410, 501] {
             let status = reqwest::StatusCode::from_u16(status).unwrap();
             assert!(!is_retryable_status(status), "{status} must fail fast");
         }

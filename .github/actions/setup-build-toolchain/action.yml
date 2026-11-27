@@ -69,10 +69,26 @@ runs:
         "OPENSSL_LIB_DIR=$lib" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
         "OPENSSL_STATIC=1" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
 
+    # Intel macOS: pnpm v11 ships no standalone @pnpm/exe build, and the
+    # action's pnpm 11.25 bootstrap then fails the packageManager version
+    # switch with ERR_PNPM_PNPM_ENGINE_IDENTITY_UNVERIFIABLE. Install the
+    # packageManager version with npm there (plain Node, no SEA) and keep the
+    # pinned action everywhere else. This action is shared by the preview and
+    # release paths, so the workaround lives here once.
+    - name: Install pnpm on Intel macOS (npm, not the standalone bootstrap)
+      if: runner.os == 'macOS' && runner.arch == 'X64'
+      shell: bash
+      run: |
+        set -euo pipefail
+        pnpm_version="$(node -p "require('./package.json').packageManager.replace(/^pnpm@/, '').split('+')[0]")"
+        npm install --global --prefix "${RUNNER_TEMP}/pnpm" "pnpm@${pnpm_version}"
+        echo "${RUNNER_TEMP}/pnpm/bin" >> "${GITHUB_PATH}"
+
     - name: Install pnpm
+      if: runner.os != 'macOS' || runner.arch != 'X64'
       # No `version:` — the action reads packageManager (pnpm@11.x) from
-      # package.json. Passing an explicit version conflicts and errors with
-      # "Multiple versions of pnpm specified".
+      # package.json. Keeping the version in one place avoids a skew with
+      # that field ("Multiple versions of pnpm specified").
       uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
 
     - name: Set up Node.js

@@ -299,10 +299,25 @@ jobs:
         # target cache contains a build from an earlier ceremony.
         run: cargo clean -p olympus-desktop
 
+      # Intel macOS: pnpm v11 ships no standalone @pnpm/exe build, and the
+      # action's pnpm 11.25 bootstrap then fails the packageManager version
+      # switch with ERR_PNPM_PNPM_ENGINE_IDENTITY_UNVERIFIABLE. Install the
+      # packageManager version with npm there (plain Node, no SEA) and keep the
+      # pinned action everywhere else.
+      - name: Install pnpm on Intel macOS (npm, not the standalone bootstrap)
+        if: runner.os == 'macOS' && runner.arch == 'X64'
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm_version="$(node -p "require('./package.json').packageManager.replace(/^pnpm@/, '').split('+')[0]")"
+          npm install --global --prefix "${RUNNER_TEMP}/pnpm" "pnpm@${pnpm_version}"
+          echo "${RUNNER_TEMP}/pnpm/bin" >> "${GITHUB_PATH}"
+
       - name: Install pnpm
+        if: runner.os != 'macOS' || runner.arch != 'X64'
         # No `version:` — the action reads packageManager (pnpm@11.x) from
-        # package.json. Passing an explicit version conflicts and errors with
-        # "Multiple versions of pnpm specified".
+        # package.json. Keeping the version in one place avoids a skew with
+        # that field ("Multiple versions of pnpm specified").
         uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
 
       - name: Set up Node.js
