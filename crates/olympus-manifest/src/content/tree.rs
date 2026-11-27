@@ -50,8 +50,11 @@ pub fn top_hash(l: &[u8; 32], r: &[u8; 32]) -> [u8; 32] {
 
 /// The partition a key belongs to: its first `p` bits.
 ///
-/// Crate-private: it is only meaningful for `p <= 16`, and every caller
-/// (`ItemTree::build`, `fold_item_path`) has already rejected larger `p`.
+/// Crate-private: it is only meaningful for `p <= 16`. Every caller works
+/// with an exponent already validated: `ItemTree::build` and
+/// `fold_item_path` reject `p > 16` themselves, `ItemTree::path` uses the
+/// exponent its tree was built with, and the test oracle is only called from
+/// tests that pass valid exponents.
 pub(crate) fn partition_of(key: &[u8; 32], p: u8) -> u32 {
     (0..p as usize).fold(0u32, |acc, i| (acc << 1) | u32::from(bit(key, i)))
 }

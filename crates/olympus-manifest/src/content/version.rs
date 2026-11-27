@@ -4,7 +4,7 @@
 
 use unicode_normalization::is_nfc;
 
-use super::domains::{h, lp_into, Domain};
+use super::domains::{check_lp_len, h, lp_into, Domain};
 use super::error::{ContentError, Result};
 
 /// Format string bound into every global root.
@@ -101,7 +101,14 @@ pub fn fp_profile_table_bytes(t: &[FpProfileEntry]) -> Result<Vec<u8>> {
 pub fn extraction_table_bytes(t: &[ExtractionEntry]) -> Result<Vec<u8>> {
     let mut b = table_len(t.len(), "extraction")?.to_vec();
     for e in t {
-        let mut params = e.params.clone();
+        // Sort references, not copies: no parameter string is duplicated
+        // before its length has been checked by `text_field`.
+        table_len(e.params.len(), "extraction params")?;
+        for (k, v) in &e.params {
+            check_lp_len(k.as_bytes(), "param_name")?;
+            check_lp_len(v.as_bytes(), "param_value")?;
+        }
+        let mut params: Vec<&(String, String)> = e.params.iter().collect();
         params.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
         if let Some(w) = params.windows(2).find(|w| w[0].0 == w[1].0) {
             return Err(ContentError::DuplicateParam(w[0].0.clone()));
@@ -110,7 +117,7 @@ pub fn extraction_table_bytes(t: &[ExtractionEntry]) -> Result<Vec<u8>> {
         b.extend_from_slice(&e.version.to_be_bytes());
         text_field(&mut b, &e.implementation_id, "implementation_id")?;
         b.extend_from_slice(&table_len(params.len(), "extraction params")?);
-        for (k, v) in &params {
+        for (k, v) in params {
             text_field(&mut b, k, "param_name")?;
             text_field(&mut b, v, "param_value")?;
         }

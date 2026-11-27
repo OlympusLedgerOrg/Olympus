@@ -4,7 +4,7 @@
 
 use unicode_normalization::is_nfc;
 
-use super::domains::{h, lp_into, Domain, CONTENT_KEY_CONTEXT};
+use super::domains::{check_lp_len, h, lp_into, Domain, CONTENT_KEY_CONTEXT};
 use super::error::{ContentError, Result};
 
 /// `content_digest = BLAKE3(canonical_bytes)` — plain and unkeyed, so any
@@ -16,6 +16,7 @@ pub fn content_digest(canonical: &[u8]) -> [u8; 32] {
 /// `content_key` (§3). Depends only on the canonicalization profile and the
 /// content, never on the dataset, version or committer.
 pub fn content_key(profile_id: &str, profile_version: u32, digest: &[u8; 32]) -> Result<[u8; 32]> {
+    check_lp_len(profile_id.as_bytes(), "profile_id")?;
     let mut m = Vec::with_capacity(4 + profile_id.len() + 4 + 32);
     lp_into(&mut m, profile_id.as_bytes(), "profile_id")?;
     m.extend_from_slice(&profile_version.to_be_bytes());
@@ -140,6 +141,9 @@ impl MetaEntry {
     /// `meta_entry` bytes. Fails, before anything is hashed, if a string does
     /// not fit its `u32` length prefix.
     pub fn to_bytes(&self) -> Result<Vec<u8>> {
+        // Both lengths are checked before the buffer is sized from them.
+        check_lp_len(self.source_uri.as_bytes(), "source_uri")?;
+        check_lp_len(self.license.as_bytes(), "license")?;
         let mut b =
             Vec::with_capacity(32 + 2 + 4 + self.source_uri.len() + 4 + self.license.len() + 9);
         b.extend_from_slice(&self.blinding);

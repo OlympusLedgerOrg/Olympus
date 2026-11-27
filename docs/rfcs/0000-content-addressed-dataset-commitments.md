@@ -558,10 +558,14 @@ ledger leaf binds `ledger_shard_id` via ADR-0005 and the bundle's BLAKE3
 content hash as `value_hash`. It is covered by the shard's
 `SmtRootAttestation` and the checkpoint `TransitionAttestation`. That gives
 the version an append-only **inclusion position** in the shard. The
-attestations bind roots and sizes, not times. A wall-clock bound exists only
-through a checkpoint that signs one: a V2 ledger snapshot signs
-`signed_at_unix`, and a V1 snapshot signs no time at all. So inclusion shows
-that the bundle existed no later than the first V2 checkpoint covering it.
+attestations bind roots and sizes, not times. A time exists only through a
+checkpoint that signs one: a V2 ledger snapshot signs `signed_at_unix`, and a
+V1 snapshot signs no time at all. Verification establishes only that the
+checkpoint authority signed that value. It is a wall-clock bound only to the
+extent that the authority's clock and honesty are trusted. Under that trust,
+inclusion shows that the bundle existed no later than the `signed_at_unix` of
+the first V2 checkpoint covering it. Without it, inclusion gives order, not
+time.
 
 `created_at_unix_s` is a value the committer chose. It is signed, but no rule
 in this RFC compares it with an authenticated time, and no verifier reads
@@ -896,9 +900,11 @@ format means, and are not bugs to be fixed later:
    works to evade public, fixed fingerprint functions will succeed. No
    hash-based scheme prevents that. It is misconduct the signed record
    makes attributable after the fact.
-5. **Commitment, not training.** A signed root proves which dataset was
-   committed, and when. It does not prove a model was trained on exactly
-   that set.
+5. **Commitment, not training.** A signed root identifies which dataset
+   version was committed. It does not by itself say when. Timing comes only
+   from ledger inclusion order and, for V2 checkpoints, a signed time that is
+   as reliable as the checkpoint authority's clock (§6). Nor does it prove a
+   model was trained on exactly that set.
 
 **Query exposure.** Content keys are deterministic and independent of the
 dataset, which is what lets a rights holder compute one. The same property
