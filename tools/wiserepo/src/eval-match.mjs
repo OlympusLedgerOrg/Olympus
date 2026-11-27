@@ -67,6 +67,15 @@ const ATTRIBUTION = [
   "changedfrom",
   "prior",
   "formerly",
+  // Past-tense and revision framing. A real review of `HEAD~2..HEAD` read the
+  // change correctly and then called the pre-diff code "the original code
+  // returns `lastPage - 1`": the right reading in wording the list did not
+  // know. "original", plain past tense and "was returning" all attribute the
+  // value to the earlier revision; present tense ("the current implementation
+  // returns …") stays a live claim and must keep scoring as a phantom.
+  "original",
+  "returned",
+  "wasreturn",
   "→",
   "->",
 ];

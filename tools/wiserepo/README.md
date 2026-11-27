@@ -364,9 +364,15 @@ result, not a harness one — re-run with `--show-answers` to read what it said.
 A prompt clarification naming the two revisions (`git diff A B` shows A earlier
 and B as it stands now) was tried against this failure and scored worse:
 `review` fell to 1/3. The reviews then described the pre-diff code as "the
-original code", which the attribution matcher reads as a live claim, and
+original code", which the attribution matcher did not recognise, and
 `clean-fix-not-flagged` failed with it. The wording was reverted rather than
-tuned against three cases.
+tuned against three cases. The matcher now accepts that framing and plain past
+tense (see `src/eval-match.mjs`): re-scoring that run turns
+`no-phantom-removed-line` into a PASS, though `clean-fix-not-flagged` still
+fails there on a separate unattributed sentence ("an extra page being
+calculated"). It does not change the recorded failure — that answer says the
+code *currently* returns the removed value, which is the phantom the case
+scores.
 
 `eval/baseline.json` was recorded from this run (answers in `eval/runs/`), so the
 comparison point now matches the re-scoped case set instead of the replaced `qa`
