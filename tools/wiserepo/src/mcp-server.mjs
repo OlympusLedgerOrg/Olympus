@@ -15,6 +15,7 @@ import {
   gitDiff,
   gitGrep,
   gitShowFile,
+  gitShowIndexFile,
   sanitizeDiffArgs,
   truncateText,
   wouldTruncate,
@@ -263,10 +264,11 @@ const POST_DIFF_MAX_FILES = 5;
  * direct fix: the post-diff code no longer has to be reconstructed from a
  * deleted and an added line.
  *
- * The post-diff side is the second revision of a range, or the working tree when
- * the args name none (`git diff HEAD`, `git diff --cached`). A path the change
- * deletes is named as such instead of being silently dropped: a review that
- * cannot see the file has to be told why.
+ * The post-diff side is the INDEX for `--cached`/`--staged` (that diff compares a
+ * revision to the index, not the worktree), otherwise the second revision of a
+ * range, otherwise the working tree. A path the change deletes is named as such
+ * instead of being silently dropped: a review that cannot see the file has to be
+ * told why.
  */
 async function postDiffContext(diffArgs, diff, { maxChars }) {
   if (maxChars <= 0 || !diff) return "";
@@ -278,6 +280,8 @@ async function postDiffContext(diffArgs, diff, { maxChars }) {
   // `A..B` / `A...B` in ONE argument names the post side inside the argument.
   const range = revs.length === 1 && /\.{2,3}/.test(revs[0]);
   const rev = revs.length >= 2 ? revs[1] : range ? revs[0].split(/\.{2,3}/).pop() : null;
+  const cached = safe.includes("--cached") || safe.includes("--staged");
+  const shown = cached ? " (index)" : rev ? ` at ${rev}` : " (working tree)";
   const paths = extractDiffPaths(diff).slice(0, POST_DIFF_MAX_FILES);
   const parts = [];
   let used = 0;
@@ -286,9 +290,11 @@ async function postDiffContext(diffArgs, diff, { maxChars }) {
     if (room <= 0) break;
     let content;
     try {
-      content = rev
-        ? await gitShowFile(rev, relPath, { maxBytes: room })
-        : await readRepoFile(relPath, { maxBytes: room });
+      // The cached flag wins over a revision: `git diff --cached A` still
+      // compares A to the index, so the index is the post-diff side.
+      if (cached) content = await gitShowIndexFile(relPath, { maxBytes: room });
+      else if (rev) content = await gitShowFile(rev, relPath, { maxBytes: room });
+      else content = await readRepoFile(relPath, { maxBytes: room });
     } catch (err) {
       // A deleted or renamed-away path is part of the change, not a tool
       // failure: say so, and only swallow the errors that mean "not in that
@@ -299,7 +305,7 @@ async function postDiffContext(diffArgs, diff, { maxChars }) {
         throw err;
       }
     }
-    const part = `### ${relPath}${rev ? ` at ${rev}` : " (working tree)"}\n\`\`\`\n${content}\n\`\`\``;
+    const part = `### ${relPath}${shown}\n\`\`\`\n${content}\n\`\`\``;
     parts.push(part);
     used += part.length + 2;
   }

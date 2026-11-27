@@ -75,9 +75,10 @@ list, because `expect_absent` alone is satisfied by a review that never mentions
 `clampPage` at all — and that list is matched against the answer's prose, so a
 pasted diff does not satisfy it. See `src/eval-match.mjs`: attribution is judged
 per sentence (removed/replaced/restored/previously returned/the original code's
-behaviour/past tense/a value negated just before it all count), a
-unified-diff `-` line counts as removal, and a present-tense marker such as
-"still" overrides attribution in the same sentence.
+behaviour/past tense/a value negated just before it all count — but a sentence
+that recommends undoing the change does not, however many removal words it
+carries — a unified-diff `-` line counts as removal, and a present-tense marker
+such as "still" overrides attribution in the same sentence.
 
 `test/eval.test.mjs` asserts both properties still hold: the `+ 1` is present in
 the after file and absent from the before file, and `lastPage - 1` is present

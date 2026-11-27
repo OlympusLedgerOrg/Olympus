@@ -376,7 +376,10 @@ correctly.
 `clean-fix-not-flagged` took its place. On a range whose only change is the
 correct removal of `+ 1`, every sample calls the fix a defect and recommends
 adding `+ 1` back. That is a precision failure, not a phantom, and it is exactly
-what that case exists to catch.
+what that case exists to catch. One earlier sample scored PASS on that same
+prose because "revert" attributed the restored value; an imperative
+recommendation ("Revert the change … adding `+ 1` back") no longer counts as
+attribution, while a sentence that describes a revert still does.
 
 A prompt clarification naming the two revisions (`git diff A B` shows A earlier
 and B as it stands now) was tried against this failure and scored worse:
@@ -592,9 +595,10 @@ last.
 - `review_diff` — review a diff against `AGENTS.md`'s engineering standards. The
   prompt states the diff convention explicitly (`-` is removed code, `+` is added,
   a `-`/`+` pair at one position is a fix), and it also sends each touched file
-  **as it stands after the diff** (`git show <rev>:<path>`, or the working tree
-  when the args name no range), because a small model otherwise reports a deleted
-  line as current behaviour — the failure the `review` eval's second case scores.
+  **as it stands after the diff** (`git show <rev>:<path>`, the index for
+  `--cached`/`--staged`, or the working tree when the args name no range),
+  because a small model otherwise reports a deleted line as current behaviour —
+  the failure the `review` eval's second case scores.
   Those files get at most a third of the leftover context, so the diff is still
   what gets reviewed first, and at most five of them are sent.
 - `summarize` — summarize a diff or set of files (changelog entry, PR description, etc.)

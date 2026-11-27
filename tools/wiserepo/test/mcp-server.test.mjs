@@ -257,6 +257,10 @@ test("review_diff reports omitted input even when the model does not mention it"
 // failure the review golden case scores. Three prompt attempts to explain the
 // convention did not move it, so the tool now shows the post-diff content and a
 // review no longer has to reconstruct it from the markers.
+//
+// `--cached` is the case that gets this wrong quietly: the diff compares a
+// revision to the INDEX, so showing the working tree would describe a file the
+// diff never mentioned.
 test("review_diff sends the files as they stand after the diff", async (t) => {
   const root = mkdtempSync(join(tmpdir(), "wiserepo-review-after-"));
   const previousRoot = process.env.WISEREPO_ROOT;
@@ -279,6 +283,8 @@ test("review_diff sends the files as they stand after the diff", async (t) => {
     "export function clampPage(page, lastPage) {\n  if (page > lastPage) return lastPage;\n  return page;\n}\n",
   );
   execFileSync("git", ["add", "--", file], { cwd: root });
+  // Edited after staging, so the index and the working tree disagree.
+  writeFileSync(join(root, file), "export const WORKTREE_ONLY = true;\n");
 
   t.mock.method(globalThis, "fetch", async (url) => {
     if (url.endsWith("/api/show")) {
@@ -301,7 +307,10 @@ test("review_diff sends the files as they stand after the diff", async (t) => {
   );
 
   assert.match(prompt, /## Files after the change/);
-  assert.match(prompt, /### docs\/review\.md \(working tree\)/);
+  assert.match(prompt, /### docs\/review\.md \(index\)/);
   // The line without its `+` marker: the file itself, not the diff.
   assert.match(prompt, /^ {2}if \(page > lastPage\) return lastPage;$/m);
+  // The unstaged edit is not what `git diff --cached` shows, so it must not be
+  // presented as the post-diff content.
+  assert.doesNotMatch(prompt, /WORKTREE_ONLY/);
 });
