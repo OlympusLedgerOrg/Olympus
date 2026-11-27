@@ -36,6 +36,7 @@ jobs:
       js-verifier: ${{ steps.filter.outputs.js-verifier }}
       docs: ${{ steps.filter.outputs.docs }}
       agent-docs: ${{ steps.filter.outputs.agent-docs }}
+      serena: ${{ steps.filter.outputs.serena }}
       tooling: ${{ steps.filter.outputs.tooling }}
       # A manual dispatch is an explicit request for the complete suite, even
       # when the most recent commit touched only docs.
@@ -110,6 +111,11 @@ jobs:
               - 'AGENTS.local.md'
               - 'CLAUDE.local.md'
               - 'tools/wiserepo/**'
+            serena:
+              # The launcher, its suite, and the registration the suite exercises.
+              - 'tools/serena/**'
+              - '.mcp.json'
+              - 'package.json'
             tooling:
               - '.license-header-baseline'
               - '.prettierignore'
@@ -329,6 +335,68 @@ jobs:
 
       - name: Run formatting and license-header checks
         run: pnpm tooling:check
+
+  # ── Serena MCP handshake ─────────────────────────────────────────────────────
+  # `pnpm serena:test` inside the tooling gate skips its only end-to-end test
+  # unless SERENA_BIN points at an installed Serena, so a launcher change or a
+  # Serena upgrade could break the MCP surface while every check stays green.
+  # This job installs serena-agent into a throwaway venv and runs the suite with
+  # SERENA_BIN set, which is the only place the handshake is actually proven.
+  # Windows matches the layout the launcher is exercised on locally
+  # (Scripts\serena.exe) and avoids headless-Linux dashboard/tray variance.
+  serena-handshake:
+    name: Serena MCP handshake (windows)
+    runs-on: windows-latest
+    needs: changes
+    if: needs.changes.outputs.serena == 'true' || needs.changes.outputs.ci == 'true'
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: "11.1.2"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22.19.0"
+
+      - name: Install Serena into an isolated venv
+        shell: pwsh
+        env:
+          # Pinned, not floating: serena-agent 2.1.0 also pins mcp==2.2.0 and
+          # click==8.3.1, so an automatic bump changes the MCP surface (and can
+          # collide with semgrep's pins) without this diff.
+          SERENA_VERSION: "2.1.0"
+        run: |
+          $ErrorActionPreference = "Stop"
+          $venv = Join-Path $env:RUNNER_TEMP "serena-venv"
+          python -m venv $venv
+          & "$venv\Scripts\python.exe" -m pip install --disable-pip-version-check `
+            --timeout 120 --retries 5 "serena-agent==$env:SERENA_VERSION"
+          "SERENA_BIN=$venv\Scripts\serena.exe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          & "$venv\Scripts\serena.exe" --version
+
+      - name: Run the launcher suite against the real server
+        env:
+          # Without this a missing SERENA_BIN would skip the handshake and the
+          # job would report success without ever starting a server.
+          SERENA_REQUIRE_HANDSHAKE: "1"
+        # The suite needs no node_modules, so skip pnpm's pre-run dependency
+        # check: it otherwise installs the whole workspace, which fails under
+        # CI's frozen lockfile on drift unrelated to Serena (observed on main:
+        # @testing-library/user-event ^14.6.3 manifest vs ^14.6.13 lockfile).
+        run: pnpm --config.verify-deps-before-run=false serena:test
 
   # ── Static analysis (Semgrep) ────────────────────────────────────────────────
   # Runs on every push/PR regardless of what changed -- like secrets-scan,
@@ -675,10 +743,16 @@ jobs:
       contents: read
     strategy:
       fail-fast: false
+      # `ubuntu-latest` moved to 26.04, and actions/setup-python's manifest has
+      # no 3.9 build for 26.04 at all (only 3.10+). 24.04 still carries 3.9
+      # builds (up to 3.9.25), so the lower-bound leg gets its own image rather
+      # than dropping the bound or pinning a deprecated one: ubuntu-22.04 has
+      # been in deprecation since 2026-09-17 and retires 2027-04-17. The 3.14
+      # leg stays on `ubuntu-latest` so it keeps tracking the current image.
       matrix:
         include:
           - python-version: "3.9"
-            os: ubuntu-22.04
+            os: ubuntu-24.04
           - python-version: "3.14"
             os: ubuntu-latest
     steps:

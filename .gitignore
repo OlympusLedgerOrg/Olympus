@@ -159,6 +159,7 @@ olympus-smt-demo-*.exe
 
 # Local agent tooling and audit-skill output (not repo artefacts)
 graphify-out/
+.serena/
 plugins/
 .agents/plugins/
 security-audit-skill/

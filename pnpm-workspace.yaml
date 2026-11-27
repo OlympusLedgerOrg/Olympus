@@ -10,69 +10,82 @@ allowBuilds:
 # Same discipline as auditConfig below: name the advisory, blast radius, and
 # unblock condition.
 overrides:
-  # GHSA-vxpw-j846-p89q (WebSocket DoS via fragment-count bypass, HIGH),
-  # GHSA-hm92-r4w5-c3mj (cross-origin routing via SOCKS5 pool reuse, HIGH),
-  # GHSA-vmh5-mc38-953g — all patched in undici >=7.28.0; and
-  # GHSA-4cwx-7wf7-3272 (cross-user information disclosure + parse-time crash
-  # via degenerate private cache directives, HIGH), patched in >=7.29.0, which
-  # is why this floor is 7.29 rather than the 7.28 the first three needed.
   # Dev/test only: pulled in transitively via jsdom@29 (the vitest jsdom test
   # environment), never shipped in the desktop binary or the frontend bundle.
-  # jsdom@29.1.1 is the latest release and already allows the fix (its range is
-  # undici@^7.25.0); the lockfile had merely pinned the older 7.27.2. Keep
-  # the override inside jsdom's expected major (^7.29.0, not a bare
-  # >=7.29.0 that would force the undici 8.x major onto jsdom). Drop this
-  # override once jsdom pins undici >=7.30.1 directly.
-  #
-  # Raised to 7.30.1 for GHSA-2m5v-pch6-74hx, GHSA-4w7w-5xrc-9h26,
-  # GHSA-qrxm-fqhp-jwvm and GHSA-xjj6-f33q-929c (all HIGH, patched in
-  # >=7.30.1), plus GHSA-rfgv-xxqx-mfg5 / GHSA-w293-vg96-wgc3 (>=7.29.1).
+  # The floor is whichever patched release clears the whole batch the audit
+  # reports, not just the newest one named here:
+  #   * GHSA-vxpw-j846-p89q (WebSocket DoS via fragment-count bypass, HIGH),
+  #     GHSA-hm92-r4w5-c3mj (cross-origin routing via SOCKS5 pool reuse, HIGH),
+  #     GHSA-vmh5-mc38-953g — patched in >=7.28.0;
+  #   * GHSA-4cwx-7wf7-3272 (cross-user disclosure + parse-time crash via
+  #     degenerate private cache directives, HIGH) — patched in >=7.29.0;
+  #   * GHSA-rfgv-xxqx-mfg5, GHSA-w293-vg96-wgc3, GHSA-3wwx-pv8p-q78v,
+  #     GHSA-pmjh-fq2x-6v4x, GHSA-3xpg-4rpp-hhhm, GHSA-2jfj-6hjv-fm6j,
+  #     GHSA-rx4f-c7p8-82vq and the low-severity retry/truncation/caching set
+  #     — patched in >=7.29.1;
+  #   * GHSA-xjj6-f33q-929c, GHSA-4w7w-5xrc-9h26, GHSA-2m5v-pch6-74hx,
+  #     GHSA-qrxm-fqhp-jwvm, GHSA-4qv8-2p9j-2685, GHSA-f72v-6w45-q472,
+  #     GHSA-9fm3-97px-rjf6, GHSA-55wc-3pg8-jfw6 — patched in >=7.30.1, which
+  #     is why this floor is 7.30.1 rather than the 7.29 the earlier ones
+  #     needed.
+  # jsdom@29.1.1 allows the fix (its range is undici@^7.25.0), so keeping the
+  # override inside jsdom's expected major (^7.30.1, not a bare >=7.30.1 that
+  # would force the undici 8.x major onto jsdom) is enough. Drop this override
+  # once jsdom pins undici >=7.30.1 directly.
   undici: "^7.30.1"
-  # GHSA-rgw5-rvv9-x895 (brace-expansion: DoS via unbounded intermediate
-  # arrays, bypassing the CVE-2026-14257 mitigation, HIGH). Dev/build-time
-  # only — brace-expansion reaches us solely through minimatch under the
-  # eslint / typescript-eslint toolchain and (in `proofs`) snarkjs, never in
-  # the desktop binary or the frontend bundle.
+  # brace-expansion advisories cleared by these floors: GHSA-rgw5-rvv9-x895
+  # (DoS via unbounded intermediate arrays, HIGH), GHSA-qhr7-859c-m2p7 (DoS
+  # via uncontrolled recursion on nested brace groups, HIGH),
+  # GHSA-6j4f-fj2g-mc7p (DoS via uncontrolled recursion in parseCommaParts,
+  # HIGH) and GHSA-q2hr-2g5m-vwhr (quadratic `{a},b}` rewrite, moderate).
+  # Dev/build-time only — brace-expansion reaches us solely through minimatch
+  # under the eslint / typescript-eslint toolchain and (in `proofs`) snarkjs,
+  # never in the desktop binary or the frontend bundle.
   #
   # Unlike the older GHSA-mh99-v99m-4gvg — which had no compatible fix and was
-  # suppressed under auditConfig until these overrides retired it — this
-  # advisory publishes a patched version *per major line* (1.1.18 / 2.1.4 /
-  # 5.0.9), so it is fixable by override where that one was not: each major
-  # stays on its own line, so the transitive minimatch@3 keeps a 1.x
-  # brace-expansion whose `require()` is still a function. A single `>=5.0.9`
-  # floor would drag minimatch@3 onto the 5.x API and break eslint — the exact
-  # failure that made GHSA-mh99-v99m-4gvg unfixable on its own terms.
-  #
-  # Raised for GHSA-6j4f-fj2g-mc7p (patched 1.1.19 / 2.1.5 / 5.0.10) and
-  # GHSA-qhr7-859c-m2p7 (patched 1.1.20 / 2.1.6 / 5.0.11), both HIGH DoS via
-  # uncontrolled recursion, still one floor per major line for the same reason.
+  # suppressed under auditConfig until these overrides retired it — each of
+  # these publishes a patched version *per major line*, so it is fixable by
+  # override where that one was not: each major stays on its own line, so the
+  # transitive minimatch@3 keeps a 1.x brace-expansion whose `require()` is
+  # still a function. A single `>=5.x` floor would drag minimatch@3 onto the
+  # 5.x API and break eslint — the exact failure that made
+  # GHSA-mh99-v99m-4gvg unfixable on its own terms. Each floor below is the
+  # strictest across the advisories above for its line: 1.1.21 / 2.1.7 /
+  # 5.0.12.
   #
   # Drop each entry once the toolchain depends on the patched version directly.
-  "brace-expansion@1": "^1.1.20"
-  "brace-expansion@2": "^2.1.6"
-  "brace-expansion@>=4": "^5.0.11"
-  # GHSA-5p4m-2wfm-xmqj (js-yaml: quadratic CPU consumption resolving `!!omap`
-  # — CVE-2026-59870 fix not backported to the 4.x line, HIGH). Dev-toolchain
-  # only — reached via eslint > @eslint/eslintrc > js-yaml, never shipped in
-  # the desktop binary or the frontend bundle. Root's own js-yaml devDependency
-  # is already on the patched 5.2.2 line; this scoped override patches only
-  # the transitive 4.x eslintrc still pulls, without forcing that 5.x major
-  # onto it. Raised to 4.3.2 for GHSA-2883-xcg3-v3hh (maxTotalMergeKeys does
-  # not limit CPU use for empty merge sources, HIGH, patched >=4.3.2). Drop
-  # once @eslint/eslintrc depends on js-yaml >=4.3.2 directly.
+  "brace-expansion@1": "^1.1.21"
+  "brace-expansion@2": "^2.1.7"
+  "brace-expansion@>=4": "^5.0.12"
+  # js-yaml advisories cleared by this scoped override: GHSA-5p4m-2wfm-xmqj
+  # (quadratic CPU consumption resolving `!!omap`), GHSA-2883-xcg3-v3hh
+  # (`maxTotalMergeKeys` does not limit CPU use for empty merge sources, HIGH)
+  # and GHSA-r3ph-w7gj-g6xm (the same fix on the 5.x line, moderate).
+  # Dev-toolchain only — reached via eslint > @eslint/eslintrc > js-yaml,
+  # never shipped in the desktop binary or the frontend bundle. Root's own
+  # js-yaml devDependency is on 5.4.1; this scoped override patches only the
+  # transitive 4.x eslintrc still pulls, without forcing that 5.x major onto
+  # it. Drop once @eslint/eslintrc depends on js-yaml >=4.3.2 directly.
   "js-yaml@4": "^4.3.2"
+  # GHSA-mrhx-c7xc-m3w5 (zod: memory exhaustion while validating oversized
+  # constrained collections, HIGH, patched in >=4.6.6). zod is a
+  # peerDependency of eslint-plugin-react-hooks (declared ^3.25.0 || ^4.0.0),
+  # so the lockfile resolved it as a peer at 4.4.3. Lint-time only, never
+  # shipped. Stays inside the declared 4.x line. Drop once that peer resolves
+  # to >=4.6.6 on its own.
+  zod: "^4.6.6"
+  # GHSA-g3hv-75wg-m249 (minimatch >=7 <11.0.1: globparts amplification DoS,
+  # moderate). Reached only through typescript-eslint's parser/typescript-estree
+  # matcher, which is dev/lint-scoped and never shipped. 11.x still exports the
+  # same `minimatch` function typescript-estree calls — checked by running the
+  # frontend lint gate after the bump. Drop once typescript-eslint depends on
+  # minimatch >=11.0.1 directly.
+  "minimatch@>=7 <11": "^11.0.1"
   # GHSA-2v37-7h3g-55p8 (nanoid: custom generators with size 0 can loop
   # indefinitely, HIGH). Dev/build-time only — reached via vite > postcss >
   # nanoid, never shipped in the desktop binary or the frontend bundle. Drop
   # once vite's postcss dependency pins nanoid >=3.3.17 directly.
   nanoid: "^3.3.17"
-  # GHSA-mrhx-c7xc-m3w5 (Zod can exhaust memory while validating oversized
-  # input, HIGH, patched >=4.6.6). Dev-toolchain only — reached via
-  # eslint-plugin-react-hooks (and its zod-validation-error), never shipped in
-  # the desktop binary or the frontend bundle. Both declare
-  # "^3.25.0 || ^4.0.0", so a 4.x floor stays inside their range. Drop once
-  # eslint-plugin-react-hooks resolves zod >=4.6.6 on its own.
-  zod: "^4.6.6"
 # Sole location for pnpm audit suppressions — do NOT also add a
 # `pnpm.auditConfig` block to the root package.json. pnpm 9.5+/11 reads
 # auditConfig from this workspace file; a package.json copy is a redundant,

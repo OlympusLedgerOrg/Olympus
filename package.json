@@ -24,14 +24,15 @@
     "pr-scope:test": "node --test scripts/check-pr-scope.test.mjs",
     "gate-integrity:test": "node --test scripts/check-gate-integrity.test.mjs",
     "qwen-local:test": "node --test tools/qwen-local/ask.test.mjs",
+    "serena:test": "node --test tools/serena/test/mcp-launcher.test.mjs",
     "verify-gate:test": "node --test tools/verify-gate/verify.test.mjs",
     "route-log:test": "node --test tools/agent-policy/log.test.mjs",
     "route-report:test": "python tools/agent-policy/test_route_report.py",
-    "tooling:check": "pnpm lockfile:check && pnpm lockfile:test && pnpm format:check && pnpm taplo:test && pnpm license:headers && pnpm license:headers:test && pnpm qwen-local:test && pnpm verify-gate:test && pnpm route-log:test && pnpm route-report:test && pnpm release-actions:check && pnpm release-actions:test && pnpm release-assets:test && pnpm preview-channel:check && pnpm preview-channel:test && pnpm hooks:test && pnpm pr-scope:test && pnpm gate-integrity:test"
+    "tooling:check": "pnpm lockfile:check && pnpm lockfile:test && pnpm format:check && pnpm taplo:test && pnpm license:headers && pnpm license:headers:test && pnpm qwen-local:test && pnpm serena:test && pnpm verify-gate:test && pnpm route-log:test && pnpm route-report:test && pnpm release-actions:check && pnpm release-actions:test && pnpm release-assets:test && pnpm preview-channel:check && pnpm preview-channel:test && pnpm hooks:test && pnpm pr-scope:test && pnpm gate-integrity:test"
   },
   "devDependencies": {
     "prettier": "^3.9.6",
     "eslint": "^9.39.5",
-    "js-yaml": "^5.2.3"
+    "js-yaml": "^5.4.1"
   }
 }
