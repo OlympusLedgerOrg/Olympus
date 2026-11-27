@@ -274,8 +274,8 @@ describe("decideTask", () => {
   });
 
   it("maps capability labels to model ids per client", () => {
-    assert.equal(modelFor("claude-code", "top", policy), "claude-opus-4-5");
-    assert.equal(modelFor("codex", "mid", policy), "gpt-5-codex");
+    assert.equal(modelFor("claude-code", "top", policy), "claude-opus-5-5");
+    assert.equal(modelFor("codex", "mid", policy), "GPT-6.2 Astra");
     assert.equal(modelFor("unknown-client", "local", policy), "qwen2.5-coder:7b-instruct");
     assert.equal(modelFor("cli", "deterministic", policy), null);
   });
