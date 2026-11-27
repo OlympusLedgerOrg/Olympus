@@ -101,6 +101,44 @@ test("unexpectedMentions accepts original-code and past-tense attribution", () =
   );
 });
 
+// A correct review of the removed `+ 1` says the post-diff function returns the
+// page count "without adding an extra page" — no removal word, so the sentence
+// used to score as a live claim about the new code.
+test("unexpectedMentions reads a negated value as attribution, not a live claim", () => {
+  assert.deepEqual(
+    unexpectedMentions("It should return the number of pages without adding an extra page.", [
+      "extra page",
+    ]),
+    [],
+  );
+  assert.deepEqual(
+    unexpectedMentions("pageCount never adds an extra page now.", ["extra page"]),
+    [],
+  );
+
+  // The negation has to sit immediately before the value: a "without" elsewhere
+  // in the sentence must not excuse a live claim about it.
+  assert.deepEqual(
+    unexpectedMentions("clampPage returns lastPage - 1 without a guard.", ["lastPage - 1"]),
+    ["lastPage - 1"],
+  );
+  // Whole words: the haystack is normalised with its spaces squeezed out, so a
+  // substring test for "not" also matches "Note:" and would excuse this claim.
+  assert.deepEqual(unexpectedMentions("Note: clampPage returns lastPage - 1.", ["lastPage - 1"]), [
+    "lastPage - 1",
+  ]);
+  // ...and a genuine present-tense claim still fails, negated word or not.
+  assert.deepEqual(unexpectedMentions("clampPage returns lastPage - 1.", ["lastPage - 1"]), [
+    "lastPage - 1",
+  ]);
+  assert.deepEqual(
+    unexpectedMentions("It never removes the guard, so clampPage still returns lastPage - 1.", [
+      "lastPage - 1",
+    ]),
+    ["lastPage - 1"],
+  );
+});
+
 // ...but a removal word in the same sentence must not launder a claim that the
 // value is still live, and the attribution has to sit near the mention.
 test("unexpectedMentions still flags a live claim beside a removal word", () => {
