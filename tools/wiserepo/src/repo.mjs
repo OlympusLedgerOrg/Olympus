@@ -217,6 +217,27 @@ export async function gitDiff(args = ["HEAD"], { maxBytes = DEFAULT_DIFF_MAX_CHA
   return truncateText(stdout, maxBytes, `git diff ${args.join(" ")}`);
 }
 
+/**
+ * One file's content AT a revision.
+ *
+ * For tools that must show the code a diff produces, not just its `-`/`+`
+ * lines. `rev` is a revision name and never a `rev:path` string: the colon form
+ * is what sanitizeDiffArgs refuses, and the path is resolved inside the repo
+ * like every other read rather than handed to git as part of the revision.
+ */
+export async function gitShowFile(rev, relPath, { maxBytes = 60_000 } = {}) {
+  if (typeof rev !== "string" || !REVISION_RE.test(rev) || /\.{2,3}/.test(rev)) {
+    throw new Error(`Disallowed revision "${rev}" for git show`);
+  }
+  resolveInRepo(relPath);
+  const { stdout } = await execFileAsync("git", ["show", `${rev}:${relPath}`], {
+    cwd: repoRoot(),
+    maxBuffer: 20 * 1024 * 1024,
+    timeout: GIT_SUBPROCESS_TIMEOUT_MS,
+  });
+  return truncateText(stdout, maxBytes, `${relPath} at ${rev}`);
+}
+
 export async function gitGrep(pattern, { globs = [], maxBytes = 30_000 } = {}) {
   if (typeof pattern !== "string") {
     throw new Error("grep pattern must be a string");

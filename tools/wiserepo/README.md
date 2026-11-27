@@ -361,17 +361,22 @@ re-scoped case set (2026-11-27):
 
 | suite | score | time | what failed |
 | --- | --- | --- | --- |
-| `qa` | 5/5 (3/3 samples each) | 71 s | — |
-| `review` | 2/3 (planted 3/3, phantom 0/3, clean 3/3) | 131 s | `no-phantom-removed-line`: every sample stated `lastPage - 1` as current behaviour |
-| `summarize` | 1/1 (3/3 samples) | 26 s | — |
-| **overall** | **8/9 (89 %)** | 228 s | |
+| `qa` | 5/5 (3/3 samples each) | 79 s | — |
+| `review` | 2/3 (planted 3/3, phantom 3/3, clean 0/3) | 97 s | `clean-fix-not-flagged`: every sample called the correct fix a defect and proposed restoring `+ 1` |
+| `summarize` | 1/1 (3/3 samples) | 28 s | — |
+| **overall** | **8/9 (89 %)** | 204 s | |
 
-The failure is the one this fixture was built to catch: the review read the
-`clampPage` fix as a live defect. The answer names the change correctly
-("the change from `lastPage - 1` to `lastPage`") and contradicts itself one
-sentence later ("the current implementation returns `lastPage - 1`"), so the
-matcher is reporting a real misreading, not a wording difference. That is a model
-result, not a harness one — re-run with `--show-answers` to read what it said.
+The failure moved with the tool. Before `review_diff` sent the post-diff file,
+`no-phantom-removed-line` failed 0/3 samples in every run — the model kept
+saying the code *currently* returned the removed value — and prompt rewrites
+only traded that failure into another case (below). Sending each touched file as
+it stands after the diff fixed it: every sample now describes the removal
+correctly.
+
+`clean-fix-not-flagged` took its place. On a range whose only change is the
+correct removal of `+ 1`, every sample calls the fix a defect and recommends
+adding `+ 1` back. That is a precision failure, not a phantom, and it is exactly
+what that case exists to catch.
 
 A prompt clarification naming the two revisions (`git diff A B` shows A earlier
 and B as it stands now) was tried against this failure and scored worse:
@@ -382,9 +387,9 @@ tuned against three cases. The matcher now accepts that framing and plain past
 tense (see `src/eval-match.mjs`): re-scoring that run turns
 `no-phantom-removed-line` into a PASS, though `clean-fix-not-flagged` still
 fails there on a separate unattributed sentence ("an extra page being
-calculated"). It does not change the recorded failure — that answer says the
-code *currently* returns the removed value, which is the phantom the case
-scores.
+calculated"). It explains why that failure was not a matcher artifact: the
+answer says the code *currently* returns the removed value, which is the phantom
+the case scores.
 
 Re-run at `--repeat 3` with the matcher fixed, that wording took
 `no-phantom-removed-line` to 3/3 samples but left `clean-fix-not-flagged` at
@@ -394,12 +399,14 @@ reads as a live claim. Adding a clause that keeps the consequence inside the
 attributed sentence scored 1/3 instead — the planted-bug case then described the
 defect as "increases the page count by 1", which no accepted phrasing covers,
 and the phantom case inverted direction again. Both variants were reverted; the
-prompt is unchanged, and the baseline still describes it.
+prompt those runs scored is the one the baseline below was recorded on.
 
-`eval/baseline.json` was recorded from this run (answers in `eval/runs/`), so the
-comparison point now matches the re-scoped case set instead of the replaced `qa`
-subjects. That run reported `worktree dirty`, which is correct — the eval's own
-files were uncommitted at the time.
+`eval/baseline.json` is this `--repeat 3` run (answers in `eval/runs/`), so the
+comparison point is the honest rate rather than a single draw, and it was
+recorded on the prompt the tool now sends. A one-sample run is still allowed; it
+just reports `samples per case 3 -> 1` as a provenance difference. This run
+recorded `worktree dirty`, which is correct — the eval's own files were
+uncommitted at the time.
 
 #### Blocked cases
 
@@ -584,9 +591,12 @@ last.
 - `repo_qa` — ask a question grounded in repo file contents / a git-grep search
 - `review_diff` — review a diff against `AGENTS.md`'s engineering standards. The
   prompt states the diff convention explicitly (`-` is removed code, `+` is added,
-  a `-`/`+` pair at one position is a fix), because a small model otherwise
-  reports a deleted line as current behaviour — the failure the `review` eval's
-  second case scores.
+  a `-`/`+` pair at one position is a fix), and it also sends each touched file
+  **as it stands after the diff** (`git show <rev>:<path>`, or the working tree
+  when the args name no range), because a small model otherwise reports a deleted
+  line as current behaviour — the failure the `review` eval's second case scores.
+  Those files get at most a third of the leftover context, so the diff is still
+  what gets reviewed first, and at most five of them are sent.
 - `summarize` — summarize a diff or set of files (changelog entry, PR description, etc.)
 
 Every file/diff/grep result is truncated per-piece, and the combined context for

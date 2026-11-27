@@ -1,11 +1,11 @@
 {
-  "recorded_at": "2026-11-27T20:12:14.178Z",
+  "recorded_at": "2026-11-27T20:40:27.100Z",
   "model": "qwen2.5-coder:7b-instruct",
   "provenance": {
-    "git_sha": "e9f231a2bef6531c34ab9da725c8d237e1b7585d",
+    "git_sha": "384e82732a2730b15a0cc81dc16ca649e9138541",
     "git_dirty": true,
     "repeat": 3,
-    "prompt_sha256": "cf158fc313a34d6d4a4a1576797d0b591952010997c593feb1f571ff92b317c9",
+    "prompt_sha256": "726296a899638cb1d4777748090251bfcf178fd50b650b816723ee1e106f56f1",
     "models": {
       "qwen2.5-coder:7b-instruct": {
         "digest": "dae161e27b0e90dd1856c8bb3209201fd6736d8eb66298e75ed87571486f4364",
@@ -18,20 +18,20 @@
       "passed": 5,
       "total": 5,
       "blocked": 0,
-      "seconds": 71
+      "seconds": 79
     },
     "review": {
       "passed": 2,
       "total": 3,
       "blocked": 0,
-      "seconds": 131
+      "seconds": 97
     },
     "summarize": {
       "passed": 1,
       "total": 1,
       "blocked": 0,
-      "seconds": 26
+      "seconds": 28
     }
   },
-  "answers": "runs/2026-11-27T20-12-14-178Z.json"
+  "answers": "runs/2026-11-27T20-40-27-100Z.json"
 }
