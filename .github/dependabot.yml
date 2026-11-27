@@ -66,6 +66,21 @@ updates:
     ignore:
       - dependency-name: "ed25519-dalek"
         versions: [">=3"]
+  - package-ecosystem: "cargo"
+    directory: "/clients/python/native"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    reviewers:
+      - "OlympusLedgerOrg"
+    labels:
+      - "dependencies"
+      - "security"
+    ignore:
+      # olympus-manifest's text/utf8-nfc canon pins a Unicode version at
+      # compile time; this lockfile must track the root Cargo.lock's
+      # unicode-normalization, never move on its own.
+      - dependency-name: "unicode-normalization"
   - package-ecosystem: "pip"
     directory: "/clients/python"
     schedule:

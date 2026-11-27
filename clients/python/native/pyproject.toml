@@ -1,0 +1,14 @@
+[build-system]
+requires = [ "maturin>=1.7,<2" ]
+build-backend = "maturin"
+
+[project]
+name = "olympus-manifest-native"
+version = "0.1.0"
+description = "Optional native (Rust) backend for the olympus-manifest Python SDK"
+requires-python = ">=3.9"
+license = { text = "Apache-2.0" }
+
+[tool.maturin]
+module-name = "olympus_manifest_native"
+features = [ "pyo3/extension-module" ]

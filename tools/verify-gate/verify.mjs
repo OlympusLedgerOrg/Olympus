@@ -134,7 +134,7 @@ export function planVerification(changedFiles, { fast = false, root = REPO_ROOT 
     if (files.some((file) => file.endsWith(".toml"))) {
       commands.push({
         cmd: "node",
-        args: ["node_modules/@taplo/cli/dist/cli.js", "format", "--check"],
+        args: ["scripts/taplo.mjs", "format", "--check"],
       });
     }
     commands.push({ cmd: "node", args: ["scripts/check-license-headers.mjs"] });
@@ -228,6 +228,21 @@ export function planVerification(changedFiles, { fast = false, root = REPO_ROOT 
   if (python.length > 0) {
     add("python-client", python, [
       { cmd: "python", args: ["-m", "pytest", "-q", "clients/python/tests"] },
+    ]);
+  }
+
+  // The optional PyO3 backend is its own Cargo workspace, so root fmt/clippy
+  // never reach it. Its cross-backend tests run under `python-client` above,
+  // but only when the module is built (`maturin develop`); otherwise they skip.
+  const pythonNative = files.filter((file) => under(file, "clients/python/native"));
+  if (pythonNative.length > 0) {
+    const manifest = "clients/python/native/Cargo.toml";
+    add("python-native", pythonNative, [
+      { cmd: "cargo", args: ["fmt", "--manifest-path", manifest, "--check"] },
+      {
+        cmd: "cargo",
+        args: ["clippy", "--locked", "--manifest-path", manifest, "--", "-D", "warnings"],
+      },
     ]);
   }
 
