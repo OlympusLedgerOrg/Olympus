@@ -40,7 +40,7 @@ pub use canon::CanonProfile;
 pub use commit::{MetaEntry, OptOutStatus};
 pub use dataset::{
     verify_m1_open, verify_m2, verify_md1, verify_n1, AddOutcome, BuiltVersion, DatasetBuilder,
-    M2Match, M2Proof, MetaDisclosure, OpenedItem,
+    M2Match, M2Proof, MetaDisclosure, Occurrence, OpenedItem,
 };
 pub use error::ContentError;
 pub use fingerprint::FpProfile;

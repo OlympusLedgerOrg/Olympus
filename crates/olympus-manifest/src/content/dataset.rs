@@ -32,6 +32,41 @@ pub enum AddOutcome {
     Rejected(ContentError),
 }
 
+/// One occurrence offered to [`DatasetBuilder::add_batch`].
+#[derive(Debug, Clone)]
+pub struct Occurrence<'a> {
+    /// Index into the version's canonicalization table.
+    pub profile_index: u16,
+    /// Raw item bytes.
+    pub raw: &'a [u8],
+    /// Sanitized metadata with a fresh blinder, if any.
+    pub meta: Option<MetaEntry>,
+}
+
+/// An occurrence after the pure, parallel part of [`DatasetBuilder::add_batch`].
+enum Prepared {
+    Rejected(ContentError),
+    Keyed {
+        canonical: Vec<u8>,
+        digest: [u8; 32],
+        key: [u8; 32],
+    },
+}
+
+/// `items.iter().map(f).collect()`, in parallel under the `parallel` feature.
+/// Output order always follows input order.
+fn par_map<T: Sync, U: Send>(items: &[T], f: impl Fn(&T) -> U + Sync + Send) -> Vec<U> {
+    #[cfg(feature = "parallel")]
+    {
+        use rayon::prelude::*;
+        items.par_iter().map(f).collect()
+    }
+    #[cfg(not(feature = "parallel"))]
+    {
+        items.iter().map(f).collect()
+    }
+}
+
 #[derive(Debug, Clone)]
 struct Pending {
     profile_index: u16,
@@ -114,46 +149,109 @@ impl DatasetBuilder {
         raw: &[u8],
         meta: Option<MetaEntry>,
     ) -> Result<AddOutcome> {
-        let profile = *self
-            .profiles
-            .get(profile_index as usize)
-            .ok_or(ContentError::UnknownProfile(profile_index))?;
-        if let Some(m) = &meta {
-            m.validate()?;
-            if self.blinders.contains(&m.blinding) {
-                return Err(ContentError::DuplicateBlinder);
+        let mut out = self.add_batch(vec![Occurrence {
+            profile_index,
+            raw,
+            meta,
+        }])?;
+        Ok(out.pop().expect("one outcome per occurrence"))
+    }
+
+    /// Offer a batch of occurrences. The result is exactly what calling
+    /// [`DatasetBuilder::add`] on each in order would give, outcomes
+    /// included, but canonicalization and fingerprinting run in parallel
+    /// under the `parallel` feature. The caller picks the batch size, which
+    /// bounds the canonical bytes held at once.
+    ///
+    /// Every fallible step runs before anything is merged, so an error
+    /// (unknown profile, invalid metadata, a blinder already used in this
+    /// version or repeated within the batch) leaves the builder unchanged.
+    pub fn add_batch(&mut self, batch: Vec<Occurrence<'_>>) -> Result<Vec<AddOutcome>> {
+        // 1. Validate the whole batch against the builder and itself.
+        let mut batch_blinders = HashSet::new();
+        for occ in &batch {
+            if usize::from(occ.profile_index) >= self.profiles.len() {
+                return Err(ContentError::UnknownProfile(occ.profile_index));
+            }
+            if let Some(m) = &occ.meta {
+                m.validate()?;
+                if self.blinders.contains(&m.blinding) || !batch_blinders.insert(m.blinding) {
+                    return Err(ContentError::DuplicateBlinder);
+                }
             }
         }
-        let canonical = match profile.canonicalize(raw) {
-            Ok(c) => c,
-            Err(e) => {
-                self.rejected += 1;
-                return Ok(AddOutcome::Rejected(e));
+        // 2. Canonicalize and key every occurrence (pure; parallel).
+        let prepared: Vec<Prepared> = par_map(&batch, |occ| {
+            let profile = self.profiles[usize::from(occ.profile_index)];
+            Ok(match profile.canonicalize(occ.raw) {
+                Err(e) => Prepared::Rejected(e),
+                Ok(canonical) => {
+                    let digest = content_digest(&canonical);
+                    let key = content_key(profile.id(), profile.version(), &digest)?;
+                    Prepared::Keyed {
+                        canonical,
+                        digest,
+                        key,
+                    }
+                }
+            })
+        })
+        .into_iter()
+        .collect::<Result<_>>()?;
+        // 3. Fingerprint each item's first occurrence once (parallel).
+        let mut first_new = Vec::new();
+        let mut seen = HashSet::new();
+        for (i, p) in prepared.iter().enumerate() {
+            if let Prepared::Keyed { key, .. } = p {
+                if !self.items.contains_key(key) && seen.insert(*key) {
+                    first_new.push(i);
+                }
             }
-        };
-        let digest = content_digest(&canonical);
-        let key = content_key(profile.id(), profile.version(), &digest)?;
-        if !self.items.contains_key(&key) {
-            let fingerprints = self.fingerprint(profile, &canonical)?;
-            self.items.insert(
-                key,
-                Pending {
-                    profile_index,
-                    canonical_len: canonical.len() as u64,
+        }
+        let fingerprinted: Vec<Vec<FpEntry>> = par_map(&first_new, |&i| {
+            let Prepared::Keyed { canonical, .. } = &prepared[i] else {
+                unreachable!("only keyed occurrences are listed")
+            };
+            self.fingerprint(
+                self.profiles[usize::from(batch[i].profile_index)],
+                canonical,
+            )
+        })
+        .into_iter()
+        .collect::<Result<_>>()?;
+        let mut fingerprints: std::collections::HashMap<usize, Vec<FpEntry>> =
+            first_new.into_iter().zip(fingerprinted).collect();
+        // 4. Merge in input order; nothing below can fail.
+        let mut outcomes = Vec::with_capacity(batch.len());
+        for (i, (occ, p)) in batch.into_iter().zip(prepared).enumerate() {
+            match p {
+                Prepared::Rejected(e) => {
+                    self.rejected += 1;
+                    outcomes.push(AddOutcome::Rejected(e));
+                }
+                Prepared::Keyed {
+                    canonical,
                     digest,
-                    occurrences: 0,
-                    meta: Vec::new(),
-                    fingerprints,
-                },
-            );
+                    key,
+                } => {
+                    let entry = self.items.entry(key).or_insert_with(|| Pending {
+                        profile_index: occ.profile_index,
+                        canonical_len: canonical.len() as u64,
+                        digest,
+                        occurrences: 0,
+                        meta: Vec::new(),
+                        fingerprints: fingerprints.remove(&i).expect("first occurrence"),
+                    });
+                    entry.occurrences += 1;
+                    if let Some(m) = occ.meta {
+                        self.blinders.insert(m.blinding);
+                        entry.meta.push(m);
+                    }
+                    outcomes.push(AddOutcome::Committed(key));
+                }
+            }
         }
-        let entry = self.items.get_mut(&key).expect("inserted above");
-        entry.occurrences += 1;
-        if let Some(m) = meta {
-            self.blinders.insert(m.blinding);
-            entry.meta.push(m);
-        }
-        Ok(AddOutcome::Committed(key))
+        Ok(outcomes)
     }
 
     /// Every applicable profile's segment fingerprints of one canonical item.
@@ -1066,6 +1164,126 @@ mod tests {
             build(&[2, 0, 1], vec![FpProfile::text_minhash_120()]).global_root,
             similar.global_root
         );
+    }
+
+    fn batch_corpus() -> Vec<(u16, Vec<u8>, Option<MetaEntry>)> {
+        let meta = |b: u8| {
+            Some(MetaEntry {
+                blinding: [b; 32],
+                ..entry(0, "https://x/", 0)
+            })
+        };
+        vec![
+            (0, words(300, "a").into_bytes(), meta(1)),
+            (0, words(40, "b").into_bytes(), meta(2)),
+            (0, vec![0xff, 0xfe], None), // rejected
+            (
+                0,
+                words(300, "a").replace(' ', "\r\n").into_bytes(),
+                meta(3),
+            ), // merges with #0
+            (1, words(300, "a").into_bytes(), None), // bytes/raw: no fingerprint
+            (0, b"tiny".to_vec(), None),
+            (0, words(40, "b").into_bytes(), meta(4)), // merges with #1
+        ]
+    }
+
+    fn batch_builder() -> DatasetBuilder {
+        DatasetBuilder::with_fingerprints(
+            vec![CanonProfile::TextUtf8Nfc, CanonProfile::BytesRaw],
+            vec![FpProfile::text_minhash_120()],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn add_batch_equals_sequential_add() {
+        let corpus = batch_corpus();
+        let mut seq = batch_builder();
+        let seq_out: Vec<AddOutcome> = corpus
+            .iter()
+            .map(|(p, raw, m)| seq.add(*p, raw, m.clone()).unwrap())
+            .collect();
+        // One batch, and the same corpus split across two batches so that a
+        // merge crosses a batch boundary.
+        for split in [corpus.len(), 2] {
+            let mut bat = batch_builder();
+            let mut out = Vec::new();
+            for chunk in corpus.chunks(split) {
+                out.extend(
+                    bat.add_batch(
+                        chunk
+                            .iter()
+                            .map(|(p, raw, m)| Occurrence {
+                                profile_index: *p,
+                                raw,
+                                meta: m.clone(),
+                            })
+                            .collect(),
+                    )
+                    .unwrap(),
+                );
+            }
+            assert_eq!(out, seq_out, "split={split}");
+            let (a, b) = (
+                batch_builder_finish(bat),
+                batch_builder_finish(batch_builder_replay(&corpus)),
+            );
+            assert_eq!(a.global_root, b.global_root, "split={split}");
+            assert_eq!(a.rejected_count, 1);
+            assert_eq!(a.unfingerprinted_count, 2);
+        }
+    }
+
+    fn batch_builder_replay(corpus: &[(u16, Vec<u8>, Option<MetaEntry>)]) -> DatasetBuilder {
+        let mut b = batch_builder();
+        for (p, raw, m) in corpus {
+            b.add(*p, raw, m.clone()).unwrap();
+        }
+        b
+    }
+
+    fn batch_builder_finish(b: DatasetBuilder) -> BuiltVersion {
+        b.finish("ds", 1, 1, &extraction()).unwrap()
+    }
+
+    #[test]
+    fn a_failing_batch_leaves_the_builder_unchanged() {
+        let corpus = batch_corpus();
+        let occ = |i: usize| Occurrence {
+            profile_index: corpus[i].0,
+            raw: &corpus[i].1,
+            meta: corpus[i].2.clone(),
+        };
+        let mut b = batch_builder();
+        b.add_batch(vec![occ(0), occ(1)]).unwrap();
+        let before = batch_builder_finish(batch_builder_replay(&corpus[..2])).global_root;
+
+        // A blinder repeated inside the batch, an unknown profile at the end,
+        // and a blinder already used: each refused for its own reason.
+        let repeat = Occurrence {
+            meta: corpus[3].2.clone(),
+            ..occ(3)
+        };
+        let cases = vec![
+            (vec![occ(3), repeat], ContentError::DuplicateBlinder),
+            (
+                vec![
+                    occ(3),
+                    Occurrence {
+                        profile_index: 9,
+                        ..occ(5)
+                    },
+                ],
+                ContentError::UnknownProfile(9),
+            ),
+            (vec![occ(3), occ(0)], ContentError::DuplicateBlinder),
+        ];
+        for (batch, err) in cases {
+            assert_eq!(b.add_batch(batch), Err(err));
+        }
+        assert_eq!(b.rejected, 0);
+        assert_eq!(batch_builder_finish(b).global_root, before);
     }
 
     #[test]
