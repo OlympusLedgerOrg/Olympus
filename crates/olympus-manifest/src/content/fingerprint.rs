@@ -182,9 +182,15 @@ impl FpProfile {
     /// Whether the profile fingerprints items committed under `canon`. A text
     /// profile applies to text items only; an item outside every profile's
     /// domain is committed exactly and counted as unfingerprinted.
-    pub const fn applies_to(self, canon: CanonProfile) -> bool {
+    pub fn applies_to(self, canon: CanonProfile) -> bool {
+        self.applies_to_profile_id(canon.id(), canon.version())
+    }
+
+    /// [`FpProfile::applies_to`] for a canonicalization-table row, which is
+    /// all a verifier holds. The builder and the verifier share this rule.
+    pub fn applies_to_profile_id(self, profile_id: &str, profile_version: u32) -> bool {
         match self {
-            Self::TextMinHash120 { .. } => matches!(canon, CanonProfile::TextUtf8Nfc),
+            Self::TextMinHash120 { .. } => (profile_id, profile_version) == ("text/utf8-nfc", 1),
         }
     }
 
@@ -196,9 +202,9 @@ impl FpProfile {
                 let text = std::str::from_utf8(canonical).map_err(|_| ContentError::InvalidUtf8)?;
                 let normalized = normalize_text(text);
                 let tokens: Vec<&str> = tokenize(&normalized);
-                Ok(segments(&tokens)
+                Ok(minhash_segments(&tokens)
                     .into_iter()
-                    .map(|s| minhash(s).to_vec())
+                    .map(|f| f.to_vec())
                     .collect())
             }
         }
@@ -304,7 +310,14 @@ pub fn tokenize(normalized: &str) -> Vec<&str> {
 /// longer item may be shorter than 256 (but never shorter than 129). Fewer
 /// than five tokens: no segment.
 pub fn segments<'a, 'b>(tokens: &'a [&'b str]) -> Vec<&'a [&'b str]> {
-    let n = tokens.len();
+    segment_ranges(tokens.len())
+        .into_iter()
+        .map(|r| &tokens[r])
+        .collect()
+}
+
+/// Token ranges of the segments of an `n`-token item (see [`segments`]).
+fn segment_ranges(n: usize) -> Vec<std::ops::Range<usize>> {
     if n < SHINGLE_TOKENS {
         return Vec::new();
     }
@@ -316,7 +329,7 @@ pub fn segments<'a, 'b>(tokens: &'a [&'b str]) -> Vec<&'a [&'b str]> {
     (0..count)
         .map(|k| {
             let start = k * SEGMENT_STRIDE;
-            &tokens[start..n.min(start + SEGMENT_TOKENS)]
+            start..n.min(start + SEGMENT_TOKENS)
         })
         .collect()
 }
@@ -349,11 +362,43 @@ pub(crate) fn minhash_coefficients() -> &'static [(u64, u64); MINHASH_SLOTS] {
     })
 }
 
+/// `v mod (2^61 − 1)` for `v = a·x + b` with `a`, `x`, `b` already reduced
+/// mod `2^61 − 1`, by folding the high bits instead of dividing.
+#[inline]
+fn mod_m61(v: u128) -> u64 {
+    // With P = 2^61 − 1 and v ≤ (P − 1)² + (P − 1) < P·2^61: v >> 61 ≤ P − 1
+    // and v & P ≤ P, so one fold gives r ≤ 2P − 1 and one subtraction ends.
+    let p = u128::from(MERSENNE_61);
+    let r = ((v & p) + (v >> 61)) as u64;
+    if r >= MERSENNE_61 {
+        r - MERSENNE_61
+    } else {
+        r
+    }
+}
+
+/// `x` for every shingle of `tokens`, in order: shingle `i` is tokens
+/// `[i, i + 5)` joined with U+0020, and
 /// `x = u64_be(derive_key(MINHASH_SHINGLE_CONTEXT, shingle)[0..8]) mod (2^61 − 1)`.
-fn shingle_value(base: &blake3::Hasher, shingle: &[u8]) -> u64 {
-    let d = base.clone().update(shingle).finalize();
-    let head: [u8; 8] = d.as_bytes()[..8].try_into().expect("8 bytes");
-    u64::from_be_bytes(head) % MERSENNE_61
+/// Computed once per item; overlapping segments share them.
+fn shingle_values(tokens: &[&str]) -> Vec<u64> {
+    let base = blake3::Hasher::new_derive_key(MINHASH_SHINGLE_CONTEXT);
+    let mut shingle = String::new();
+    tokens
+        .windows(SHINGLE_TOKENS)
+        .map(|window| {
+            shingle.clear();
+            for (i, t) in window.iter().enumerate() {
+                if i > 0 {
+                    shingle.push(' ');
+                }
+                shingle.push_str(t);
+            }
+            let d = base.clone().update(shingle.as_bytes()).finalize();
+            let head: [u8; 8] = d.as_bytes()[..8].try_into().expect("8 bytes");
+            u64::from_be_bytes(head) % MERSENNE_61
+        })
+        .collect()
 }
 
 /// The 480-byte MinHash of one segment (at least five tokens). Slot `i` is the
@@ -363,27 +408,75 @@ pub fn minhash(segment: &[&str]) -> [u8; MINHASH_WIDTH] {
         segment.len() >= SHINGLE_TOKENS,
         "a segment always has at least one shingle"
     );
+    minhash_of_values(&shingle_values(segment))
+}
+
+/// MinHash over precomputed shingle values (non-empty).
+fn minhash_of_values(xs: &[u64]) -> [u8; MINHASH_WIDTH] {
+    encode_slots(&slot_minima(xs))
+}
+
+/// Per-slot minima of `(a_i·x + b_i) mod (2^61 − 1) mod 2^32` over `xs`
+/// (`u64::MAX` in every slot when `xs` is empty).
+fn slot_minima(xs: &[u64]) -> [u64; MINHASH_SLOTS] {
     let coeffs = minhash_coefficients();
-    let base = blake3::Hasher::new_derive_key(MINHASH_SHINGLE_CONTEXT);
     let mut slots = [u64::MAX; MINHASH_SLOTS];
-    let mut shingle = String::new();
-    for window in segment.windows(SHINGLE_TOKENS) {
-        shingle.clear();
-        for (i, t) in window.iter().enumerate() {
-            if i > 0 {
-                shingle.push(' ');
-            }
-            shingle.push_str(t);
-        }
-        let x = u128::from(shingle_value(&base, shingle.as_bytes()));
+    for &x in xs {
+        let x = u128::from(x);
         for (slot, &(a, b)) in slots.iter_mut().zip(coeffs) {
-            let v = ((u128::from(a) * x + u128::from(b)) % u128::from(MERSENNE_61)) as u64;
+            let v = mod_m61(u128::from(a) * x + u128::from(b));
             *slot = (*slot).min(v & 0xFFFF_FFFF);
         }
     }
+    slots
+}
+
+/// Every segment's MinHash of an item, each shingle evaluated once.
+///
+/// Shingle `i` covers tokens `[i, i + 5)`, so a segment over tokens `[s, e)`
+/// owns shingles `[s, e − 4)`. Neighbouring segments overlap by about half.
+/// Cutting the shingle sequence at every segment boundary gives disjoint
+/// pieces, and each segment is a run of whole pieces. Minimum is associative
+/// and commutative, so the elementwise minimum of a segment's piece minima
+/// equals the minimum over its shingles: the output is exactly
+/// [`minhash`] of each segment, with each shingle's 120 slot values
+/// computed once rather than once per segment that contains it.
+fn minhash_segments(tokens: &[&str]) -> Vec<[u8; MINHASH_WIDTH]> {
+    let windows: Vec<std::ops::Range<usize>> = segment_ranges(tokens.len())
+        .into_iter()
+        .map(|r| r.start..r.end - (SHINGLE_TOKENS - 1))
+        .collect();
+    if windows.is_empty() {
+        return Vec::new();
+    }
+    let xs = shingle_values(tokens);
+    let mut cuts: Vec<usize> = windows.iter().flat_map(|w| [w.start, w.end]).collect();
+    cuts.sort_unstable();
+    cuts.dedup();
+    let pieces: Vec<[u64; MINHASH_SLOTS]> = cuts
+        .windows(2)
+        .map(|c| slot_minima(&xs[c[0]..c[1]]))
+        .collect();
+    windows
+        .iter()
+        .map(|w| {
+            let first = cuts.binary_search(&w.start).expect("start is a cut");
+            let last = cuts.binary_search(&w.end).expect("end is a cut");
+            let mut slots = [u64::MAX; MINHASH_SLOTS];
+            for piece in &pieces[first..last] {
+                for (s, p) in slots.iter_mut().zip(piece) {
+                    *s = (*s).min(*p);
+                }
+            }
+            encode_slots(&slots)
+        })
+        .collect()
+}
+
+fn encode_slots(slots: &[u64; MINHASH_SLOTS]) -> [u8; MINHASH_WIDTH] {
     let mut out = [0u8; MINHASH_WIDTH];
     for (chunk, v) in out.chunks_exact_mut(4).zip(slots) {
-        chunk.copy_from_slice(&(v as u32).to_be_bytes());
+        chunk.copy_from_slice(&(*v as u32).to_be_bytes());
     }
     out
 }
@@ -624,6 +717,59 @@ mod tests {
         for i in [0usize, 1, 59, 119] {
             let got = u32::from_be_bytes(fp[i * 4..i * 4 + 4].try_into().unwrap());
             assert_eq!(got, naive_slot(&toks, i), "slot {i}");
+        }
+    }
+
+    #[test]
+    fn mersenne_fold_equals_division_across_the_input_range() {
+        let p = u128::from(MERSENNE_61);
+        let max_v = (p - 1) * (p - 1) + (p - 1);
+        let mut cases = vec![
+            0,
+            1,
+            p - 1,
+            p,
+            p + 1,
+            2 * p,
+            2 * p - 1,
+            (1 << 61) + 1,
+            max_v,
+        ];
+        cases.extend(
+            (1..64)
+                .map(|k| (1u128 << (k + 58)) - 1)
+                .filter(|v| *v <= max_v),
+        );
+        let mut s = 0x9E37_79B9_7F4A_7C15u64;
+        for _ in 0..10_000 {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            let a = u128::from(s % MERSENNE_61);
+            let x = u128::from(s.rotate_left(29) % MERSENNE_61);
+            cases.push(a * x + u128::from(s.rotate_left(7) % MERSENNE_61));
+        }
+        for v in cases {
+            assert_eq!(u128::from(mod_m61(v)), v % p, "v = {v}");
+        }
+    }
+
+    #[test]
+    fn shared_shingle_values_equal_per_segment_minhash() {
+        let p = FpProfile::text_minhash_120();
+        for n in [5usize, 6, 256, 257, 300, 640, 1001] {
+            let text = words(n, "s");
+            let normalized = normalize_text(&text);
+            let toks = tokenize(&normalized);
+            let per_segment: Vec<Vec<u8>> = segments(&toks)
+                .iter()
+                .map(|s| minhash(s).to_vec())
+                .collect();
+            assert_eq!(
+                p.fingerprints(text.as_bytes()).unwrap(),
+                per_segment,
+                "n={n}"
+            );
         }
     }
 

@@ -53,7 +53,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let fp_set_root = fp_set.root();
     let fp_table = [FpProfile::text_minhash_120().entry()];
     let profiles = [ProfileEntry {
-        id: "bytes/raw".into(),
+        id: "text/utf8-nfc".into(),
         version: 1,
         implementation_id: "olympus=0.1.0".into(),
     }];
@@ -65,7 +65,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         occurrence_count: 1,
         meta_root: empty_meta_root(),
     };
-    let key = |preimage: &ItemPreimage| content_key("bytes/raw", 1, &preimage.content_digest);
+    let key = |preimage: &ItemPreimage| content_key("text/utf8-nfc", 1, &preimage.content_digest);
     let leaves = (0..ITEMS)
         .map(|number| {
             let preimage = item(number);

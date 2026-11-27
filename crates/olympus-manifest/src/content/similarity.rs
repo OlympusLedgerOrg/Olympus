@@ -15,8 +15,6 @@
 //! what the committed index files under one band key (class B); it never
 //! shows that no similar item exists. That statement, N2, stays out of v1.
 
-use std::collections::BTreeMap;
-
 use super::domains::{check_lp_len, lp_into, Domain, BAND_KEY_CONTEXT};
 use super::error::{ContentError, Result};
 use super::fingerprint::FpProfile;
@@ -43,7 +41,7 @@ pub fn band_keys(profile: FpProfile, fp: &[u8]) -> Result<Vec<[u8; 32]>> {
         .collect()
 }
 
-/// One bucket entry.
+/// One bucket entry: one committed segment fingerprint.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct BucketEntry {
     /// The item's content key.
@@ -64,7 +62,9 @@ impl BucketEntry {
 
 /// `bucket_commit` over entries already sorted by
 /// `(content_key, fp_profile_index, segment_index)` with no repeats.
-fn bucket_commit_sorted(entries: &[BucketEntry]) -> Result<[u8; 32]> {
+fn bucket_commit_sorted<'a>(
+    entries: impl ExactSizeIterator<Item = &'a BucketEntry>,
+) -> Result<[u8; 32]> {
     let count = u32::try_from(entries.len()).map_err(|_| ContentError::BucketTooLarge)?;
     let mut hasher = blake3::Hasher::new_keyed(Domain::Bucket.key());
     hasher.update(&count.to_be_bytes());
@@ -79,14 +79,13 @@ fn bucket_commit_sorted(entries: &[BucketEntry]) -> Result<[u8; 32]> {
 
 /// Check order and uniqueness, then `bucket_commit`.
 pub fn bucket_commit(entries: &[BucketEntry]) -> Result<[u8; 32]> {
-    for w in entries.windows(2) {
-        if w[0].sort_key() >= w[1].sort_key() {
-            return Err(ContentError::InvalidProofEncoding(
-                "bucket entries not strictly ordered",
-            ));
-        }
+    if entries
+        .windows(2)
+        .any(|w| w[0].sort_key() >= w[1].sort_key())
+    {
+        return Err(ContentError::BucketOrder);
     }
-    bucket_commit_sorted(entries)
+    bucket_commit_sorted(entries.iter())
 }
 
 /// A path from a bucket leaf (or empty subtree) to `similarity_root`.
@@ -115,37 +114,64 @@ pub struct Candidate {
 }
 
 /// The built similarity index.
+///
+/// Each segment fingerprint is stored once. Buckets are runs of a sorted
+/// `(band_key, entry)` list, so `b` band memberships cost `b` small index
+/// pairs rather than `b` copies of the fingerprint.
 #[derive(Debug, Clone)]
 pub struct SimilarityIndex {
-    buckets: BTreeMap<[u8; 32], Vec<BucketEntry>>,
+    /// Unique segments, sorted by `(content_key, fp_profile_index, segment_index)`.
+    entries: Vec<BucketEntry>,
+    /// `(band_key, index into entries)`, sorted. Within one band key the
+    /// indices ascend, which is the bucket's committed order.
+    memberships: Vec<([u8; 32], u32)>,
     tree: Partition,
 }
 
 impl SimilarityIndex {
-    /// Build from `(band_key, entry)` pairs in any order.
-    pub fn build(pairs: impl IntoIterator<Item = ([u8; 32], BucketEntry)>) -> Result<Self> {
-        let mut buckets: BTreeMap<[u8; 32], Vec<BucketEntry>> = BTreeMap::new();
-        for (k, e) in pairs {
-            buckets.entry(k).or_default().push(e);
+    /// Build from every committed segment fingerprint, in any order.
+    /// `fp_profiles` is the version's fingerprint table: entry
+    /// `fp_profile_index` names the profile whose band keys file it.
+    pub fn build(fp_profiles: &[FpProfile], mut entries: Vec<BucketEntry>) -> Result<Self> {
+        entries.sort_unstable();
+        entries.dedup();
+        if entries
+            .windows(2)
+            .any(|w| w[0].sort_key() == w[1].sort_key())
+        {
+            // One position, two different fingerprints.
+            return Err(ContentError::BucketOrder);
         }
-        let mut leaves = Vec::with_capacity(buckets.len());
-        for (k, entries) in &mut buckets {
-            entries.sort_by_key(BucketEntry::sort_key);
-            entries.dedup_by(|a, b| a.sort_key() == b.sort_key() && a == b);
-            if entries
-                .windows(2)
-                .any(|w| w[0].sort_key() == w[1].sort_key())
-            {
-                // Same position, different fingerprint: a builder bug.
-                return Err(ContentError::InvalidProofEncoding(
-                    "two fingerprints at one bucket position",
-                ));
+        if u32::try_from(entries.len()).is_err() {
+            return Err(ContentError::BucketTooLarge);
+        }
+        let mut memberships = Vec::new();
+        for (i, e) in entries.iter().enumerate() {
+            let profile = *fp_profiles
+                .get(usize::from(e.fp_profile_index))
+                .ok_or(ContentError::UnknownFpIndex(e.fp_profile_index))?;
+            for key in band_keys(profile, &e.fingerprint)? {
+                memberships.push((key, i as u32));
             }
-            leaves.push((*k, bucket_commit_sorted(entries)?));
         }
-        // BTreeMap iteration is already key-sorted and unique.
+        #[cfg(feature = "parallel")]
+        {
+            use rayon::slice::ParallelSliceMut;
+            memberships.par_sort_unstable();
+        }
+        #[cfg(not(feature = "parallel"))]
+        memberships.sort_unstable();
+        let mut leaves = Vec::new();
+        for run in memberships.chunk_by(|a, b| a.0 == b.0) {
+            let bucket = run.iter().map(|&(_, i)| &entries[i as usize]);
+            leaves.push((run[0].0, bucket_commit_sorted(bucket)?));
+        }
         let tree = Partition::build(SIMILARITY_TREE, leaves, 0);
-        Ok(Self { buckets, tree })
+        Ok(Self {
+            entries,
+            memberships,
+            tree,
+        })
     }
 
     /// `similarity_root`; `E_s` when the index is empty.
@@ -155,17 +181,27 @@ impl SimilarityIndex {
 
     /// Number of distinct band keys.
     pub fn len(&self) -> usize {
-        self.buckets.len()
+        self.memberships.chunk_by(|a, b| a.0 == b.0).count()
     }
 
     /// True when no band key is indexed.
     pub fn is_empty(&self) -> bool {
-        self.buckets.is_empty()
+        self.memberships.is_empty()
     }
 
-    /// The bucket filed under `band_key`, if any.
-    pub fn bucket(&self, band_key: &[u8; 32]) -> Option<&[BucketEntry]> {
-        self.buckets.get(band_key).map(Vec::as_slice)
+    fn run(&self, band_key: &[u8; 32]) -> &[([u8; 32], u32)] {
+        let lo = self.memberships.partition_point(|(k, _)| k < band_key);
+        let hi = lo + self.memberships[lo..].partition_point(|(k, _)| k == band_key);
+        &self.memberships[lo..hi]
+    }
+
+    /// The bucket filed under `band_key`, in committed order; empty if the
+    /// key is absent.
+    pub fn bucket(&self, band_key: &[u8; 32]) -> Vec<&BucketEntry> {
+        self.run(band_key)
+            .iter()
+            .map(|&(_, i)| &self.entries[i as usize])
+            .collect()
     }
 
     /// The canonical path along `band_key`.
@@ -174,8 +210,8 @@ impl SimilarityIndex {
         SimilarityPath { siblings, terminal }
     }
 
-    /// Committer-side retrieval: every committed segment that shares a band
-    /// with `query` under `fp_table[fp_profile_index]`, deduplicated and
+    /// Committer-side retrieval: every committed segment filed under
+    /// `fp_profile_index` that shares a band with `query`, deduplicated and
     /// sorted by descending similarity, then by position.
     pub fn candidates(
         &self,
@@ -183,26 +219,28 @@ impl SimilarityIndex {
         fp_profile_index: u16,
         query: &[u8],
     ) -> Result<Vec<Candidate>> {
-        let mut seen = BTreeMap::new();
-        for key in band_keys(profile, query)? {
-            for e in self.bucket(&key).unwrap_or_default() {
-                if e.fp_profile_index != fp_profile_index {
-                    continue;
-                }
-                if let std::collections::btree_map::Entry::Vacant(v) = seen.entry(e.sort_key()) {
-                    let similarity = profile.similarity(&e.fingerprint, query)?;
-                    v.insert(Candidate {
-                        content_key: e.content_key,
-                        fp_profile_index: e.fp_profile_index,
-                        segment_index: e.segment_index,
-                        similarity,
-                        passes: similarity >= profile.threshold(),
-                    });
-                }
-            }
-        }
-        let mut out: Vec<Candidate> = seen.into_values().collect();
-        // Stable: ties keep position order from the BTreeMap.
+        let mut hits: Vec<u32> = band_keys(profile, query)?
+            .iter()
+            .flat_map(|k| self.run(k).iter().map(|&(_, i)| i))
+            .filter(|&i| self.entries[i as usize].fp_profile_index == fp_profile_index)
+            .collect();
+        hits.sort_unstable();
+        hits.dedup();
+        let mut out = hits
+            .into_iter()
+            .map(|i| {
+                let e = &self.entries[i as usize];
+                let similarity = profile.similarity(&e.fingerprint, query)?;
+                Ok(Candidate {
+                    content_key: e.content_key,
+                    fp_profile_index: e.fp_profile_index,
+                    segment_index: e.segment_index,
+                    similarity,
+                    passes: similarity >= profile.threshold(),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        // Stable: ties keep position order.
         out.sort_by_key(|c| std::cmp::Reverse(c.similarity));
         Ok(out)
     }
@@ -273,14 +311,41 @@ mod tests {
     }
 
     fn index_of(items: &[(u8, Vec<u8>)]) -> SimilarityIndex {
-        let p = FpProfile::text_minhash_120();
-        SimilarityIndex::build(items.iter().flat_map(|(k, f)| {
-            band_keys(p, f)
-                .unwrap()
-                .into_iter()
-                .map(move |bk| (bk, entry(*k, 0, f.clone())))
-        }))
+        SimilarityIndex::build(
+            &[FpProfile::text_minhash_120()],
+            items.iter().map(|(k, f)| entry(*k, 0, f.clone())).collect(),
+        )
         .unwrap()
+    }
+
+    #[test]
+    fn index_stores_each_segment_once_and_rejects_conflicting_positions() {
+        let items: Vec<(u8, Vec<u8>)> = (0..4).map(|i| (i, fp(i + 1))).collect();
+        let idx = index_of(&items);
+        assert_eq!(idx.entries.len(), 4);
+        assert_eq!(idx.memberships.len(), 4 * 20);
+        // The same segment offered twice is one entry, not two.
+        let mut twice: Vec<BucketEntry> =
+            items.iter().map(|(k, f)| entry(*k, 0, f.clone())).collect();
+        twice.push(twice[0].clone());
+        let p = [FpProfile::text_minhash_120()];
+        assert_eq!(
+            SimilarityIndex::build(&p, twice).unwrap().root(),
+            idx.root()
+        );
+        // One position with two different fingerprints is refused.
+        let clash = vec![entry(1, 0, fp(1)), entry(1, 0, fp(2))];
+        assert_eq!(
+            SimilarityIndex::build(&p, clash).err(),
+            Some(ContentError::BucketOrder)
+        );
+        // An entry naming a profile outside the table is refused.
+        let mut stray = entry(1, 0, fp(1));
+        stray.fp_profile_index = 1;
+        assert_eq!(
+            SimilarityIndex::build(&p, vec![stray]).err(),
+            Some(ContentError::UnknownFpIndex(1))
+        );
     }
 
     #[test]
@@ -334,8 +399,14 @@ mod tests {
             bucket_commit(&[a.clone(), b.clone()]).unwrap(),
             h(Domain::Bucket, &[&m])
         );
-        assert!(bucket_commit(&[b, a.clone()]).is_err());
-        assert!(bucket_commit(&[a.clone(), a]).is_err());
+        assert_eq!(
+            bucket_commit(&[b, a.clone()]),
+            Err(ContentError::BucketOrder)
+        );
+        assert_eq!(
+            bucket_commit(&[a.clone(), a]),
+            Err(ContentError::BucketOrder)
+        );
     }
 
     /// The companion's definition, literally: group by band key, sort each
@@ -397,7 +468,7 @@ mod tests {
         let root = idx.root();
         let p = FpProfile::text_minhash_120();
         let bk = band_key(p, 3, &items[2].1).unwrap();
-        let bucket = idx.bucket(&bk).unwrap().to_vec();
+        let bucket: Vec<BucketEntry> = idx.bucket(&bk).into_iter().cloned().collect();
         let path = idx.path(&bk);
         assert_eq!(verify_bucket_opening(&root, &bk, &bucket, &path), Ok(()));
 

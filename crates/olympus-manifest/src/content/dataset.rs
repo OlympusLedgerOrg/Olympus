@@ -17,7 +17,7 @@ use super::commit::{
 };
 use super::error::{ContentError, Result};
 use super::fingerprint::{fp_set_root_from_path, FpEntry, FpProfile, FpSet};
-use super::similarity::{band_keys, BucketEntry, Candidate, SimilarityIndex};
+use super::similarity::{BucketEntry, Candidate, SimilarityIndex};
 use super::tree::{verify_membership, verify_non_membership, ItemPath, ItemTree};
 use super::version::{
     ExtractionEntry, FpProfileEntry, GlobalRootInput, ProfileEntry, TableDigests,
@@ -199,7 +199,7 @@ impl DatasetBuilder {
         let mut leaves = Vec::with_capacity(self.items.len());
         let mut occurrence_total = 0u64;
         let mut unfingerprinted = 0u64;
-        let mut bucket_pairs = Vec::new();
+        let mut segments = Vec::new();
         for (key, pend) in self.items {
             let with = pend.meta.len() as u64;
             if with != 0 && with != pend.occurrences {
@@ -220,20 +220,12 @@ impl DatasetBuilder {
             if fps.entries().is_empty() {
                 unfingerprinted += 1;
             }
-            for e in fps.entries() {
-                let profile = self.fp_profiles[usize::from(e.fp_profile_index)];
-                for band_key in band_keys(profile, &e.fingerprint)? {
-                    bucket_pairs.push((
-                        band_key,
-                        BucketEntry {
-                            content_key: key,
-                            fp_profile_index: e.fp_profile_index,
-                            segment_index: e.segment_index,
-                            fingerprint: e.fingerprint.clone(),
-                        },
-                    ));
-                }
-            }
+            segments.extend(fps.entries().iter().map(|e| BucketEntry {
+                content_key: key,
+                fp_profile_index: e.fp_profile_index,
+                segment_index: e.segment_index,
+                fingerprint: e.fingerprint.clone(),
+            }));
             let preimage = ItemPreimage {
                 profile_index: pend.profile_index,
                 canonical_len: pend.canonical_len,
@@ -246,7 +238,7 @@ impl DatasetBuilder {
             leaves.push((key, preimage.commitment()));
             items.insert(key, (preimage, meta, fps));
         }
-        let similarity = SimilarityIndex::build(bucket_pairs)?;
+        let similarity = SimilarityIndex::build(&self.fp_profiles, segments)?;
         let tree = ItemTree::build(p, leaves)?;
         let root_input = GlobalRootInput {
             dataset_id: dataset_id.into(),
@@ -496,6 +488,14 @@ pub fn verify_m2(
         .get(usize::from(proof.fp_profile_index))
         .ok_or(ContentError::UnknownFpIndex(proof.fp_profile_index))?;
     let profile = FpProfile::from_entry(row)?;
+    // The item's canonicalization row, already resolved by verify_m1_open.
+    let canon = &profile_table[usize::from(pre.profile_index)];
+    if !profile.applies_to_profile_id(&canon.id, canon.version) {
+        return Err(ContentError::FpProfileNotApplicable {
+            fp: profile.id().into(),
+            canon: format!("{}@{}", canon.id, canon.version),
+        });
+    }
     profile.check_width(&proof.fingerprint)?;
     profile.check_width(query)?;
     let root = fp_set_root_from_path(
@@ -940,6 +940,64 @@ mod tests {
         input.tables =
             TableDigests::compute(&v.extraction_table, &v.profile_table, &strict).unwrap();
         assert_ne!(input.compute().unwrap(), v.global_root);
+    }
+
+    #[test]
+    fn m2_rejects_a_text_fingerprint_on_a_non_text_item() {
+        // A committer-built item under bytes/raw that nonetheless carries a
+        // text/minhash-120 fingerprint. The builder never does this; the
+        // verifier must refuse it on its own.
+        let profile = FpProfile::text_minhash_120();
+        let text = words(40, "w");
+        let fps = FpSet::new(vec![FpEntry {
+            fp_profile_index: 0,
+            segment_index: 0,
+            fingerprint: profile.fingerprints(text.as_bytes()).unwrap().remove(0),
+        }])
+        .unwrap();
+        let digest = content_digest(text.as_bytes());
+        let key = content_key("bytes/raw", 1, &digest).unwrap();
+        let preimage = ItemPreimage {
+            profile_index: 0,
+            canonical_len: text.len() as u64,
+            content_digest: digest,
+            fp_set_root: fps.root(),
+            occurrence_count: 1,
+            meta_root: empty_meta_root(),
+        };
+        let tree = ItemTree::build(0, vec![(key, preimage.commitment())]).unwrap();
+        let raw_table = vec![ProfileEntry {
+            id: "bytes/raw".into(),
+            version: 1,
+            implementation_id: CanonProfile::BytesRaw.implementation_id(),
+        }];
+        let proof = M2Proof {
+            item: OpenedItem {
+                key,
+                path: tree.path(&key),
+                preimage,
+            },
+            fp_profile_index: 0,
+            segment_index: 0,
+            leaf_index: 0,
+            leaf_count: 1,
+            fingerprint: fps.entries()[0].fingerprint.clone(),
+            fp_path: vec![],
+        };
+        assert_eq!(
+            verify_m2(
+                0,
+                &tree.root(),
+                &raw_table,
+                &[profile.entry()],
+                &proof,
+                &proof.fingerprint
+            ),
+            Err(ContentError::FpProfileNotApplicable {
+                fp: "text/minhash-120".into(),
+                canon: "bytes/raw@1".into()
+            })
+        );
     }
 
     #[test]

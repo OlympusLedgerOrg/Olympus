@@ -108,9 +108,9 @@ fingerprints are synthetic bytes of the profile's width, not MinHash output.
 
 | Body | Median bytes | p95 bytes | Largest observed bytes |
 |---|---:|---:|---:|
-| M1-open | 800 | 864 | 928 |
+| M1-open | 800 | 864 | 960 |
 | N1 | 718 | 783 | 847 |
-| Text M2 fixture | 1,523 | 1,587 | 1,651 |
+| Text M2 fixture | 1,523 | 1,587 | 1,683 |
 
 The proposed targets are under 2 KiB for exact proofs and under 4 KiB for
 single text M2 openings. The figures are raw proof bodies. The signed header,
