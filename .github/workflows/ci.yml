@@ -736,15 +736,25 @@ jobs:
   # committed parity vectors tied to the Rust source of truth.
   python-client:
     name: Python client tests (${{ matrix.python-version }})
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     needs: changes
     if: needs.changes.outputs.python-client == 'true' || needs.changes.outputs.ci == 'true'
     permissions:
       contents: read
     strategy:
       fail-fast: false
+      # `ubuntu-latest` moved to 26.04, and actions/setup-python's manifest has
+      # no 3.9 build for 26.04 at all (only 3.10+). 24.04 still carries 3.9
+      # builds (up to 3.9.25), so the lower-bound leg gets its own image rather
+      # than dropping the bound or pinning a deprecated one: ubuntu-22.04 has
+      # been in deprecation since 2026-09-17 and retires 2027-04-17. The 3.14
+      # leg stays on `ubuntu-latest` so it keeps tracking the current image.
       matrix:
-        python-version: ["3.9", "3.14"]
+        include:
+          - python-version: "3.9"
+            os: ubuntu-24.04
+          - python-version: "3.14"
+            os: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
