@@ -20,3 +20,8 @@ useDefault = true
 description = "proofs/keys/PROVENANCE.md — public artifact hash fingerprints, not secrets"
 targetRules = [ "generic-api-key" ]
 paths = [ '''^proofs/keys/PROVENANCE\.md$''' ]
+
+[[allowlists]]
+description = "dataset compact-proof test vectors — public BLAKE3 query keys and roots, not secrets"
+targetRules = [ "generic-api-key" ]
+paths = [ '''^verifiers/test_vectors/dataset_compact_proof_vectors\.json$''' ]
