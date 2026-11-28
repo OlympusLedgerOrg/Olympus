@@ -6,8 +6,11 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import {
+  FIXTURE_PATH,
+  blockedCase,
   buildBaselineRecord,
   buildRunRecord,
+  caseOutcome,
   casePassed,
   indexGoldenCases,
   parseArgs,
@@ -18,6 +21,7 @@ import {
   suiteScores,
 } from "../bin/eval.mjs";
 import { missingExpectations } from "../src/eval-match.mjs";
+import { PolicyError, decidePaths, refusalMessage } from "../../agent-policy/policy.mjs";
 
 const fixture = (name) =>
   readFile(fileURLToPath(new URL(`../eval/fixtures/${name}`, import.meta.url)), "utf8");
@@ -31,6 +35,7 @@ test("parseArgs defaults to every suite with no limit", () => {
   assert.deepEqual(parseArgs([]), {
     limit: Infinity,
     model: undefined,
+    repeat: 1,
     rescore: undefined,
     showAnswers: false,
     task: "all",
@@ -61,6 +66,20 @@ test("parseArgs rejects a non-positive limit", () => {
   assert.throws(() => parseArgs(["--limit", "0"]), /positive integer/);
   assert.throws(() => parseArgs(["--limit=abc"]), /positive integer/);
   assert.equal(parseArgs(["--limit=2"]).limit, 2);
+});
+
+// One draw per case cannot separate a prompt fix from a lucky sample, and the
+// review suite has three cases. `--repeat` is how a 3/3 becomes evidence.
+test("parseArgs accepts --repeat and defaults to one sample", () => {
+  assert.equal(parseArgs([]).repeat, 1);
+  assert.equal(parseArgs(["--repeat", "3"]).repeat, 3);
+  assert.equal(parseArgs(["--repeat=2"]).repeat, 2);
+});
+
+test("parseArgs rejects a non-positive or missing repeat", () => {
+  for (const argv of [["--repeat"], ["--repeat", "0"], ["--repeat=abc"], ["--repeat=-1"]]) {
+    assert.throws(() => parseArgs(argv), /--repeat needs a positive integer/);
+  }
 });
 
 test("parseArgs accepts --model and --write-baseline", () => {
@@ -142,6 +161,25 @@ test("every review case requires the review to address the diff", async () => {
   const consequence = planted.expect.find(Array.isArray);
   assert.ok(consequence, "the planted-bug case has no consequence group");
   assert.ok(consequence.includes("extra page"));
+  // A real answer phrased the same finding as "increases the page count by 1"
+  // and the case scored it as silence. Wording must not decide the case.
+  assert.deepEqual(
+    missingExpectations("The change increases the page count by 1.", [consequence]),
+    [],
+  );
+  // Restating the added line, or judging it, is not the consequence: a review
+  // that only says the function adds 1 (or that adding 1 is unnecessary) is
+  // echoing the hunk, so the case must not score it as a finding.
+  for (const echo of [
+    "The function now adds 1 to the result of `Math.ceil`.",
+    "Adding 1 to the result is unnecessary and incorrect.",
+  ]) {
+    assert.equal(
+      missingExpectations(echo, [consequence]).length,
+      1,
+      `the planted-bug case accepted an echo of the added line: ${echo}`,
+    );
+  }
 
   // A clean range whose only change is a correct fix: the review must not turn
   // the removed `+ 1` into a live defect. Without `expect` it would pass on a
@@ -163,6 +201,33 @@ test("every review case requires the review to address the diff", async () => {
   // no plus), so the consequence phrasing is scored too.
   assert.deepEqual(clean.expect_absent, ["+ 1", "extra page"]);
   assert.ok(clean.expect.length > 0);
+
+  // REGRESSION: a review that called the correct fix a bug PASSED, because it
+  // stated the removal in one sentence (attributing the `+ 1`) and the defect in
+  // another, so neither forbidden needle fired. The case exists to score a
+  // review that flags visibly correct code, so it has to require the opposite
+  // claim, not merely the absence of two strings.
+  const cleanVerdict = clean.expect.find(Array.isArray);
+  assert.ok(cleanVerdict, "the clean case does not require a clean verdict");
+  assert.ok(cleanVerdict.includes("no defect"));
+  assert.equal(
+    missingExpectations(
+      "The change removes the `+ 1` from `pageCount`. This change is incorrect for the caller, " +
+        "so the count is now too low.",
+      clean.expect,
+    ).length,
+    1,
+    "a review that flags the correct fix satisfied the clean case",
+  );
+  assert.deepEqual(
+    missingExpectations(
+      "`pageCount`: no defect. The diff removes the `+ 1`, which is the correct fix.",
+      clean.expect,
+    ),
+    [],
+  );
+  // The verdict does not replace the requirement to have looked at the change.
+  assert.deepEqual(missingExpectations("No defect in this range.", clean.expect), ["pageCount"]);
 });
 
 // REGRESSION: a review that only discussed one hunk PASSED the phantom case
@@ -249,6 +314,98 @@ test("the prompt hash covers the system prompt and the user prompt separately", 
   );
 });
 
+// The review suite could not run at all while its fixture lived at
+// `src/pager.js`: the policy refused the diff, so all three review cases came
+// back BLOCKED and the run scored nothing. Checking the paths against the policy
+// here turns that into a failing test instead of an empty suite.
+test("every golden case and the fixture name only paths the policy allows", async () => {
+  const allowed = (paths, taskClass) => {
+    const { denied } = decidePaths(paths, taskClass);
+    assert.deepEqual(denied, [], `${taskClass} would refuse ${paths.join(", ")}`);
+  };
+
+  allowed([FIXTURE_PATH], "review");
+
+  for (const [taskClass, fileName] of [
+    ["qa", "golden-questions.json"],
+    ["summarize", "golden-summarize.json"],
+  ]) {
+    const cases = JSON.parse(
+      await readFile(fileURLToPath(new URL(`../eval/${fileName}`, import.meta.url)), "utf8"),
+    );
+    for (const item of cases) allowed(item.files, taskClass);
+  }
+});
+
+// A refusal is the agent policy working, not a model result: the case was never
+// asked. Scoring it as a failure would read as a regression, and rethrowing it
+// would end the run before the cases behind it — the failure this harness had.
+test("a policy refusal becomes a blocked record, not a score and not a throw", () => {
+  const denied = [{ path: "crates/olympus-crypto/src/lib.rs", reason: "denied path" }];
+  const error = new PolicyError(refusalMessage(denied), { taskClass: "qa", denied });
+
+  const record = blockedCase("qa", { id: "node-prefix" }, error);
+  assert.equal(record.suite, "qa");
+  assert.equal(record.id, "node-prefix");
+  assert.match(record.blocked, /crates\/olympus-crypto\/src\/lib\.rs \(denied path\)/);
+  assert.deepEqual(record.blocked_paths, denied);
+
+  // Nothing here can pass: there is no answer, no verdict and no `ok`.
+  assert.equal("ok" in record, false);
+  assert.equal("answer" in record, false);
+});
+
+// A blocked case must leave the denominator alone. Counting it in `total`
+// without a pass reports the policy as a model that got every case wrong.
+test("a blocked case is counted beside the score, never in it", () => {
+  assert.deepEqual(
+    suiteScores([
+      { suite: "qa", id: "asked", seconds: 2, ok: true },
+      { suite: "qa", id: "refused", seconds: 0, blocked: "agent policy: …" },
+      { suite: "review", id: "refused", seconds: 0, blocked: "agent policy: …" },
+    ]),
+    {
+      qa: { passed: 1, total: 1, blocked: 1, seconds: 2 },
+      review: { passed: 0, total: 0, blocked: 1, seconds: 0 },
+    },
+  );
+});
+
+// A case passes only when every sample does. Counting a mixed case as a pass
+// because one draw agreed would make --repeat report luck as reliability.
+test("a case passes only when every repeat sample passes", () => {
+  const good = { ok: true, verdict: { missing: [], phantom: [], badCitations: [] } };
+  const phantom = {
+    ok: false,
+    verdict: { missing: [], phantom: ["lastPage - 1"], badCitations: [] },
+  };
+
+  assert.equal(caseOutcome([good, good]).ok, true);
+  assert.equal(caseOutcome([good, good]).passed, 2);
+
+  const mixed = caseOutcome([good, phantom]);
+  assert.equal(mixed.ok, false);
+  assert.equal(mixed.passed, 1);
+  // Diagnostics come from the failing sample, or the console would print a
+  // passing sample's (empty) problems under a FAIL verdict.
+  assert.equal(mixed.representative, phantom);
+});
+
+// Re-scoring a recorded run must not turn a recorded refusal into a verdict on
+// an answer that was never produced.
+test("re-scoring carries a blocked case through instead of scoring its missing answer", async () => {
+  const goldenById = indexGoldenCases([
+    { suite: "qa", cases: [{ id: "blocked-case", expect: ["x"] }] },
+  ]);
+  const [scored] = await rescoreRecord(
+    [{ suite: "qa", id: "blocked-case", blocked: "agent policy: …", blocked_paths: [] }],
+    goldenById,
+  );
+  assert.equal(scored.blocked, "agent policy: …");
+  assert.equal("ok" in scored, false);
+  assert.equal("verdict" in scored, false);
+});
+
 // The baseline is the comparison point, so it must not quietly become a second
 // copy of the transcript: scores are derived from the cases, and the answers
 // live in the run file the baseline points at.
@@ -259,8 +416,8 @@ test("the run record derives suite scores from the stored cases", () => {
     { suite: "review", id: "c", seconds: 1, ok: true },
   ];
   assert.deepEqual(suiteScores(cases), {
-    qa: { passed: 1, total: 2, seconds: 5 },
-    review: { passed: 1, total: 1, seconds: 1 },
+    qa: { passed: 1, total: 2, blocked: 0, seconds: 5 },
+    review: { passed: 1, total: 1, blocked: 0, seconds: 1 },
   });
 
   const record = buildRunRecord({
@@ -320,6 +477,39 @@ test("a recorded run re-scores offline, and a changed verdict is visible", async
   // Re-scoring explains the recorded run; it does not replace it.
   assert.equal(scored[0].answer, entries[0].answer);
   assert.equal(scored[0].prompt_sha256, entries[0].prompt_sha256);
+});
+
+// A --repeat record holds one answer per sample. Re-scoring only the top-level
+// answer would let a case that failed on its second draw pass offline, which is
+// exactly the flakiness --repeat exists to surface.
+test("re-scoring judges every stored sample, not just the first", async () => {
+  const goldenById = indexGoldenCases([
+    {
+      suite: "review",
+      cases: [{ id: "repeat-case", expect: ["clampPage"], expect_absent: ["lastPage - 1"] }],
+    },
+  ]);
+  const [scored] = await rescoreRecord(
+    [
+      {
+        suite: "review",
+        id: "repeat-case",
+        seconds: 6,
+        prompt_sha256: "a".repeat(64),
+        answer: "clampPage no longer returns `lastPage - 1`.",
+        samples: [
+          { answer: "clampPage no longer returns `lastPage - 1`." },
+          { answer: "clampPage returns `lastPage - 1`." },
+        ],
+      },
+    ],
+    goldenById,
+  );
+  assert.equal(scored.ok, false);
+  assert.deepEqual(
+    scored.samples.map((sample) => sample.ok),
+    [true, false],
+  );
 });
 
 // A re-score that only re-ran the stored verdict would pass a review citing a
