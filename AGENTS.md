@@ -111,6 +111,36 @@ returns 410 Gone.
 - **Lazy deep-node SMT storage (ADR-0022)** — `smt_nodes` persists only internal nodes with `depth ≤ LAZY_DEPTH` (`72`, in `src-tauri/src/smt/tree.rs`); deeper nodes are recomputed on read from the leaf "canopy" (the leaves sharing the key's first 72 bits = 9 bytes). Pure-physical: roots/proofs/verifiers are byte-identical (the in-memory `olympus_crypto::smt::SparseMerkleTree` is the parity oracle). `LAZY_DEPTH`/`CANOPY_RECOMPUTE_CAP` (`1024`) are **pinned consts**, mirrored in migration `0044`; a change is a migration-class event. **Over-cap exception:** a canopy with `> CANOPY_RECOMPUTE_CAP` live leaves (only reachable via 72-bit prefix collisions or non-hashed record keys) is _not_ recomputed — the read path reads its persisted deep nodes — so the write-path flush MUST keep persisting `depth > 72` nodes for it, evaluated at flush time against the post-batch live count and materialising the _whole_ canopy on a cap crossing. Migration `0044` prunes pre-existing deep rows except over-cap canopies.
 - **`/zk/verify` enforces the `treeSize=0` invariant** (H-2) — proofs against the document-existence or unified circuits with `treeSize=0` are rejected unless `root` equals `zk::poseidon::empty_doc_existence_root()`.
 
+## Branches and pull requests
+
+These rules apply to every agent and exist because each one was broken here:
+#1793 was a "docs" PR carrying 22 commits and +5.7k lines, including stale
+pre-squash copies of two merged PRs and unreviewed crypto work.
+
+- **Branch from `origin/main`, never local `main`.** Run `git fetch origin`, then
+  `git switch -c <branch> origin/main`. Local `main` drifts, and squash merges
+  leave duplicate commits on it that conflict, block CI and can silently revert
+  merged review fixes. Never commit directly to `main`.
+- **Read `git log --oneline origin/main..HEAD` before every push.** Every commit
+  must belong to this PR's one topic. If any commit is unrelated or already merged
+  upstream, rebuild the branch from `origin/main` with only the commits that belong.
+- **One concern per PR, kept small.** Aim for under ~400 changed lines and ~10
+  files, not counting lockfiles and generated output. Split larger work into a
+  stack of PRs that each build and pass alone, and ask the owner before opening
+  one over ~800 lines. Docs, tooling, dependency and Rust changes are separate PRs.
+- **Crypto-sensitive changes always get their own PR**: `crates/olympus-crypto`,
+  domain tags, hashing, SMT, canonicalization, signatures, circuits, `proofs/`.
+  Each needs top-tier review that a mixed PR buries.
+- **The title describes the whole diff, and the template is filled in**: a real
+  Summary, the Scope paths (the PR Scope Drift check enforces them), and the
+  commands actually run. Never open a PR with the empty template, and never open
+  one that conflicts with `main`, because conflicting PRs run no CI.
+- **No new dependency without asking the owner first**, and never a telemetry,
+  analytics or spend-tracking package in tooling that handles repo content (an
+  `@winding-labs/griffin` wrapper was removed from wiserepo for this).
+- **Stop after three failed attempts at the same approach** and report what was
+  tried. Seven rewordings of one wiserepo prompt each scored the same 2/3.
+
 ## Before every `git push`
 
 Two checks. Both exist because skipping them shipped real defects here, not as
