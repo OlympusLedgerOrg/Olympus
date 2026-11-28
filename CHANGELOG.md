@@ -215,6 +215,31 @@ All notable changes to the Olympus protocol are documented in this file.
 
 ### Changed
 
+- **Canonicalization receipts must be re-proven under RISC Zero 3.1.0;
+  3.0.x proofs are rejected.** The desktop verifier, the offline Rust verifier,
+  and the host-side prover tools now pin `risc0-zkvm = "=3.1.0"`
+  (`risc0-circuit-recursion` 4.1.0), because RISC Zero yanked every earlier 3.x
+  and 4.x release of those crates and stopped serving the recursion-circuit
+  artifacts the 4.0.x build scripts downloaded. 4.1.0 ships a different recursion circuit, so the
+  allowed control root moved (`a54dc85a…` → `e6feef13…`) and the succinct
+  verifier parameters digest moved with it (`ece5e9b8…` → `f57f355f…`). RISC
+  Zero binds that digest into verification, so a receipt proven under 3.0.x
+  fails with `receipt was produced for a version of the verifier with
+  parameters digest ece5e9b8…; expected f57f355f…` and its holder has to
+  re-prove from retained source bytes. Olympus persists neither the source nor
+  the receipt (`canonicalizationReceipt` is a request payload,
+  `src-tauri/src/api/zk/mod.rs`), so there is no data migration and no stored
+  artifact to invalidate. There is deliberately no dual-root path: accepting
+  both control roots would let the receipt's own metadata select a trust
+  configuration and would let an old-circuit proof satisfy a statement whose
+  verifier was moved off a yanked release. The guest stays on 3.0.5, so its
+  image ID, the 96-byte `OLYCAN01` journal, and the fixed-width claim are
+  unchanged; only the receipt bytes were re-proven. A prover and a verifier on
+  opposite sides of this change do not interoperate, so they must be upgraded
+  together, and rollback is not available while the old artifacts stay yanked.
+  Both verifiers pin the expected parameters digest in a regression test, so a
+  future `risc0-zkvm` bump fails CI rather than silently changing which
+  receipts are accepted. See ADR-0040.
 - **OpenTimestamps receipts are only marked verified against pinned Bitcoin
   headers.** The upgrade cron previously recorded a calendar's claimed block
   height and Merkle root with `bitcoin_attestation_verified=false` and

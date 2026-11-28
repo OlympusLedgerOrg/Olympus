@@ -274,6 +274,39 @@ mod tests {
         );
     }
 
+    /// RISC Zero binds the succinct verifier parameter set into receipt
+    /// verification: a receipt names the parameters digest it was produced
+    /// under, and the verifier accepts exactly one. Pin the digest this
+    /// verifier's context carries, so a future `risc0-zkvm` bump fails here
+    /// instead of silently changing which receipts are accepted.
+    ///
+    /// The digest is a tagged hash over the allowed control root, the inner
+    /// control root, and the proof-system/circuit info strings, so it pins the
+    /// 4.1.0 recursion circuit transitively.
+    #[test]
+    fn pinned_succinct_verifier_parameters_match_risc_zero_3_1_0() {
+        use risc0_zkvm::sha::Digestible;
+
+        // crate-default `SuccinctReceiptVerifierParameters` digests at the two
+        // pins: 3.1.0 (recursion circuit 4.1.0) and 3.0.5 (4.0.5).
+        const RISC_ZERO_3_1_0: &str =
+            "f57f355f816d73b9c94cf5c63baa6c70a45fff10cfe3f298a9c2508dc4a06ae8";
+        const RISC_ZERO_3_0_X: &str =
+            "ece5e9b8ae2cd6ea6b1827b464ff0348f9a7f4decd269c0087fdfd75098da013";
+
+        let context = strict_verifier_context();
+        let parameters = context
+            .succinct_verifier_parameters
+            .as_ref()
+            .expect("strict verifier context must pin succinct verifier parameters");
+        let digest = parameters.digest().to_string();
+
+        assert_eq!(digest, RISC_ZERO_3_1_0);
+        // 3.0.x receipts are rejected by design; the pinned context must not
+        // drift back onto the parameter set they were proven under.
+        assert_ne!(digest, RISC_ZERO_3_0_X);
+    }
+
     #[test]
     fn placeholder_guest_fails_closed() {
         if GUEST_ELF.starts_with(b"PLACEHOLDER") {
