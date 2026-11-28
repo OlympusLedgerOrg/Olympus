@@ -39,6 +39,16 @@ to <repo>\.serena\project.yml`). `.serena/` is gitignored here.
 | `SERENA_PROJECT_ROOT`      | this checkout    | overrides the pinned cwd; a relative value resolves against the caller's cwd                            |
 | `SERENA_REQUIRE_HANDSHAKE` | unset            | when set (any value but `0`/`false`), a run without `SERENA_BIN` fails instead of skipping; CI sets `1` |
 
+## Freebuff
+
+Neither Freebuff surface reads `.mcp.json`, and Desktop does not read a
+repository's `.agents/mcp.json` either: its orchestrator loads servers from
+`~/.agents/mcp.json` alone (`agentsConfigPath` in `McpConfigStore`), keeping
+approvals and enable flags in `~/.freebuff/mcp.json`. Add the entry there —
+Settings → MCP / Connectors → _Add server_ — then approve it; a hand-added
+entry loads disabled until you do. The CLI is the surface that reads the project
+file. `tools/wiserepo/README.md` owns the snippet and the per-host detail.
+
 ## Why the launcher pins the cwd
 
 `.mcp.json` runs `tools/serena/bin/mcp-launcher.mjs`, which starts

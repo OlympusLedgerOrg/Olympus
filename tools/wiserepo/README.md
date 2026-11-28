@@ -382,6 +382,31 @@ node -e "console.log(process.execPath)"   # -> the absolute interpreter path
 } } }
 ```
 
+### Freebuff
+
+Freebuff needs the same entry, but at a different path. Neither Freebuff surface
+reads `.mcp.json`, and Desktop does not read a repository's `.agents/mcp.json`:
+its orchestrator loads the server list from exactly one file,
+`~/.agents/mcp.json` (`agentsConfigPath` in `McpConfigStore`), and keeps
+approvals and per-server enable flags beside it in `~/.freebuff/mcp.json`. A
+project `.agents/mcp.json` reaches the CLI only, so a server that works in a
+shell can be missing in Desktop without anything being broken.
+
+- **Add it in the app.** Settings → MCP / Connectors → _Add server_: paste the
+  `mcpServers` block, approve the command, then pick the tools. Desktop writes
+  the definition into `~/.agents/mcp.json` itself, so the CLI picks up the same
+  entry and the two surfaces do not drift.
+- **By hand.** The same entry in `~/.agents/mcp.json` is loaded but disabled; it
+  connects once you approve and enable it under Connectors. The file is read at
+  startup, so restart Desktop after editing it.
+- **CLI precedence.** `.agents/mcp.json` in the project, then
+  `../.agents/mcp.json`, then `~/.agents/mcp.json`; later wins, and a project
+  file asks for trust before its server starts.
+
+Because `~/.agents/mcp.json` sits outside this checkout, Desktop needs the
+absolute `command`/`args` form above; only the committed `.mcp.json` can keep
+the launcher path relative to the repo root.
+
 ### Verifying a host actually registered it
 
 Parsing JSON is not registration. Check the host, in this order:
