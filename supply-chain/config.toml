@@ -2337,7 +2337,7 @@ version = "0.1.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.openssl]]
-version = "0.10.81"
+version = "0.10.82"
 criteria = "safe-to-deploy"
 
 [[exemptions.openssl-macros]]
@@ -2349,7 +2349,7 @@ version = "0.2.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.openssl-sys]]
-version = "0.9.117"
+version = "0.9.118"
 criteria = "safe-to-deploy"
 
 [[exemptions.option-ext]]
