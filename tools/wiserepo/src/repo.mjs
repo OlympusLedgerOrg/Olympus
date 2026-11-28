@@ -217,6 +217,45 @@ export async function gitDiff(args = ["HEAD"], { maxBytes = DEFAULT_DIFF_MAX_CHA
   return truncateText(stdout, maxBytes, `git diff ${args.join(" ")}`);
 }
 
+/**
+ * One file's content AT a revision.
+ *
+ * For tools that must show the code a diff produces, not just its `-`/`+`
+ * lines. `rev` is a revision name and never a `rev:path` string: the colon form
+ * is what sanitizeDiffArgs refuses, and the path is resolved inside the repo
+ * like every other read rather than handed to git as part of the revision.
+ */
+export async function gitShowFile(rev, relPath, { maxBytes = 60_000 } = {}) {
+  if (typeof rev !== "string" || !REVISION_RE.test(rev) || /\.{2,3}/.test(rev)) {
+    throw new Error(`Disallowed revision "${rev}" for git show`);
+  }
+  resolveInRepo(relPath);
+  const { stdout } = await execFileAsync("git", ["show", `${rev}:${relPath}`], {
+    cwd: repoRoot(),
+    maxBuffer: 20 * 1024 * 1024,
+    timeout: GIT_SUBPROCESS_TIMEOUT_MS,
+  });
+  return truncateText(stdout, maxBytes, `${relPath} at ${rev}`);
+}
+
+/**
+ * One file's content as STAGED in the index.
+ *
+ * `git diff --cached` compares a revision to the index, so reading the working
+ * tree would show a tree the diff never mentioned — a file edited after staging
+ * would be described to the model as if the diff produced it. `git show :<path>`
+ * reads stage 0 of the index.
+ */
+export async function gitShowIndexFile(relPath, { maxBytes = 60_000 } = {}) {
+  resolveInRepo(relPath);
+  const { stdout } = await execFileAsync("git", ["show", `:${relPath}`], {
+    cwd: repoRoot(),
+    maxBuffer: 20 * 1024 * 1024,
+    timeout: GIT_SUBPROCESS_TIMEOUT_MS,
+  });
+  return truncateText(stdout, maxBytes, `${relPath} (index)`);
+}
+
 export async function gitGrep(pattern, { globs = [], maxBytes = 30_000 } = {}) {
   if (typeof pattern !== "string") {
     throw new Error("grep pattern must be a string");
