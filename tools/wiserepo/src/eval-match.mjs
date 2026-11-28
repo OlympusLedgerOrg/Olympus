@@ -132,7 +132,12 @@ function isRecommendation(sentence) {
   return /^(?:revert|restore|reinstate)\b/i.test(stripped);
 }
 
-const NEGATION_PATTERN = /\b(?:without|not|never)\b/g;
+// "rather than" is positional for the same reason as "not": "now returns
+// `lastPage` rather than `lastPage - 1`" (a real review, scored as a phantom
+// before this was added) puts the value AFTER it, while "returns `lastPage - 1`
+// rather than `lastPage`" is the live claim and still scores, because the value
+// precedes the marker.
+const NEGATION_PATTERN = /\b(?:without|not|never|rather than)\b/g;
 const NEGATION_WINDOW = 40;
 
 // A negation governs its own clause. "The diff does not touch `clampPage`, so it
@@ -149,6 +154,25 @@ function negatedBefore(sentence, needle) {
     const breakAt = rest.search(CLAUSE_BREAK);
     const clause = breakAt === -1 ? rest : rest.slice(0, breakAt);
     if (normaliseForExpect(clause).includes(needle)) return true;
+  }
+  return false;
+}
+
+// "from X to Y" names X as the value the change replaced: "modifies the upper
+// bound of `clampPage` from `lastPage - 1` to `lastPage`" (qwen3.5:9b, a correct
+// review scored as a phantom before this was added). Positional like the
+// negations: only a value BETWEEN "from" and "to", inside one clause, counts. In
+// "moves the clamp from 1 to `lastPage - 1`" the value is the new one and still
+// scores.
+const FROM_TO = /\bfrom\b([^,;:!?]{1,60}?)\bto\b/g;
+
+function replacedFrom(sentence, needle) {
+  const raw = String(sentence ?? "").toLowerCase();
+  for (const match of raw.matchAll(FROM_TO)) {
+    // The span may hold a "." only inside the value itself (`v1.2`), never as a
+    // sentence break, so a period followed by a space ends the clause.
+    if (/\.\s/.test(match[1])) continue;
+    if (normaliseForExpect(match[1]).includes(needle)) return true;
   }
   return false;
 }
@@ -194,7 +218,9 @@ export function unexpectedMentions(answer, absent) {
       // contains.
       if (
         haystack.includes(needle) &&
-        (override || recommendation || (!attributed && !negatedBefore(sentence, needle)))
+        (override ||
+          recommendation ||
+          (!attributed && !negatedBefore(sentence, needle) && !replacedFrom(sentence, needle)))
       ) {
         phantoms.add(original);
       }

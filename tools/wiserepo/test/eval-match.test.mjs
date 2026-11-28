@@ -116,6 +116,43 @@ test("unexpectedMentions reads a negated value as attribution, not a live claim"
     [],
   );
 
+  // "rather than" is positional: the value after it is the one NOT returned. The
+  // first sentence is verbatim from a correct review that scored as a phantom.
+  assert.deepEqual(
+    unexpectedMentions(
+      "The function `clampPage` now correctly returns `lastPage` when `page` is greater than `lastPage`, rather than `lastPage - 1`.",
+      ["lastPage - 1"],
+    ),
+    [],
+  );
+  assert.deepEqual(
+    unexpectedMentions("clampPage returns lastPage - 1 rather than lastPage.", ["lastPage - 1"]),
+    ["lastPage - 1"],
+    "a value BEFORE 'rather than' is the live claim",
+  );
+
+  // "from X to Y" attributes X, and only X. The first sentence is verbatim from a
+  // correct qwen3.5:9b review that scored as a phantom.
+  assert.deepEqual(
+    unexpectedMentions(
+      "The change modifies the upper bound of `clampPage(page, lastPage)` from `lastPage - 1` to `lastPage`.",
+      ["lastPage - 1"],
+    ),
+    [],
+  );
+  assert.deepEqual(
+    unexpectedMentions("The diff moves the clamp from 1 to lastPage - 1.", ["lastPage - 1"]),
+    ["lastPage - 1"],
+    "a value AFTER 'to' is the new value, a live claim",
+  );
+  assert.deepEqual(
+    unexpectedMentions("Navigating from page one, clampPage returns lastPage - 1 to callers.", [
+      "lastPage - 1",
+    ]),
+    ["lastPage - 1"],
+    "a clause break between 'from' and the value ends the from-to span",
+  );
+
   // The negation has to sit immediately before the value: a "without" elsewhere
   // in the sentence must not excuse a live claim about it.
   assert.deepEqual(

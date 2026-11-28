@@ -381,6 +381,17 @@ prose because "revert" attributed the restored value; an imperative
 recommendation ("Revert the change … adding `+ 1` back") no longer counts as
 attribution, while a sentence that describes a revert still does.
 
+Two forbidden strings alone could not score that claim. A review that says "the
+change removes the `+ 1` … this change is incorrect for the caller … the change is
+too low" attributes the `+ 1` in one sentence and states the defect in another,
+so neither needle fired and the case PASSED a review that flagged the fix
+outright — measured, not hypothetical, on the seventh prompt attempt below and on
+several earlier recorded runs. The case now also requires a stated clean verdict
+("no defect", "no issue", "is correct", …), which is the claim its `why` says it
+scores; `test/eval.test.mjs` drives that prose through `missingExpectations` so a
+future edit cannot drop the guard. The baseline is unchanged at 8/9 under the
+stricter rule because its clean case already failed.
+
 A prompt clarification naming the two revisions (`git diff A B` shows A earlier
 and B as it stands now) was tried against this failure and scored worse:
 `review` fell to 1/3. The reviews then described the pre-diff code as "the
@@ -448,6 +459,83 @@ number is equal to `lastPage`" — the removed code, described as live, which is
 exactly the phantom that case scores. Asking for a direction where there is no
 defect invites one. Reverted, with the planted group still at a stated
 consequence.
+
+A seventh attempt paired the direction ask with a guard, on the reading that the
+phantom broke because nothing forbade it: "when a hunk does have a defect, say
+which way the result is wrong for the caller — too high or too low", plus "a `-`
+line is never current behaviour, however the `+` line reads". The prompt scored
+`review` 3/3 at `--repeat 3` — planted 3/3, phantom 3/3, clean 3/3 — but the
+clean samples said "removes the `+ 1` … this change is incorrect for the caller …
+so the change is too low", which is the false positive that case exists to catch.
+The pass came from the scoring hole described above, not from the review. Once
+the clean case required a stated clean verdict, re-scoring the same answers gave
+`review` 2/3 (clean 0/3, every sample calling the correct fix a defect and
+reporting direction "too low"), so the wording was reverted and the planted
+group was left as it was.
+
+An eighth attempt changed the input instead of the wording: each hunk was sent
+as a labelled BEFORE block and AFTER block with no `-`/`+` markers, and the model
+was told to judge only AFTER. It fixed the misreading this section tracks. The
+phantom case went 3/3 ("now correctly returns `lastPage` … rather than
+`lastPage - 1`"), and every clean sample read the direction correctly ("the
+change removes the `+1`"). But the clean case still failed 0/3 for a different
+reason: the model then argued that `Math.ceil(n / size) + 1` was the right
+formula ("adding one to account for the first page"). That is a reasoning error
+about pagination, not a diff-reading error, and no rendering fixes it. Planted
+also fell to 1/3: one sample read the `clampPage` hunk backwards, and the others
+called `+ 1` "incorrect" without stating its consequence. Net `review` 1/3
+against the 2/3 baseline, so it was reverted.
+
+Two scorer gaps the run exposed are fixed and kept. Both are wordings of the
+claim each case already scores, and the committed baseline re-scores identically
+at 8/9. "rather than" is now positional, like `not`/`without`/`never`: a value
+*after* it is the one not returned, while "returns `lastPage - 1` rather than
+`lastPage`" still scores as a phantom. And "one more page" joins the planted
+case's consequence phrasings. On the same BEFORE/AFTER prompt, `granite4.2:8b`
+scored `review` 3/3 without either fix (it says "extra page" and "overcounts").
+So the remaining clean-case failure is a capacity limit of `qwen2.5-coder:7b` on
+this check, not something the prompt can reach. Granite is not adopted: it
+overflows the 8 GB iGPU at a 16k context, and with a q8_0 KV cache its Vulkan
+runner crashed on every request.
+
+#### Model comparison (2026-11-27)
+
+The target GPU is an 8 GB RTX 2070 Super used headless, about 7.7 GB usable.
+Each model ran the full suite at `--repeat 3` on the committed prompt (hash
+`726296a8`, the same as the baseline). The Arc iGPU had 1.2 GB held back
+(`OLLAMA_GPU_OVERHEAD`) to mimic the 2070's budget. Scores are after the two
+scorer fixes below; the baseline re-scores unchanged.
+
+| Model | qa | review | summarize | total | 16k fit | Arc speed |
+|---|---|---|---|---|---|---|
+| `qwen2.5-coder:7b` (baseline) | 5/5 | 2/3 | 1/1 | **8/9** | 5.2 GB | ~34 tok/s |
+| `qwen3.5:9b` | 5/5 | 2/3 | 0/1 | **7/9** | 6.0 GB | ~13 tok/s |
+| `qwen3.5:9b`, `WISEREPO_THINK=1` | — | 1/3 | — | — | 6.0 GB | slower |
+| `qwen3.5:4b` | 5/5 | 0/2 | — | aborted | 3.4 GB | — |
+
+`qwen3.5:9b` is the only model to pass `clean-fix-not-flagged` on the committed
+prompt (3/3). It missed the planted consequence (1/3), and its summary named no
+functions. Thinking fixed planted (3/3) but lost the other two: its table-style
+reviews never named `clampPage`. The 4B run hit the 300 s timeout on a runaway
+answer. The default stays `qwen2.5-coder:7b`, which is no worse overall and
+about 2.5× faster on the iGPU. `qwen3.5:9b` is worth re-running once the 2070 is
+up.
+
+Two more scorer gaps the 9B exposed, both false fails on correct answers:
+
+- **"from X to Y"** names X as the replaced value. It is now positional like the
+  negations: only a value between `from` and `to` in one clause is attributed,
+  so "moves the clamp from 1 to `lastPage - 1`" still scores as a phantom.
+- **A `../` link target.** `[docs/development.md](../docs/development.md)` was
+  reported as a fabricated citation. `src/citations.mjs` now strips a leading
+  `../` once the literal path fails, the same fallback it uses for diff-header
+  `a/`/`b/` prefixes, and accepts the remainder only if it exists inside the repo.
+  This also stops the real tool from mislabelling such links as unverified.
+
+Flash attention and a q8_0 KV cache are off on the Arc iGPU: with them, Ollama's
+Vulkan backend lost the device after about 1,500 generated tokens
+(`ggml_vulkan: device lost`). Re-test both on the 2070, which uses the CUDA
+backend.
 
 `eval/baseline.json` is this `--repeat 3` run (answers in `eval/runs/`), so the
 comparison point is the honest rate rather than a single draw, and it was

@@ -201,6 +201,33 @@ test("every review case requires the review to address the diff", async () => {
   // no plus), so the consequence phrasing is scored too.
   assert.deepEqual(clean.expect_absent, ["+ 1", "extra page"]);
   assert.ok(clean.expect.length > 0);
+
+  // REGRESSION: a review that called the correct fix a bug PASSED, because it
+  // stated the removal in one sentence (attributing the `+ 1`) and the defect in
+  // another, so neither forbidden needle fired. The case exists to score a
+  // review that flags visibly correct code, so it has to require the opposite
+  // claim, not merely the absence of two strings.
+  const cleanVerdict = clean.expect.find(Array.isArray);
+  assert.ok(cleanVerdict, "the clean case does not require a clean verdict");
+  assert.ok(cleanVerdict.includes("no defect"));
+  assert.equal(
+    missingExpectations(
+      "The change removes the `+ 1` from `pageCount`. This change is incorrect for the caller, " +
+        "so the count is now too low.",
+      clean.expect,
+    ).length,
+    1,
+    "a review that flags the correct fix satisfied the clean case",
+  );
+  assert.deepEqual(
+    missingExpectations(
+      "`pageCount`: no defect. The diff removes the `+ 1`, which is the correct fix.",
+      clean.expect,
+    ),
+    [],
+  );
+  // The verdict does not replace the requirement to have looked at the change.
+  assert.deepEqual(missingExpectations("No defect in this range.", clean.expect), ["pageCount"]);
 });
 
 // REGRESSION: a review that only discussed one hunk PASSED the phantom case

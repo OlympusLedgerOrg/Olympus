@@ -2,7 +2,9 @@
 
 Project-scoped [Serena](https://github.com/oraios/serena) MCP server: LSP-backed
 symbol navigation and symbol-scoped edits. `.mcp.json` registers it and
-`AGENTS.md` says when to reach for it; this file owns the setup.
+`AGENTS.md` says when to reach for it; this file owns the setup. Codex does not
+read `.mcp.json` — its registration snippet lives in `tools/wiserepo/README.md`
+and is the same shape for both servers.
 
 ## Install into its own venv
 
