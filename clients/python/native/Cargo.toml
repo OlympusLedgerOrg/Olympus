@@ -19,7 +19,7 @@ crate-type = [ "cdylib" ]
 [dependencies]
 # abi3-py39: one wheel per platform covers every CPython >= 3.9 (matches
 # clients/python's requires-python).
-pyo3 = { version = "0.29", features = [ "extension-module", "abi3-py39" ] }
+pyo3 = { version = "0.30", features = [ "extension-module", "abi3-py39" ] }
 olympus-crypto = { path = "../../../crates/olympus-crypto", features = [
   "smt",
 ] }
