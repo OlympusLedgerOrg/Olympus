@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { GateError, escalationTier, parseArgs, planVerification, runGate } from "./verify.mjs";
@@ -142,6 +143,17 @@ test("a touched tool runs its own test files", () => {
 test("a TOML change adds the TOML formatter", () => {
   const plan = planVerification(["taplo.toml"]);
   assert.ok(commandsFor(plan, "tooling").includes("node scripts/taplo.mjs format --check"));
+});
+
+test("the TOML check is the same invocation as package.json's format:toml:check", () => {
+  // The gate cannot call `pnpm format:toml:check` (pnpm may rewrite the
+  // lockfile), so it duplicates the command. Pin the copy to the script so the
+  // two cannot drift apart again — the gate once ran a `@taplo/cli` path that
+  // no longer existed after `pnpm install --frozen-lockfile`.
+  const pkg = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8"));
+  const plan = planVerification(["Cargo.toml"]);
+  const taplo = commandsFor(plan, "tooling").filter((command) => command.includes("taplo"));
+  assert.deepEqual(taplo, [pkg.scripts["format:toml:check"]]);
 });
 
 test("the gate stops at the first failure and names the tier", () => {
