@@ -95,6 +95,44 @@ code-specialised family. If someone does benchmark `qwen3.5:4b` against the
 default with `bin/eval.mjs`, record the numbers here and revisit — until then,
 this is the decision, and a re-pull is not progress.
 
+### `granite4.2:8b`: what a bigger, non-code model costs (measured)
+
+`granite4.2:8b` was pulled and smoke-tested as a plausible replacement for prose
+work — summarizing a doc, answering a question about one — where code
+specialisation matters less than it does for `review_diff`. It works, and it is **not** the default. It has no eval score — the harness runs
+again (see "Recorded scores"), but nothing has put granite through it — so the
+evidence here is memory and latency alone. The numbers decide whether it is even
+an option:
+
+| quantity | value | source |
+| --- | --- | --- |
+| weights | 5.3 GB (8.8B, Q4_K_M) | `ollama pull` |
+| KV cache per token | 160 KiB | `/api/show`: 40 blocks × 8 KV heads × 128 head-dim × 2 tensors × 2 B |
+| KV cache at 8K / 16K / 32K | 1.25 / 2.5 / 5.0 GiB | the line above × window |
+| resident at `num_ctx 16384` | **8.23 GB** | `/api/ps` `size` |
+| of that, in iGPU VRAM | 7.56 GB | `/api/ps` `size_vram` |
+| read from system RAM | 0.67 GB | the difference — the spill |
+| first load / warm answer | 29 s / 7.5 s | smoke run on one allowlisted doc, correct verbatim quotes |
+
+The comparison is the default tag, which is 5.47 GB *fully* in the iGPU at the
+same window. granite spends 8.23 GB there mostly on context, not weights: its KV
+cache is 160 KiB/token against `qwen2.5-coder:7b-instruct`'s 56 KiB (40 blocks ×
+8 KV heads against 28 × 4), i.e. 2.5 GiB of the residency at 16K. The remaining
+≈5.55 GB is weights plus compute buffers, so an 8K window would need ≈6.9 GB —
+still about 1.4 GB more than the 7B, on a machine that measured 1.1 GB of
+15.6 GB RAM free with the 7B loaded. It therefore does not fit an 8 GB card
+(RTX 2070 Super, 8 GB): 8.23 GB at 16K is over the card, and ~6.9 GB at 8K
+leaves nothing for the desktop. The model that does fit 8 GB is the default tag —
+5.47 GB of weights plus 0.94 GB of KV at 16K is ~6.4 GB — which is why the
+2026-11-27 scores above are recorded against it.
+
+It is available on purpose, not wired in: `WISEREPO_MODEL_QA=granite4.2:8b` (or
+`_SUMMARIZE`) runs one tool on it while `review_diff` keeps the code-specialised
+default. Do not change `DEFAULT_OLLAMA_MODEL` before an eval run scores the
+swap — a bigger tag is not a better answer, and the harness is the only thing
+here that could say either way. Digest seen for this tag: `f586c02fdecd…`; a
+re-pull changes it, which is why runs record it.
+
 ### Hardware: iGPU yes, NPU no
 
 This is a Core Ultra (Arc 140V iGPU + NPU) laptop, and Ollama uses neither by
@@ -230,7 +268,7 @@ the repo — treat as unverified: …`). The answer is still returned — a wron
 is not grounds to discard a useful review — but it cannot pass as evidence.
 
 Two things are *not* fabricated citations. Git's diff headers carry `a/` and `b/`
-prefixes (`--- a/src/pager.js`), so a path that does not resolve literally is
+prefixes (`--- a/app/public-ui/src/pager.js`), so a path that does not resolve literally is
 tried again with that prefix stripped — as a fallback, never a rewrite, so a
 repo that really has an `a/` directory still resolves against it. And a file the
 answer is **proposing** (`add a regression test in src/pager.test.js`, "…does not
@@ -260,7 +298,7 @@ Every case in every suite additionally fails if the answer cites a `path` or
 `path:line` that does not resolve in the tree being scored. Citation checking is
 not a separate suite: an invented path is a false claim, and a benchmark that
 printed it beside a `PASS` would report the tool's worst failure mode as a
-correct answer. The fixture repo contains only `src/pager.js` and `AGENTS.md`, so
+correct answer. The fixture repo contains only `app/public-ui/src/pager.js` and `AGENTS.md`, so
 a review that cites a plausible-looking file it never read fails there. The two
 honest exceptions above apply here too — a quoted `a/`/`b/` header and a
 recommended test file — so the case is decided by what the review claims about
@@ -269,7 +307,9 @@ the code, not by how it drew its paths.
 `review_diff` and `summarize` take `git diff` arguments rather than diff text, so
 those two suites share one throwaway git repo built from `eval/fixtures/` per run
 (`qa` stays on this repo, since it grounds on the real tree):
-`pager.before.js` is committed as `src/pager.js`, `pager.after.js` is committed
+`pager.before.js` is committed as `app/public-ui/src/pager.js` (an allowlisted path —
+at `src/pager.js` the agent policy refuses the diff and every review case reports
+`BLOCKED`), `pager.after.js` is committed
 as a second commit, `WISEREPO_ROOT` is pointed at that repo, and the case diffs
 `HEAD~1..HEAD`. Both states are committed because the two fixture files are the
 same byte length — an uncommitted overwrite can fall inside git's racy-clean
@@ -285,6 +325,7 @@ smoke review here once produced.
 node bin/eval.mjs                            # all three suites
 node bin/eval.mjs --task qa                  # the cheap suite (real repo, no fixture)
 node bin/eval.mjs --limit 2                  # first 2 cases per suite
+node bin/eval.mjs --repeat 3                 # 3 samples per case, so 3/3 is not one draw
 node bin/eval.mjs --model qwen2.5-coder:3b   # compare tags on the same cases
 node bin/eval.mjs --write-baseline           # record eval/baseline.json
 node bin/eval.mjs --show-answers             # print each raw answer under its verdict
@@ -296,10 +337,242 @@ count is a failure), and with `--show-answers` the raw answer beneath each
 verdict — the score says a case moved, never why. It also prints a per-suite
 and overall score, and — when `eval/baseline.json` exists — a per-suite
 comparison (`unchanged` / `improved` / `REGRESSION`). It exits `0` whenever the
-run completed (it is a benchmark, not a gate) and `2` when the backend was
-unavailable. Runs are slow: one case is one full model call, so `--limit`
-exists for smoke tests and `--task qa` for a model-only check that needs no
-fixture repo.
+run completed (it is a benchmark, not a gate), `2` when the backend was
+unavailable, and `3` when nothing could be scored because the agent policy
+refused every case (see below). Runs are slow: one case is one full model call,
+so `--limit` exists for smoke tests and `--task qa` for a model-only check that
+needs no fixture repo.
+
+`--repeat N` runs each case N times and prints `passed/N samples`; the case
+passes only when **every** sample does. The suite's denominator stays in cases,
+so a repeat run still compares against a one-sample baseline as a score rather
+than as a changed case set, and flakiness shows on the case line instead of
+disappearing into a percentage. Temperature 0 is not reproducibility (see
+`src/backend.mjs`), and a three-case suite makes one draw per case weak evidence,
+so a prompt change worth keeping should be measured at `--repeat 3`. The count is
+recorded in `provenance.repeat`, and a comparison between runs with different
+sample counts says so.
+
+#### Recorded scores
+
+`qwen2.5-coder:7b-instruct` at `num_ctx 16384`, `--repeat 3` and `--model` set so
+all three suites run the same tag and the same number of samples, on the
+re-scoped case set (2026-11-27):
+
+| suite | score | time | what failed |
+| --- | --- | --- | --- |
+| `qa` | 5/5 (3/3 samples each) | 70 s | — |
+| `review` | 2/3 (planted 3/3, phantom 3/3, clean 0/3) | 103 s | `clean-fix-not-flagged`: every sample called the correct fix a defect and proposed restoring `+ 1` |
+| `summarize` | 1/1 (3/3 samples) | 26 s | — |
+| **overall** | **8/9 (89 %)** | 199 s | |
+
+The failure moved with the tool. Before `review_diff` sent the post-diff file,
+`no-phantom-removed-line` failed 0/3 samples in every run — the model kept
+saying the code *currently* returned the removed value — and prompt rewrites
+only traded that failure into another case (below). Sending each touched file as
+it stands after the diff fixed it: every sample now describes the removal
+correctly.
+
+`clean-fix-not-flagged` took its place. On a range whose only change is the
+correct removal of `+ 1`, every sample calls the fix a defect and recommends
+adding `+ 1` back. That is a precision failure, not a phantom, and it is exactly
+what that case exists to catch. One earlier sample scored PASS on that same
+prose because "revert" attributed the restored value; an imperative
+recommendation ("Revert the change … adding `+ 1` back") no longer counts as
+attribution, while a sentence that describes a revert still does.
+
+Two forbidden strings alone could not score that claim. A review that says "the
+change removes the `+ 1` … this change is incorrect for the caller … the change is
+too low" attributes the `+ 1` in one sentence and states the defect in another,
+so neither needle fired and the case PASSED a review that flagged the fix
+outright — measured, not hypothetical, on the seventh prompt attempt below and on
+several earlier recorded runs. The case now also requires a stated clean verdict
+("no defect", "no issue", "is correct", …), which is the claim its `why` says it
+scores; `test/eval.test.mjs` drives that prose through `missingExpectations` so a
+future edit cannot drop the guard. The baseline is unchanged at 8/9 under the
+stricter rule because its clean case already failed.
+
+A prompt clarification naming the two revisions (`git diff A B` shows A earlier
+and B as it stands now) was tried against this failure and scored worse:
+`review` fell to 1/3. The reviews then described the pre-diff code as "the
+original code", which the attribution matcher did not recognise, and
+`clean-fix-not-flagged` failed with it. The wording was reverted rather than
+tuned against three cases. The matcher now accepts that framing and plain past
+tense (see `src/eval-match.mjs`): re-scoring that run turns
+`no-phantom-removed-line` into a PASS, though `clean-fix-not-flagged` still
+fails there on a separate unattributed sentence ("an extra page being
+calculated"). It explains why that failure was not a matcher artifact: the
+answer says the code *currently* returns the removed value, which is the phantom
+the case scores.
+
+Re-run at `--repeat 3` with the matcher fixed, that wording took
+`no-phantom-removed-line` to 3/3 samples but left `clean-fix-not-flagged` at
+0/3: its answers attribute the removal ("The original code adds `1` …") and then
+state the consequence in a fresh present-tense sentence, which the matcher
+reads as a live claim. Adding a clause that keeps the consequence inside the
+attributed sentence scored 1/3 instead — the planted-bug case then described the
+defect as "increases the page count by 1", which the group did not accept at the
+time (it does now), and the phantom case inverted direction again. Both variants
+were reverted.
+
+A third attempt aimed at `clean-fix-not-flagged` directly, adding "a hunk whose
+only effect is to remove a defect is a correct change: say so plainly, and do not
+recommend restoring what it removed". At `--repeat 3` it scored `review` 1/3: two
+of three clean samples stopped proposing the restore, but the answers collapsed
+to "both hunks are correct" without naming `clampPage`, so
+`no-phantom-removed-line` failed on its positive expectation (0/3) instead. It
+was reverted: a blanket permission to call a change correct costs the naming the
+phantom case scores.
+
+The fourth attempt was a per-hunk restatement: "name the function it changes and
+state what that function does after the change, then give your finding — or say
+the hunk is correct". At `--repeat 3` it fixed both failing cases
+(`no-phantom-removed-line` 3/3, `clean-fix-not-flagged` 3/3) but broke
+`planted-off-by-one` (0/3): the answers named `pageCount` and called adding 1
+"unnecessary and incorrect" without ever stating the consequence. Accepting that
+phrasing (`adds 1 to the result`, `unnecessary`) made the suite 3/3, and that was
+the wrong fix: both are available from the added line itself, so the case could
+no longer tell a review that understood the bug from one that paraphrased the
+hunk. With the group tightened back to a stated consequence, the same prompt
+scored `review` 2/3 with `planted-off-by-one` at 0/3, so the wording was
+reverted. `increases the page count` stays accepted because it states the
+consequence; `off-by-one` and `+ 1` do not, so a review that only describes the
+`clampPage` hunk cannot pass.
+
+A fifth attempt kept the per-hunk restatement and asked for the consequence
+directly: "for a defect, say what goes wrong for the caller — the wrong value or
+result it produces — not just that the change looks wrong". At `--repeat 3` it
+held `no-phantom-removed-line` and `clean-fix-not-flagged` at 3/3 and left
+`planted-off-by-one` at 0/3. The answers named `pageCount` and even walked
+through an example ("the modified function would return 3"), but called the
+result "an incorrect number of pages" and got the surrounding arithmetic muddled,
+so they never stated that it returns one page too many. The expectation group was
+left alone and the sentence reverted: the case is scoring the direction of the
+error, and those reviews did not state it.
+
+A sixth attempt added that direction to the same sentence — "say which way the
+result is wrong for the caller — too high or too low". It fixed the planted case
+(3/3) and held the clean one (3/3) but broke `no-phantom-removed-line` (0/3): on
+the fix-only range the reviews looked for a direction to report and invented one,
+saying "the current implementation will return `lastPage - 1` when the input page
+number is equal to `lastPage`" — the removed code, described as live, which is
+exactly the phantom that case scores. Asking for a direction where there is no
+defect invites one. Reverted, with the planted group still at a stated
+consequence.
+
+A seventh attempt paired the direction ask with a guard, on the reading that the
+phantom broke because nothing forbade it: "when a hunk does have a defect, say
+which way the result is wrong for the caller — too high or too low", plus "a `-`
+line is never current behaviour, however the `+` line reads". The prompt scored
+`review` 3/3 at `--repeat 3` — planted 3/3, phantom 3/3, clean 3/3 — but the
+clean samples said "removes the `+ 1` … this change is incorrect for the caller …
+so the change is too low", which is the false positive that case exists to catch.
+The pass came from the scoring hole described above, not from the review. Once
+the clean case required a stated clean verdict, re-scoring the same answers gave
+`review` 2/3 (clean 0/3, every sample calling the correct fix a defect and
+reporting direction "too low"), so the wording was reverted and the planted
+group was left as it was.
+
+An eighth attempt changed the input instead of the wording: each hunk was sent
+as a labelled BEFORE block and AFTER block with no `-`/`+` markers, and the model
+was told to judge only AFTER. It fixed the misreading this section tracks. The
+phantom case went 3/3 ("now correctly returns `lastPage` … rather than
+`lastPage - 1`"), and every clean sample read the direction correctly ("the
+change removes the `+1`"). But the clean case still failed 0/3 for a different
+reason: the model then argued that `Math.ceil(n / size) + 1` was the right
+formula ("adding one to account for the first page"). That is a reasoning error
+about pagination, not a diff-reading error, and no rendering fixes it. Planted
+also fell to 1/3: one sample read the `clampPage` hunk backwards, and the others
+called `+ 1` "incorrect" without stating its consequence. Net `review` 1/3
+against the 2/3 baseline, so it was reverted.
+
+Two scorer gaps the run exposed are fixed and kept. Both are wordings of the
+claim each case already scores, and the committed baseline re-scores identically
+at 8/9. "rather than" is now positional, like `not`/`without`/`never`: a value
+*after* it is the one not returned, while "returns `lastPage - 1` rather than
+`lastPage`" still scores as a phantom. And "one more page" joins the planted
+case's consequence phrasings. On the same BEFORE/AFTER prompt, `granite4.2:8b`
+scored `review` 3/3 without either fix (it says "extra page" and "overcounts").
+So the remaining clean-case failure is a capacity limit of `qwen2.5-coder:7b` on
+this check, not something the prompt can reach. Granite is not adopted: it
+overflows the 8 GB iGPU at a 16k context, and with a q8_0 KV cache its Vulkan
+runner crashed on every request.
+
+#### Model comparison (2026-11-27)
+
+The target GPU is an 8 GB RTX 2070 Super used headless, about 7.7 GB usable.
+Each model ran the full suite at `--repeat 3` on the committed prompt (hash
+`726296a8`, the same as the baseline). The Arc iGPU had 1.2 GB held back
+(`OLLAMA_GPU_OVERHEAD`) to mimic the 2070's budget. Scores are after the two
+scorer fixes below; the baseline re-scores unchanged.
+
+| Model | qa | review | summarize | total | 16k fit | Arc speed |
+|---|---|---|---|---|---|---|
+| `qwen2.5-coder:7b` (baseline) | 5/5 | 2/3 | 1/1 | **8/9** | 5.2 GB | ~34 tok/s |
+| `qwen3.5:9b` | 5/5 | 2/3 | 0/1 | **7/9** | 6.0 GB | ~13 tok/s |
+| `qwen3.5:9b`, `WISEREPO_THINK=1` | — | 1/3 | — | — | 6.0 GB | slower |
+| `qwen3.5:4b` | 5/5 | 0/2 | — | aborted | 3.4 GB | — |
+
+`qwen3.5:9b` is the only model to pass `clean-fix-not-flagged` on the committed
+prompt (3/3). It missed the planted consequence (1/3), and its summary named no
+functions. Thinking fixed planted (3/3) but lost the other two: its table-style
+reviews never named `clampPage`. The 4B run hit the 300 s timeout on a runaway
+answer. The default stays `qwen2.5-coder:7b`, which is no worse overall and
+about 2.5× faster on the iGPU. `qwen3.5:9b` is worth re-running once the 2070 is
+up.
+
+Two more scorer gaps the 9B exposed, both false fails on correct answers:
+
+- **"from X to Y"** names X as the replaced value. It is now positional like the
+  negations: only a value between `from` and `to` in one clause is attributed,
+  so "moves the clamp from 1 to `lastPage - 1`" still scores as a phantom.
+- **A `../` link target.** `[docs/development.md](../docs/development.md)` was
+  reported as a fabricated citation. `src/citations.mjs` now strips a leading
+  `../` once the literal path fails, the same fallback it uses for diff-header
+  `a/`/`b/` prefixes, and accepts the remainder only if it exists inside the repo.
+  This also stops the real tool from mislabelling such links as unverified.
+
+Flash attention and a q8_0 KV cache are off on the Arc iGPU: with them, Ollama's
+Vulkan backend lost the device after about 1,500 generated tokens
+(`ggml_vulkan: device lost`). Re-test both on the 2070, which uses the CUDA
+backend.
+
+`eval/baseline.json` is this `--repeat 3` run (answers in `eval/runs/`), so the
+comparison point is the honest rate rather than a single draw, and it was
+recorded on the prompt the tool now sends. A one-sample run is still allowed; it
+just reports `samples per case 3 -> 1` as a provenance difference. This run
+recorded `worktree dirty`, which is correct — the eval's own files were
+uncommitted at the time.
+
+#### Blocked cases
+
+Every eval tool call goes through the agent policy
+(`tools/agent-policy/policy.json`), exactly as a caller's does. A golden case
+that names a denied path is therefore **refused**: the local model never sees
+the file. The case is recorded as `BLOCKED`, its refused paths are printed, it
+leaves the suite's denominator, and the run continues:
+
+```text
+BLOCKED  qa/node-prefix  (0s, agent policy — not scored)
+      refused: crates/olympus-crypto/src/lib.rs (denied path)
+```
+
+It is deliberately **not** a failure (`0/5` would read like a model that got
+everything wrong, when nothing was asked), **not** a stack trace, and **not**
+overridden. An eval that could bypass the policy would score a model on files
+the tool refuses to read, which measures a build nobody runs. `--write-baseline`
+refuses to record a run containing any blocked case: an incomplete case set must
+not become the comparison point.
+
+This is not hypothetical. The original case set named `crates/`, `src-tauri/`,
+`tools/` and `AGENTS.md`, and its fixture sat at `src/pager.js`; once the policy
+landed, all nine cases blocked and the eval scored nothing. The fix was to
+re-scope the cases, never the policy: the fixture is now committed at
+`app/public-ui/src/pager.js`, and the five `qa` cases read
+`docs/architecture.md`, `docs/quickstart.md`, `docs/development.md`,
+`docs/c2pa-bridge.md` and `app/public-ui/src/App.tsx`. `test/eval.test.mjs`
+asserts every golden case's paths against the policy, so a case that could not
+run fails a test instead of quietly emptying its suite.
 
 Every run also writes its answers to `eval/runs/<timestamp>.json` (gitignored),
 and `eval/baseline.json` points at the run that produced it via `answers`. Along
@@ -324,7 +597,7 @@ verdict changed since it was recorded. That is how a scoring change is checked
 against real answers, and how two recorded runs are compared later. Citations
 are verified against the current tree, so re-score a run from another commit on
 that commit (`git checkout <provenance.git_sha>`); otherwise a recorded
-`src/pager.js` citation resolves nowhere in this repo.
+`app/public-ui/src/pager.js` citation resolves nowhere in this repo.
 
 The baseline is what makes prompt changes measurable: record one with
 `--write-baseline` against the prompt you are about to change, then re-run
@@ -384,28 +657,50 @@ node -e "console.log(process.execPath)"   # -> the absolute interpreter path
 
 ### Freebuff
 
-Freebuff needs the same entry, but at a different path. Neither Freebuff surface
-reads `.mcp.json`, and Desktop does not read a repository's `.agents/mcp.json`:
-its orchestrator loads the server list from exactly one file,
-`~/.agents/mcp.json` (`agentsConfigPath` in `McpConfigStore`), and keeps
-approvals and per-server enable flags beside it in `~/.freebuff/mcp.json`. A
-project `.agents/mcp.json` reaches the CLI only, so a server that works in a
-shell can be missing in Desktop without anything being broken.
+The snippet above is the one both Freebuff surfaces need, but the path differs.
+Desktop does **not** read `.mcp.json`, and it does not read a repository's
+`.agents/mcp.json` either: its orchestrator loads the server list from exactly
+one file, `~/.agents/mcp.json` (`agentsConfigPath` in `McpConfigStore`), and
+keeps approvals and per-server enable flags beside it in `~/.freebuff/mcp.json`.
+A project-scoped `.agents/mcp.json` reaches the CLI only, so a server that works
+in a shell can be missing in Desktop without anything being broken.
 
-- **Add it in the app.** Settings → MCP / Connectors → _Add server_: paste the
-  `mcpServers` block, approve the command, then pick the tools. Desktop writes
-  the definition into `~/.agents/mcp.json` itself, so the CLI picks up the same
-  entry and the two surfaces do not drift.
-- **By hand.** The same entry in `~/.agents/mcp.json` is loaded but disabled; it
-  connects once you approve and enable it under Connectors. The file is read at
-  startup, so restart Desktop after editing it.
-- **CLI precedence.** `.agents/mcp.json` in the project, then
-  `../.agents/mcp.json`, then `~/.agents/mcp.json`; later wins, and a project
-  file asks for trust before its server starts.
+- **Where servers are added.** Settings → MCP / Connectors → _Add server_:
+  paste the `mcpServers` block, approve the command, then pick the tools. Desktop
+  writes the definition into `~/.agents/mcp.json` itself, so the CLI picks the
+  same entry up and the two surfaces do not drift.
+- **By hand.** The same entry in `~/.agents/mcp.json` is loaded, but disabled:
+  it connects only after you approve and enable it under Connectors. Restart
+  Desktop after editing the file; the config is read at startup.
+- **CLI.** `.agents/mcp.json` in the project, then `../.agents/mcp.json`, then
+  `~/.agents/mcp.json`; later wins, and a project file asks for trust before its
+  server starts.
 
-Because `~/.agents/mcp.json` sits outside this checkout, Desktop needs the
-absolute `command`/`args` form above; only the committed `.mcp.json` can keep
-the launcher path relative to the repo root.
+Only Desktop is limited this way. Desktop 0.0.206 has no project-scope loader at
+all — what its Connectors screen writes is the home file — so keep the entry in
+`~/.agents/mcp.json` and out of the committed `.agents/` config.
+
+### Codex
+
+Codex does **not** read `.mcp.json`, and this repo gitignores `.codex/`, so a
+working registration cannot be committed. Add both servers once per machine in
+`~/.codex/config.toml` (or `.codex/config.toml` in a trusted project):
+
+```toml
+[mcp_servers.wiserepo]
+command = "node"
+args = ["C:/path/to/Olympus/tools/wiserepo/bin/mcp-launcher.mjs"]
+
+[mcp_servers.serena]
+command = "node"
+args = ["C:/path/to/Olympus/tools/serena/bin/mcp-launcher.mjs"]
+```
+
+Use absolute, forward-slash paths. The launchers pin the server's cwd to this
+checkout, so the argument is the only part that must not be relative to
+whatever directory Codex happens to spawn from. Serena additionally needs
+`SERENA_BIN` (see `tools/serena/README.md`) in the environment Codex inherits.
+`codex mcp add <name> -- node <absolute-launcher>` writes the same table.
 
 ### Verifying a host actually registered it
 
@@ -457,9 +752,13 @@ last.
 - `repo_qa` — ask a question grounded in repo file contents / a git-grep search
 - `review_diff` — review a diff against `AGENTS.md`'s engineering standards. The
   prompt states the diff convention explicitly (`-` is removed code, `+` is added,
-  a `-`/`+` pair at one position is a fix), because a small model otherwise
-  reports a deleted line as current behaviour — the failure the `review` eval's
-  second case scores.
+  a `-`/`+` pair at one position is a fix), and it also sends each touched file
+  **as it stands after the diff** (`git show <rev>:<path>`, the index for
+  `--cached`/`--staged`, or the working tree when the args name no range),
+  because a small model otherwise reports a deleted line as current behaviour —
+  the failure the `review` eval's second case scores.
+  Those files get at most a third of the leftover context, so the diff is still
+  what gets reviewed first, and at most five of them are sent.
 - `summarize` — summarize a diff or set of files (changelog entry, PR description, etc.)
 
 Every file/diff/grep result is truncated per-piece, and the combined context for

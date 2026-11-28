@@ -2,7 +2,9 @@
 
 Project-scoped [Serena](https://github.com/oraios/serena) MCP server: LSP-backed
 symbol navigation and symbol-scoped edits. `.mcp.json` registers it and
-`AGENTS.md` says when to reach for it; this file owns the setup.
+`AGENTS.md` says when to reach for it; this file owns the setup. Codex does not
+read `.mcp.json` — its registration snippet lives in `tools/wiserepo/README.md`
+and is the same shape for both servers.
 
 ## Install into its own venv
 
@@ -43,9 +45,9 @@ to <repo>\.serena\project.yml`). `.serena/` is gitignored here.
 
 Neither Freebuff surface reads `.mcp.json`, and Desktop does not read a
 repository's `.agents/mcp.json` either: its orchestrator loads servers from
-`~/.agents/mcp.json` alone (`agentsConfigPath` in `McpConfigStore`), keeping
-approvals and enable flags in `~/.freebuff/mcp.json`. Add the entry there —
-Settings → MCP / Connectors → _Add server_ — then approve it; a hand-added
+`~/.agents/mcp.json` only (`agentsConfigPath` in `McpConfigStore`), with
+approvals and enable flags in `~/.freebuff/mcp.json`. Register the entry at that
+path — Settings → MCP / Connectors → _Add server_ — and approve it; a hand-added
 entry loads disabled until you do. The CLI is the surface that reads the project
 file. `tools/wiserepo/README.md` owns the snippet and the per-host detail.
 
