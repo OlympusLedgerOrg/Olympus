@@ -42,7 +42,7 @@ getrandom = "0.3"
 # the profile's implementation_id; unicode-properties' version is checked at
 # compile time, ICU's by the dev-dep cross-check below. Kept on the 2.2 line
 # the workspace already locks so adding it moves no other ICU crate.
-icu_casemap = "=2.2.0"
+icu_casemap = "=2.4.0"
 unicode-properties = { version = "=0.1.4", default-features = false, features = [
   "general-category",
 ] }
