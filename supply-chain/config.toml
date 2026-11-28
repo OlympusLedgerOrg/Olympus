@@ -400,8 +400,16 @@ criteria = "safe-to-deploy"
 version = "0.8.0"
 criteria = "safe-to-deploy"
 
+[[exemptions.bit-set]]
+version = "0.11.1"
+criteria = "safe-to-deploy"
+
 [[exemptions.bit-vec]]
 version = "0.8.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.bit-vec]]
+version = "0.10.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.bitflags]]
@@ -726,6 +734,10 @@ criteria = "safe-to-deploy"
 
 [[exemptions.core-graphics-types]]
 version = "0.2.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.core_detect]]
+version = "1.0.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.corosensei]]
@@ -2605,7 +2617,7 @@ version = "1.0.106"
 criteria = "safe-to-deploy"
 
 [[exemptions.proptest]]
-version = "1.11.0"
+version = "1.12.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.prost]]
@@ -2725,7 +2737,7 @@ version = "0.10.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.rand_xorshift]]
-version = "0.4.0"
+version = "0.5.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.raw-cpuid]]
