@@ -92,6 +92,20 @@ test("verifyCitations resolves diff-header paths against the file they name", as
   assert.deepEqual(missing, []);
 });
 
+// REGRESSION: qwen3.5:9b cited the right doc as a Markdown link written relative
+// to another doc, `(../docs/development.md)`, and the gate called it fabricated.
+// The `../` re-anchors to the root only when the remainder really exists there.
+test("verifyCitations re-anchors a leading ../ but still rejects what does not exist", async () => {
+  const ok = await verifyCitations(`see [${PKG}](../${PKG}:3) and (../../${PKG})`);
+  assert.deepEqual(ok.missing, []);
+  const ghost = await verifyCitations("see (../tools/wiserepo/src/ghost.js)");
+  assert.deepEqual(
+    ghost.missing.map((c) => c.path),
+    ["../tools/wiserepo/src/ghost.js"],
+    "stripping ../ must not excuse a path that is missing at the root too",
+  );
+});
+
 // REGRESSION: a review that recommends a missing test file was scored as if it
 // had invented evidence. A proposal is expected NOT to exist, so it is excused —
 // but only when the sentence frames it that way.

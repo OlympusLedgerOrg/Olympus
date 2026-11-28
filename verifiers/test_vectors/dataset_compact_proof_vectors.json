@@ -1,0 +1,276 @@
+{
+  "format": "olympus-dataset-proof/v1 compact exact bodies",
+  "generator": "cargo run -p olympus-manifest --example gen_dataset_proof_vectors",
+  "negative": [
+    {
+      "error": "InvalidProofEncoding(\"unknown statement\")",
+      "item_root": "c81f197b655128ef1afc94bffbde7e7645f04e17ad7d8e5d7080b80e379cd51f",
+      "name": "unknown-statement-tag",
+      "p": 2,
+      "proof": "0921883b1613acbd489bb386738d8744c4dc64532ba1fbb143b8d8e52ec7e3bf7800000000000000000006c37fe8cfbddd3d74684bb344851ae164c8ba8b5e6d4e4eff5c9397dcc112660cc9fa9ae4dd5ff90ca80f5d64366d394aa11ee63de1af295819ce278f13a04e94000000000000000122c5220250788013e1e3afe17c26d20d62879d61209a4a58a28a26f4fc056fe300000000000000100003e0be4a7bcbe8a277826d0d9049a222cc2299c1efc39beacc05120f6a4200e666f8a7b4ff56c645f444be209395e59a53ff78204a559b85a908e4120eb7b2282b7b7e70ff48a4f126167676418deffe90e4d311ed53b367a0b021d7ecdaebaa5175a383e0fa2344e75a77ffe351ee40f2e32ad9d1bc7df016fdbde943d032f9fb121f2bea5b5aca28eb905850c0d9aadce8b873da8d15976346bc81a4756c5e80e3",
+      "rule": "§8: reject unknown tags",
+      "stage": "decode"
+    },
+    {
+      "error": "InvalidProofEncoding(\"unknown terminal\")",
+      "item_root": "c81f197b655128ef1afc94bffbde7e7645f04e17ad7d8e5d7080b80e379cd51f",
+      "name": "unknown-terminal-tag",
+      "p": 2,
+      "proof": "02555dd4b2a073b49256f30f409451396dedd3425fd6577d572674f5d1fe8a28e202000000000000000e0004f08fe892df0c6e6fbd6ca4bb4f187ad9d154d864f8819fc3d5b104f54cffaa16fe61e366c098fba9fdaeaaf909a9bec40b90a1f17ab99caa82e4ae2bc1d844e11d45fa02948f6c4d711859293176e01b866482f265b330a429409d10f4f364bfad9a9bd1d787a72d8a98bd1ea3c234fb5ff18e20903a359411e451fe1c667703474ae46281bfd7b3fd96ae9b6944a66ffbfe55a58c2d278fae0cbec7c0a24e40ff1f2bea5b5aca28eb905850c0d9aadce8b873da8d15976346bc81a4756c5e80e3",
+      "rule": "§8: reject unknown tags",
+      "stage": "decode"
+    },
+    {
+      "error": "InvalidProofEncoding(\"nonzero bitmap padding\")",
+      "item_root": "4eb7fb0d94161afbd0fe623657060dc17ea39766d9bf63468abd426fc7f74b96",
+      "name": "nonzero-bitmap-padding",
+      "p": 0,
+      "proof": "02000000000000000000000000000000000000000000000000000000000000000200000000000000000200ff0000000000000000000000000000000000000000000000000000000000000003b364a773d821ab3d2c038ce46262f9b35eacee7fb70c8982be238e3db2b13716",
+      "rule": "§8: reject nonzero unused bitmap bits",
+      "stage": "decode"
+    },
+    {
+      "error": "InvalidProofEncoding(\"explicit empty sibling\")",
+      "item_root": "4eb7fb0d94161afbd0fe623657060dc17ea39766d9bf63468abd426fc7f74b96",
+      "name": "explicit-empty-sibling",
+      "p": 0,
+      "proof": "02000000000000000000000000000000000000000000000000000000000000000200000000000000000200ff80000000000000000000000000000000000000000000000000000000000000023f654b7e8d146eca30c6d703ef5ed4a2e365cf44bb377ada5f403d8d855b312cb364a773d821ab3d2c038ce46262f9b35eacee7fb70c8982be238e3db2b13716",
+      "rule": "§8: reject explicit E at a set bit",
+      "stage": "decode"
+    },
+    {
+      "error": "DepthOutOfRange { depth: 255, max: 254 }",
+      "item_root": "c81f197b655128ef1afc94bffbde7e7645f04e17ad7d8e5d7080b80e379cd51f",
+      "name": "depth-beyond-256-minus-p",
+      "p": 2,
+      "proof": "0121883b1613acbd489bb386738d8744c4dc64532ba1fbb143b8d8e52ec7e3bf7800000000000000000006c37fe8cfbddd3d74684bb344851ae164c8ba8b5e6d4e4eff5c9397dcc112660cc9fa9ae4dd5ff90ca80f5d64366d394aa11ee63de1af295819ce278f13a04e94000000000000000122c5220250788013e1e3afe17c26d20d62879d61209a4a58a28a26f4fc056fe3000000000000001000ffe0be4a7bcbe8a277826d0d9049a222cc2299c1efc39beacc05120f6a4200e666f8a7b4ff56c645f444be209395e59a53ff78204a559b85a908e4120eb7b2282b7b7e70ff48a4f126167676418deffe90e4d311ed53b367a0b021d7ecdaebaa5175a383e0fa2344e75a77ffe351ee40f2e32ad9d1bc7df016fdbde943d032f9fb121f2bea5b5aca28eb905850c0d9aadce8b873da8d15976346bc81a4756c5e80e3",
+      "rule": "§4/§8: depth at most 256 - p",
+      "stage": "decode"
+    },
+    {
+      "error": "BadPartitionExponent(17)",
+      "item_root": "17d3b177af854c67d7e50d7bdc9d3248f83718f355a28f6412e5551b15ca0ca2",
+      "name": "partition-exponent-above-16",
+      "p": 17,
+      "proof": "024e2f8bb03d26a6c9a4056e348b55348ad93b3eddac005c6cbbea692bffb0d08e0000000000000000000000",
+      "rule": "§5: 0 <= p <= 16",
+      "stage": "decode"
+    },
+    {
+      "error": "IsAMember",
+      "item_root": "ddef2291c8a22d5a5ff6119919c8efc7885eb74490beafd41a1eed739ee005ce",
+      "name": "n1-neighbor-equals-query",
+      "p": 0,
+      "proof": "02085cfcb03d394cb8ec9c500ee0a59bbb0f24a73d685dfef4f137fd5444eb1b9b01085cfcb03d394cb8ec9c500ee0a59bbb0f24a73d685dfef4f137fd5444eb1b9bc6e50f68ed78f4cef4a95351599c5604c5191247b2133d329d18327c3df17e9d00000000000000010000",
+      "rule": "§8: an N1 neighbor must differ from the query key",
+      "stage": "decode"
+    },
+    {
+      "error": "InvalidProofEncoding(\"truncated field\")",
+      "item_root": "c81f197b655128ef1afc94bffbde7e7645f04e17ad7d8e5d7080b80e379cd51f",
+      "name": "truncated-empty",
+      "p": 2,
+      "proof": "",
+      "rule": "§8: reject missing bytes",
+      "stage": "decode"
+    },
+    {
+      "error": "InvalidProofEncoding(\"truncated field\")",
+      "item_root": "c81f197b655128ef1afc94bffbde7e7645f04e17ad7d8e5d7080b80e379cd51f",
+      "name": "truncated-in-key",
+      "p": 2,
+      "proof": "0121883b1613acbd489bb386738d8744c4",
+      "rule": "§8: reject missing bytes",
+      "stage": "decode"
+    },
+    {
+      "error": "InvalidProofEncoding(\"truncated field\")",
+      "item_root": "c81f197b655128ef1afc94bffbde7e7645f04e17ad7d8e5d7080b80e379cd51f",
+      "name": "truncated-in-preimage",
+      "p": 2,
+      "proof": "0121883b1613acbd489bb386738d8744c4dc64532ba1fbb143b8d8e52ec7e3bf7800000000000000000006c37fe8cfbddd3d74684bb344851ae164c8ba8b5e6d4e4eff5c9397dcc112660cc9fa9ae4dd5ff90c",
+      "rule": "§8: reject missing bytes",
+      "stage": "decode"
+    },
+    {
+      "error": "InvalidProofEncoding(\"truncated field\")",
+      "item_root": "c81f197b655128ef1afc94bffbde7e7645f04e17ad7d8e5d7080b80e379cd51f",
+      "name": "truncated-in-partition-count",
+      "p": 2,
+      "proof": "0121883b1613acbd489bb386738d8744c4dc64532ba1fbb143b8d8e52ec7e3bf7800000000000000000006c37fe8cfbddd3d74684bb344851ae164c8ba8b5e6d4e4eff5c9397dcc112660cc9fa9ae4dd5ff90ca80f5d64366d394aa11ee63de1af295819ce278f13a04e94000000000000000122c5220250788013e1e3afe17c26d20d62879d61209a4a58a28a26f4fc056fe3000000",
+      "rule": "§8: reject missing bytes",
+      "stage": "decode"
+    },
+    {
+      "error": "InvalidProofEncoding(\"truncated bitmap\")",
+      "item_root": "c81f197b655128ef1afc94bffbde7e7645f04e17ad7d8e5d7080b80e379cd51f",
+      "name": "truncated-before-bitmap",
+      "p": 2,
+      "proof": "0121883b1613acbd489bb386738d8744c4dc64532ba1fbb143b8d8e52ec7e3bf7800000000000000000006c37fe8cfbddd3d74684bb344851ae164c8ba8b5e6d4e4eff5c9397dcc112660cc9fa9ae4dd5ff90ca80f5d64366d394aa11ee63de1af295819ce278f13a04e94000000000000000122c5220250788013e1e3afe17c26d20d62879d61209a4a58a28a26f4fc056fe300000000000000100003",
+      "rule": "§8: reject missing bytes",
+      "stage": "decode"
+    },
+    {
+      "error": "InvalidProofEncoding(\"truncated field\")",
+      "item_root": "c81f197b655128ef1afc94bffbde7e7645f04e17ad7d8e5d7080b80e379cd51f",
+      "name": "truncated-in-sibling",
+      "p": 2,
+      "proof": "0121883b1613acbd489bb386738d8744c4dc64532ba1fbb143b8d8e52ec7e3bf7800000000000000000006c37fe8cfbddd3d74684bb344851ae164c8ba8b5e6d4e4eff5c9397dcc112660cc9fa9ae4dd5ff90ca80f5d64366d394aa11ee63de1af295819ce278f13a04e94000000000000000122c5220250788013e1e3afe17c26d20d62879d61209a4a58a28a26f4fc056fe300000000000000100003e0be4a7bcbe8",
+      "rule": "§8: reject missing bytes",
+      "stage": "decode"
+    },
+    {
+      "error": "InvalidProofEncoding(\"truncated field\")",
+      "item_root": "c81f197b655128ef1afc94bffbde7e7645f04e17ad7d8e5d7080b80e379cd51f",
+      "name": "truncated-in-top-sibling",
+      "p": 2,
+      "proof": "0121883b1613acbd489bb386738d8744c4dc64532ba1fbb143b8d8e52ec7e3bf7800000000000000000006c37fe8cfbddd3d74684bb344851ae164c8ba8b5e6d4e4eff5c9397dcc112660cc9fa9ae4dd5ff90ca80f5d64366d394aa11ee63de1af295819ce278f13a04e94000000000000000122c5220250788013e1e3afe17c26d20d62879d61209a4a58a28a26f4fc056fe300000000000000100003e0be4a7bcbe8a277826d0d9049a222cc2299c1efc39beacc05120f6a4200e666f8a7b4ff56c645f444be209395e59a53ff78204a559b85a908e4120eb7b2282b7b7e70ff48a4f126167676418deffe90e4d311ed53b367a0b021d7ecdaebaa5175a383e0fa2344e75a77ffe351ee40f2e32ad9d1bc7df016fd",
+      "rule": "§8: reject missing bytes",
+      "stage": "decode"
+    },
+    {
+      "error": "InvalidProofEncoding(\"truncated field\")",
+      "item_root": "c81f197b655128ef1afc94bffbde7e7645f04e17ad7d8e5d7080b80e379cd51f",
+      "name": "truncated-last-byte",
+      "p": 2,
+      "proof": "0121883b1613acbd489bb386738d8744c4dc64532ba1fbb143b8d8e52ec7e3bf7800000000000000000006c37fe8cfbddd3d74684bb344851ae164c8ba8b5e6d4e4eff5c9397dcc112660cc9fa9ae4dd5ff90ca80f5d64366d394aa11ee63de1af295819ce278f13a04e94000000000000000122c5220250788013e1e3afe17c26d20d62879d61209a4a58a28a26f4fc056fe300000000000000100003e0be4a7bcbe8a277826d0d9049a222cc2299c1efc39beacc05120f6a4200e666f8a7b4ff56c645f444be209395e59a53ff78204a559b85a908e4120eb7b2282b7b7e70ff48a4f126167676418deffe90e4d311ed53b367a0b021d7ecdaebaa5175a383e0fa2344e75a77ffe351ee40f2e32ad9d1bc7df016fdbde943d032f9fb121f2bea5b5aca28eb905850c0d9aadce8b873da8d15976346bc81a4756c5e80",
+      "rule": "§8: reject missing bytes",
+      "stage": "decode"
+    },
+    {
+      "error": "InvalidProofEncoding(\"trailing bytes\")",
+      "item_root": "c81f197b655128ef1afc94bffbde7e7645f04e17ad7d8e5d7080b80e379cd51f",
+      "name": "appended-byte",
+      "p": 2,
+      "proof": "0121883b1613acbd489bb386738d8744c4dc64532ba1fbb143b8d8e52ec7e3bf7800000000000000000006c37fe8cfbddd3d74684bb344851ae164c8ba8b5e6d4e4eff5c9397dcc112660cc9fa9ae4dd5ff90ca80f5d64366d394aa11ee63de1af295819ce278f13a04e94000000000000000122c5220250788013e1e3afe17c26d20d62879d61209a4a58a28a26f4fc056fe300000000000000100003e0be4a7bcbe8a277826d0d9049a222cc2299c1efc39beacc05120f6a4200e666f8a7b4ff56c645f444be209395e59a53ff78204a559b85a908e4120eb7b2282b7b7e70ff48a4f126167676418deffe90e4d311ed53b367a0b021d7ecdaebaa5175a383e0fa2344e75a77ffe351ee40f2e32ad9d1bc7df016fdbde943d032f9fb121f2bea5b5aca28eb905850c0d9aadce8b873da8d15976346bc81a4756c5e80e300",
+      "rule": "§8: reject trailing bytes",
+      "stage": "decode"
+    },
+    {
+      "error": "RootMismatch",
+      "item_root": "c81f197b655128ef1afc94bffbde7e7645f04e17ad7d8e5d7080b80e379cd51f",
+      "name": "wrong-root",
+      "p": 2,
+      "proof": "0121883b1613acbd489bb386738d8744c4dc64532ba1fbb143b8d8e52ec7e3bf7800000000000000000006c37fe8cfbddd3d74684bb344851ae164c8ba8b5e6d4e4eff5c9397dcc112660cc9fa9ae4dd5ff90ca80f5d64366d394aa11ee63de1af295819ce278f13a04e94000000000000000122c5220250788013e1e3afe17c26d20d62879d61209a4a58a28a26f4fc056fe300000000000000100003e0bf4a7bcbe8a277826d0d9049a222cc2299c1efc39beacc05120f6a4200e666f8a7b4ff56c645f444be209395e59a53ff78204a559b85a908e4120eb7b2282b7b7e70ff48a4f126167676418deffe90e4d311ed53b367a0b021d7ecdaebaa5175a383e0fa2344e75a77ffe351ee40f2e32ad9d1bc7df016fdbde943d032f9fb121f2bea5b5aca28eb905850c0d9aadce8b873da8d15976346bc81a4756c5e80e3",
+      "rule": "§8: fold to the authenticated item_root",
+      "stage": "verify"
+    },
+    {
+      "error": "PrefixMismatch",
+      "item_root": "c81f197b655128ef1afc94bffbde7e7645f04e17ad7d8e5d7080b80e379cd51f",
+      "name": "neighbor-prefix-mismatch",
+      "p": 2,
+      "proof": "022aa661d5e073fdec3d3f26f7f79c42a4cd7317ef0b9aea5b4b808fa16422509c01aa263a33c1c9023ead1bacb8ad8600e3a1ffa98b25a28415688c42664502a3d5bc34ee2db89a3cb853d4c0c60de958647eb94e16694b2068fa5ffc08b4bfe24500000000000000100003e0be4a7bcbe8a277826d0d9049a222cc2299c1efc39beacc05120f6a4200e666f8a7b4ff56c645f444be209395e59a53ff78204a559b85a908e4120eb7b2282b7b8f97a3de48830b2821bf9b617302988ecede4451a9add78d801145e86df52f39a383e0fa2344e75a77ffe351ee40f2e32ad9d1bc7df016fdbde943d032f9fb121f2bea5b5aca28eb905850c0d9aadce8b873da8d15976346bc81a4756c5e80e3",
+      "rule": "§4: prefix check",
+      "stage": "verify"
+    },
+    {
+      "error": "NonCanonicalShape",
+      "item_root": "c81f197b655128ef1afc94bffbde7e7645f04e17ad7d8e5d7080b80e379cd51f",
+      "name": "noncanonical-shape",
+      "p": 2,
+      "proof": "0121883b1613acbd489bb386738d8744c4dc64532ba1fbb143b8d8e52ec7e3bf7800000000000000000006c37fe8cfbddd3d74684bb344851ae164c8ba8b5e6d4e4eff5c9397dcc112660cc9fa9ae4dd5ff90ca80f5d64366d394aa11ee63de1af295819ce278f13a04e94000000000000000122c5220250788013e1e3afe17c26d20d62879d61209a4a58a28a26f4fc056fe300000000000000100003c0be4a7bcbe8a277826d0d9049a222cc2299c1efc39beacc05120f6a4200e666f8a7b4ff56c645f444be209395e59a53ff78204a559b85a908e4120eb7b2282b7ba383e0fa2344e75a77ffe351ee40f2e32ad9d1bc7df016fdbde943d032f9fb121f2bea5b5aca28eb905850c0d9aadce8b873da8d15976346bc81a4756c5e80e3",
+      "rule": "§4: canonical shape where visible",
+      "stage": "verify"
+    }
+  ],
+  "note": "Positive bodies decode, re-encode byte for byte and fold to item_root. Negative bodies must be rejected at `stage` with exactly `error` (Rust ContentError Debug form).",
+  "positive": [
+    {
+      "content_key_profile": "bytes/raw/1",
+      "depth": 0,
+      "item_root": "17d3b177af854c67d7e50d7bdc9d3248f83718f355a28f6412e5551b15ca0ca2",
+      "name": "n1-empty-terminal-depth-0",
+      "p": 0,
+      "proof": "024e2f8bb03d26a6c9a4056e348b55348ad93b3eddac005c6cbbea692bffb0d08e0000000000000000000000",
+      "query_key": "4e2f8bb03d26a6c9a4056e348b55348ad93b3eddac005c6cbbea692bffb0d08e",
+      "statement": "N1",
+      "terminal": "empty",
+      "top_siblings": 0
+    },
+    {
+      "content_key_profile": "bytes/raw/1",
+      "depth": 0,
+      "item_root": "ddef2291c8a22d5a5ff6119919c8efc7885eb74490beafd41a1eed739ee005ce",
+      "name": "m1-open-depth-0",
+      "p": 0,
+      "proof": "01085cfcb03d394cb8ec9c500ee0a59bbb0f24a73d685dfef4f137fd5444eb1b9b000000000000000000099bca3371f335589d4c2a87331ec73ab7de03a07e524eab33117ab6007ff593e7c9fa9ae4dd5ff90ca80f5d64366d394aa11ee63de1af295819ce278f13a04e94000000000000000122c5220250788013e1e3afe17c26d20d62879d61209a4a58a28a26f4fc056fe300000000000000010000",
+      "query_key": "085cfcb03d394cb8ec9c500ee0a59bbb0f24a73d685dfef4f137fd5444eb1b9b",
+      "statement": "M1-open",
+      "terminal": "leaf",
+      "top_siblings": 0
+    },
+    {
+      "content_key_profile": "bytes/raw/1",
+      "depth": 0,
+      "item_root": "ddef2291c8a22d5a5ff6119919c8efc7885eb74490beafd41a1eed739ee005ce",
+      "name": "n1-neighbor-terminal-depth-0",
+      "p": 0,
+      "proof": "024e2f8bb03d26a6c9a4056e348b55348ad93b3eddac005c6cbbea692bffb0d08e01085cfcb03d394cb8ec9c500ee0a59bbb0f24a73d685dfef4f137fd5444eb1b9bc6e50f68ed78f4cef4a95351599c5604c5191247b2133d329d18327c3df17e9d00000000000000010000",
+      "query_key": "4e2f8bb03d26a6c9a4056e348b55348ad93b3eddac005c6cbbea692bffb0d08e",
+      "statement": "N1",
+      "terminal": "neighbor",
+      "top_siblings": 0
+    },
+    {
+      "content_key_profile": null,
+      "depth": 256,
+      "item_root": "4eb7fb0d94161afbd0fe623657060dc17ea39766d9bf63468abd426fc7f74b96",
+      "name": "m1-open-depth-256",
+      "p": 0,
+      "proof": "0100000000000000000000000000000000000000000000000000000000000000000000000000000000000487e596f34bdd4ba9812a5222449c3ed968ef3313c6dc4316dd4e4fcea27e55f2c9fa9ae4dd5ff90ca80f5d64366d394aa11ee63de1af295819ce278f13a04e94000000000000000122c5220250788013e1e3afe17c26d20d62879d61209a4a58a28a26f4fc056fe30000000000000002010000000000000000000000000000000000000000000000000000000000000000016635c32ffefa01b490db49bc8841396470757cf93481a5844732dc958e4f6ca5",
+      "query_key": "0000000000000000000000000000000000000000000000000000000000000000",
+      "statement": "M1-open",
+      "terminal": "leaf",
+      "top_siblings": 0
+    },
+    {
+      "content_key_profile": null,
+      "depth": 255,
+      "item_root": "4eb7fb0d94161afbd0fe623657060dc17ea39766d9bf63468abd426fc7f74b96",
+      "name": "n1-empty-terminal-omitted-empty-siblings",
+      "p": 0,
+      "proof": "02000000000000000000000000000000000000000000000000000000000000000200000000000000000200ff0000000000000000000000000000000000000000000000000000000000000002b364a773d821ab3d2c038ce46262f9b35eacee7fb70c8982be238e3db2b13716",
+      "query_key": "0000000000000000000000000000000000000000000000000000000000000002",
+      "statement": "N1",
+      "terminal": "empty",
+      "top_siblings": 0
+    },
+    {
+      "content_key_profile": "bytes/raw/1",
+      "depth": 3,
+      "item_root": "c81f197b655128ef1afc94bffbde7e7645f04e17ad7d8e5d7080b80e379cd51f",
+      "name": "m1-open-nonzero-top-path",
+      "p": 2,
+      "proof": "0121883b1613acbd489bb386738d8744c4dc64532ba1fbb143b8d8e52ec7e3bf7800000000000000000006c37fe8cfbddd3d74684bb344851ae164c8ba8b5e6d4e4eff5c9397dcc112660cc9fa9ae4dd5ff90ca80f5d64366d394aa11ee63de1af295819ce278f13a04e94000000000000000122c5220250788013e1e3afe17c26d20d62879d61209a4a58a28a26f4fc056fe300000000000000100003e0be4a7bcbe8a277826d0d9049a222cc2299c1efc39beacc05120f6a4200e666f8a7b4ff56c645f444be209395e59a53ff78204a559b85a908e4120eb7b2282b7b7e70ff48a4f126167676418deffe90e4d311ed53b367a0b021d7ecdaebaa5175a383e0fa2344e75a77ffe351ee40f2e32ad9d1bc7df016fdbde943d032f9fb121f2bea5b5aca28eb905850c0d9aadce8b873da8d15976346bc81a4756c5e80e3",
+      "query_key": "21883b1613acbd489bb386738d8744c4dc64532ba1fbb143b8d8e52ec7e3bf78",
+      "statement": "M1-open",
+      "terminal": "leaf",
+      "top_siblings": 2
+    },
+    {
+      "content_key_profile": "bytes/raw/1",
+      "depth": 3,
+      "item_root": "c81f197b655128ef1afc94bffbde7e7645f04e17ad7d8e5d7080b80e379cd51f",
+      "name": "n1-neighbor-terminal-nonzero-top-path",
+      "p": 2,
+      "proof": "022aa661d5e073fdec3d3f26f7f79c42a4cd7317ef0b9aea5b4b808fa16422509c012a263a33c1c9023ead1bacb8ad8600e3a1ffa98b25a28415688c42664502a3d5bc34ee2db89a3cb853d4c0c60de958647eb94e16694b2068fa5ffc08b4bfe24500000000000000100003e0be4a7bcbe8a277826d0d9049a222cc2299c1efc39beacc05120f6a4200e666f8a7b4ff56c645f444be209395e59a53ff78204a559b85a908e4120eb7b2282b7b8f97a3de48830b2821bf9b617302988ecede4451a9add78d801145e86df52f39a383e0fa2344e75a77ffe351ee40f2e32ad9d1bc7df016fdbde943d032f9fb121f2bea5b5aca28eb905850c0d9aadce8b873da8d15976346bc81a4756c5e80e3",
+      "query_key": "2aa661d5e073fdec3d3f26f7f79c42a4cd7317ef0b9aea5b4b808fa16422509c",
+      "statement": "N1",
+      "terminal": "neighbor",
+      "top_siblings": 2
+    },
+    {
+      "content_key_profile": "bytes/raw/1",
+      "depth": 4,
+      "item_root": "c81f197b655128ef1afc94bffbde7e7645f04e17ad7d8e5d7080b80e379cd51f",
+      "name": "n1-empty-terminal-nonzero-top-path",
+      "p": 2,
+      "proof": "02555dd4b2a073b49256f30f409451396dedd3425fd6577d572674f5d1fe8a28e200000000000000000e0004f08fe892df0c6e6fbd6ca4bb4f187ad9d154d864f8819fc3d5b104f54cffaa16fe61e366c098fba9fdaeaaf909a9bec40b90a1f17ab99caa82e4ae2bc1d844e11d45fa02948f6c4d711859293176e01b866482f265b330a429409d10f4f364bfad9a9bd1d787a72d8a98bd1ea3c234fb5ff18e20903a359411e451fe1c667703474ae46281bfd7b3fd96ae9b6944a66ffbfe55a58c2d278fae0cbec7c0a24e40ff1f2bea5b5aca28eb905850c0d9aadce8b873da8d15976346bc81a4756c5e80e3",
+      "query_key": "555dd4b2a073b49256f30f409451396dedd3425fd6577d572674f5d1fe8a28e2",
+      "statement": "N1",
+      "terminal": "empty",
+      "top_siblings": 2
+    }
+  ]
+}
