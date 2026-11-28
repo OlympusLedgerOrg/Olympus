@@ -68,6 +68,162 @@ test("unexpectedMentions accepts removed text called removed", () => {
   );
 });
 
+// Small models call the pre-diff revision "the original code" rather than "the
+// previous code", and state its behaviour in the past tense. A real review of
+// the `HEAD~2..HEAD` fixture wrote "The original code returns `lastPage - 1`"
+// while describing the change correctly, and an earlier prompt experiment made
+// `clean-fix-not-flagged` fail on "the original code adds `1`". Both are the
+// deletion attributed, not the removed value claimed as current.
+test("unexpectedMentions accepts original-code and past-tense attribution", () => {
+  assert.deepEqual(
+    unexpectedMentions("The original code returns lastPage - 1 when page exceeds lastPage.", [
+      "lastPage - 1",
+    ]),
+    [],
+  );
+  assert.deepEqual(
+    unexpectedMentions("`clampPage` returned lastPage - 1 before this change.", ["lastPage - 1"]),
+    [],
+  );
+  assert.deepEqual(
+    unexpectedMentions("`clampPage` was returning lastPage - 1 for the final page.", [
+      "lastPage - 1",
+    ]),
+    [],
+  );
+
+  // Present tense is still the failure this case exists to score: the recorded
+  // baseline's failing answer said "the current implementation returns
+  // `lastPage - 1`", which no past-tense marker may excuse.
+  assert.deepEqual(
+    unexpectedMentions("The current implementation returns lastPage - 1.", ["lastPage - 1"]),
+    ["lastPage - 1"],
+  );
+});
+
+// A correct review of the removed `+ 1` says the post-diff function returns the
+// page count "without adding an extra page" — no removal word, so the sentence
+// used to score as a live claim about the new code.
+test("unexpectedMentions reads a negated value as attribution, not a live claim", () => {
+  assert.deepEqual(
+    unexpectedMentions("It should return the number of pages without adding an extra page.", [
+      "extra page",
+    ]),
+    [],
+  );
+  assert.deepEqual(
+    unexpectedMentions("pageCount never adds an extra page now.", ["extra page"]),
+    [],
+  );
+
+  // "rather than" is positional: the value after it is the one NOT returned. The
+  // first sentence is verbatim from a correct review that scored as a phantom.
+  assert.deepEqual(
+    unexpectedMentions(
+      "The function `clampPage` now correctly returns `lastPage` when `page` is greater than `lastPage`, rather than `lastPage - 1`.",
+      ["lastPage - 1"],
+    ),
+    [],
+  );
+  assert.deepEqual(
+    unexpectedMentions("clampPage returns lastPage - 1 rather than lastPage.", ["lastPage - 1"]),
+    ["lastPage - 1"],
+    "a value BEFORE 'rather than' is the live claim",
+  );
+
+  // "from X to Y" attributes X, and only X. The first sentence is verbatim from a
+  // correct qwen3.5:9b review that scored as a phantom.
+  assert.deepEqual(
+    unexpectedMentions(
+      "The change modifies the upper bound of `clampPage(page, lastPage)` from `lastPage - 1` to `lastPage`.",
+      ["lastPage - 1"],
+    ),
+    [],
+  );
+  assert.deepEqual(
+    unexpectedMentions("The diff moves the clamp from 1 to lastPage - 1.", ["lastPage - 1"]),
+    ["lastPage - 1"],
+    "a value AFTER 'to' is the new value, a live claim",
+  );
+  assert.deepEqual(
+    unexpectedMentions("Navigating from page one, clampPage returns lastPage - 1 to callers.", [
+      "lastPage - 1",
+    ]),
+    ["lastPage - 1"],
+    "a clause break between 'from' and the value ends the from-to span",
+  );
+
+  // The negation has to sit immediately before the value: a "without" elsewhere
+  // in the sentence must not excuse a live claim about it.
+  assert.deepEqual(
+    unexpectedMentions("clampPage returns lastPage - 1 without a guard.", ["lastPage - 1"]),
+    ["lastPage - 1"],
+  );
+  // A negation governs its own clause. Here "not" negates the touching, and the
+  // return in the next clause is a live claim about the value.
+  assert.deepEqual(
+    unexpectedMentions("The diff does not touch clampPage, so it returns lastPage - 1.", [
+      "lastPage - 1",
+    ]),
+    ["lastPage - 1"],
+  );
+  // Whole words: the haystack is normalised with its spaces squeezed out, so a
+  // substring test for "not" also matches "Note:" and would excuse this claim.
+  assert.deepEqual(unexpectedMentions("Note: clampPage returns lastPage - 1.", ["lastPage - 1"]), [
+    "lastPage - 1",
+  ]);
+  // ...and a genuine present-tense claim still fails, negated word or not.
+  assert.deepEqual(unexpectedMentions("clampPage returns lastPage - 1.", ["lastPage - 1"]), [
+    "lastPage - 1",
+  ]);
+  assert.deepEqual(
+    unexpectedMentions("It never removes the guard, so clampPage still returns lastPage - 1.", [
+      "lastPage - 1",
+    ]),
+    ["lastPage - 1"],
+  );
+});
+
+// A review that RECOMMENDS undoing a correct fix is asserting the removed value
+// belongs in the new code. "revert" attributed that away, so a sample that said
+// "Revert the change … adding `+ 1` back" scored PASS on the clean-fix case.
+test("unexpectedMentions does not count a recommendation to undo as attribution", () => {
+  assert.deepEqual(
+    unexpectedMentions(
+      "**Recommendation:** Revert the change and add `+ 1` back to the return statement.",
+      ["+ 1"],
+    ),
+    ["+ 1"],
+  );
+  assert.deepEqual(
+    unexpectedMentions("Restore the removed `lastPage - 1` line.", ["lastPage - 1"]),
+    ["lastPage - 1"],
+  );
+  assert.deepEqual(
+    unexpectedMentions("Recommendation: reinstate `lastPage - 1` for the final page.", [
+      "lastPage - 1",
+    ]),
+    ["lastPage - 1"],
+  );
+
+  // Describing a revert is still attribution: this sentence reports what the
+  // diff does, not what the code should do.
+  assert.deepEqual(
+    unexpectedMentions(
+      "The diff reverts `clampPage` to return `lastPage` instead of `lastPage - 1`.",
+      ["lastPage - 1"],
+    ),
+    [],
+  );
+  // Past-tense description of the same action, too.
+  assert.deepEqual(
+    unexpectedMentions("`clampPage` reverted to `lastPage`, dropping `lastPage - 1`.", [
+      "lastPage - 1",
+    ]),
+    [],
+  );
+});
+
 // ...but a removal word in the same sentence must not launder a claim that the
 // value is still live, and the attribution has to sit near the mention.
 test("unexpectedMentions still flags a live claim beside a removal word", () => {

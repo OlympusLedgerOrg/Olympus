@@ -20,6 +20,7 @@
 //   node bin/eval.mjs                     # every suite, every case
 //   node bin/eval.mjs --task qa           # one suite (the cheap one)
 //   node bin/eval.mjs --limit 2           # first 2 cases per suite (smoke test)
+//   node bin/eval.mjs --repeat 3          # 3 samples per case — one draw cannot show flakiness
 //   node bin/eval.mjs --model qwen2.5-coder:3b   # compare tags on the same cases
 //   node bin/eval.mjs --write-baseline    # record the scores eval/baseline.json
 //   node bin/eval.mjs --show-answers      # print each raw answer under its verdict
@@ -40,7 +41,18 @@
 // recorded run against the current matchers offline, with no model call.
 //
 // Exit codes: 0 whenever the run completed (this is a benchmark, not a gate),
-// 2 when the backend was unavailable.
+// 2 when the backend was unavailable, 3 when nothing could be scored because
+// the agent policy refused the paths a golden case reads.
+//
+// Blocked cases. Every tool call goes through the agent policy, exactly as a
+// caller's does, so a golden case naming a denied path is refused: the local
+// model never sees the file. That refusal is the policy working, not a model
+// result and not a harness bug, so the case is recorded as BLOCKED and left out
+// of the score — not failed (a policy is not a regression, and `0/5` reads like
+// a model that got everything wrong), not rethrown (one refusal would end the
+// run before the cases after it), and not overridden. A benchmark that could
+// bypass the policy would score a model on files the tool will never let it
+// read, which measures a build nobody runs.
 
 import process from "node:process";
 import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -55,6 +67,7 @@ import { gitDiff } from "../src/repo.mjs";
 import { runTool } from "../src/mcp-server.mjs";
 import { verifyCitations } from "../src/citations.mjs";
 import { ModelUnavailableError, DEFAULT_OLLAMA_MODEL, modelProvenance } from "../src/backend.mjs";
+import { PolicyError } from "../../agent-policy/policy.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -66,6 +79,19 @@ const BASELINE_PATH = path.join(EVAL_DIR, "baseline.json");
 const RUNS_DIR = path.join(EVAL_DIR, "runs");
 
 const SUITE_NAMES = ["qa", "review", "summarize"];
+
+/**
+ * Where the fixture file is committed inside the throwaway repo.
+ *
+ * Under `app/public-ui/src/` because that is an allowlisted path in
+ * `tools/agent-policy/policy.json`. At the old `src/pager.js` the agent policy
+ * refused the diff, so review_diff never ran and the whole suite could only
+ * report BLOCKED. The path is part of the prompt the policy checks, so it is one
+ * constant rather than four literals; `test/eval.test.mjs` asserts the policy
+ * still allows it, so moving it outside the allowlist fails a test instead of
+ * silently emptying the suite again.
+ */
+export const FIXTURE_PATH = "app/public-ui/src/pager.js";
 
 function needTask(value) {
   if (value === undefined) throw new Error("--task needs a value");
@@ -82,6 +108,17 @@ function parseLimit(raw) {
   const value = Number(raw);
   if (!Number.isInteger(value) || value < 1) {
     throw new Error("--limit needs a positive integer");
+  }
+  return value;
+}
+
+// `--repeat` changes how much evidence one score represents, so it is validated
+// like --limit and recorded in the run's provenance: a three-sample run and a
+// one-sample run are not the same measurement even on the same prompt.
+function parseRepeat(raw) {
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1) {
+    throw new Error("--repeat needs a positive integer");
   }
   return value;
 }
@@ -104,6 +141,7 @@ export function parseArgs(argv) {
   const options = {
     limit: Infinity,
     model: undefined,
+    repeat: 1,
     rescore: undefined,
     showAnswers: false,
     task: "all",
@@ -119,6 +157,10 @@ export function parseArgs(argv) {
       options.model = needModel(argv[++i]);
     } else if (arg.startsWith("--model=")) {
       options.model = needModel(arg.slice("--model=".length));
+    } else if (arg === "--repeat") {
+      options.repeat = parseRepeat(argv[++i]);
+    } else if (arg.startsWith("--repeat=")) {
+      options.repeat = parseRepeat(arg.slice("--repeat=".length));
     } else if (arg === "--task") {
       options.task = needTask(argv[++i]);
     } else if (arg.startsWith("--task=")) {
@@ -200,13 +242,13 @@ async function withFixtureRepo(fn) {
   // no diff). --cacheinfo writes the exact blob into the index, so a commit
   // cannot be a no-op and the diff cannot depend on timestamps.
   const commitState = async (fileName, message) => {
-    await copyFile(path.join(EVAL_DIR, "fixtures", fileName), path.join(dir, "src", "pager.js"));
+    await copyFile(path.join(EVAL_DIR, "fixtures", fileName), path.join(dir, FIXTURE_PATH));
     const { stdout: blob } = await execFileAsync("git", [
       "-C",
       dir,
       "hash-object",
       "-w",
-      "src/pager.js",
+      FIXTURE_PATH,
     ]);
     await execFileAsync("git", [
       "-C",
@@ -214,16 +256,16 @@ async function withFixtureRepo(fn) {
       "update-index",
       "--add",
       "--cacheinfo",
-      `100644,${blob.trim()},src/pager.js`,
+      `100644,${blob.trim()},${FIXTURE_PATH}`,
     ]);
     await commit(message);
   };
   try {
     await execFileAsync("git", ["init", "--quiet", dir]);
-    await mkdir(path.join(dir, "src"), { recursive: true });
+    await mkdir(path.join(dir, path.dirname(FIXTURE_PATH)), { recursive: true });
     await copyFile(
       path.join(EVAL_DIR, "fixtures", "pager.before.js"),
-      path.join(dir, "src", "pager.js"),
+      path.join(dir, FIXTURE_PATH),
     );
     // review_diff grounds on AGENTS.md (see AGENTS_MD in src/mcp-server.mjs).
     // Give the fixture repo the real one and commit it, so the standards block
@@ -327,6 +369,52 @@ export async function scoreCase(answer, item) {
   return { missing, phantom, badCitations, ok: casePassed({ missing, phantom, badCitations }) };
 }
 
+/**
+ * A case the agent policy refused, kept as a first-class record instead of an
+ * exception.
+ *
+ * The case names a path the local model may not see, so nothing was asked and
+ * there is nothing to score. Recording it as `ok: false` would make a policy
+ * decision look like a model regression; rethrowing would abort the run at case
+ * one and hide every case after it. So it is kept, with the refusal it received
+ * and the paths behind it, and left out of the denominator.
+ *
+ * Exported so the refusal-to-record path is testable without a model call or a
+ * policy that happens to deny a fixture path.
+ */
+export function blockedCase(suite, item, error) {
+  return {
+    suite,
+    id: item.id,
+    blocked: error.message,
+    blocked_paths: Array.isArray(error.denied) ? error.denied : [],
+  };
+}
+
+/**
+ * Name every case that was not scored, once, after the totals.
+ *
+ * "0/0" and "0/0, 9 blocked" contain the same number of passes and are
+ * completely different facts, so the blocked cases are listed rather than
+ * folded into a percentage.
+ */
+function printBlockedCases(cases) {
+  const blocked = cases.filter((entry) => entry.blocked);
+  if (blocked.length === 0) return;
+  console.log(
+    `\n${blocked.length} of ${cases.length} case(s) were NOT scored — the agent policy refused the paths they read:`,
+  );
+  for (const entry of blocked) {
+    const paths = entry.blocked_paths.map((denied) => denied.path).join(", ");
+    console.log(`  ${entry.suite}/${entry.id}${paths ? ` — ${paths}` : ""}`);
+  }
+  console.log(
+    "  This is a policy decision, not a model result, and this harness applies no override.\n" +
+      "  Either re-scope the golden cases onto allowlisted paths or change policy.json on\n" +
+      '  purpose — see "Eval harness" in tools/wiserepo/README.md.',
+  );
+}
+
 function reportProblems({ missing, phantom, badCitations }) {
   if (missing.length > 0) console.log(`      answer never mentioned: ${missing.join(", ")}`);
   if (phantom.length > 0) {
@@ -360,7 +448,12 @@ export function promptSha256({ system = "", prompt = "" } = {}) {
 /** One digest for a whole run, so two baselines can be compared at a glance. */
 function runPromptSha256(cases) {
   return sha256(
-    cases.map((entry) => `${entry.suite}/${entry.id}:${entry.prompt_sha256}`).join("\n"),
+    cases
+      // A blocked case sent no prompt; including it would hash the literal
+      // string "undefined" into the run's provenance.
+      .filter((entry) => typeof entry.prompt_sha256 === "string")
+      .map((entry) => `${entry.suite}/${entry.id}:${entry.prompt_sha256}`)
+      .join("\n"),
   );
 }
 
@@ -371,7 +464,14 @@ function runPromptSha256(cases) {
 export function suiteScores(cases) {
   const suites = {};
   for (const entry of cases) {
-    const suite = (suites[entry.suite] ??= { passed: 0, total: 0, seconds: 0 });
+    const suite = (suites[entry.suite] ??= { passed: 0, total: 0, blocked: 0, seconds: 0 });
+    // A blocked case was never asked and never answered, so it is counted
+    // beside the score rather than in it: putting it in `total` without a pass
+    // would report the agent policy as a model regression.
+    if (entry.blocked) {
+      suite.blocked += 1;
+      continue;
+    }
     suite.total += 1;
     suite.seconds += entry.seconds ?? 0;
     if (entry.ok) suite.passed += 1;
@@ -420,63 +520,155 @@ export async function rescoreRecord(entries, goldenById) {
     if (!item) {
       throw new Error(`run record names ${entry.suite}/${entry.id}, which is not a golden case`);
     }
-    const { missing, phantom, badCitations, ok } = await scoreCase(entry.answer, item);
-    scored.push({ ...entry, verdict: { missing, phantom, badCitations }, ok });
+    // A blocked case has no answer to re-score. Passing it through keeps the
+    // recorded gap visible instead of fabricating a verdict from `undefined`.
+    if (entry.blocked) {
+      scored.push(entry);
+      continue;
+    }
+    // A `--repeat` record stores one answer per sample; an older single-sample
+    // record keeps its answer at the top level. Re-score every draw that exists,
+    // so a repeat run cannot be judged by whichever sample happened to be first.
+    const samples = entry.samples?.length ? entry.samples : [{ answer: entry.answer }];
+    const rescored = [];
+    for (const sample of samples) {
+      const { missing, phantom, badCitations, ok } = await scoreCase(sample.answer, item);
+      rescored.push({ ...sample, verdict: { missing, phantom, badCitations }, ok });
+    }
+    const { ok, representative } = caseOutcome(rescored);
+    scored.push({
+      ...entry,
+      samples: rescored,
+      answer: representative.answer,
+      verdict: representative.verdict,
+      ok,
+    });
   }
   return scored;
+}
+
+/**
+ * A case's verdict over N samples: it passes only when EVERY sample does.
+ *
+ * Counting samples instead of cases would change the suite's denominator, so a
+ * `--repeat 3` run would read against a one-sample baseline as "case set
+ * changed", and a flaky model would look like a bigger test suite. Counting
+ * cases keeps the score comparable and puts the flakiness on the line itself
+ * (`2/3 samples`) instead of hiding inside a percentage.
+ *
+ * The representative is the first FAILING sample: the printed problems have to
+ * explain the FAIL, and a mixed case printed from its passing sample would show
+ * PASS beside a phantom.
+ *
+ * Exported so the aggregation is testable without a model call.
+ */
+export function caseOutcome(samples) {
+  const failed = samples.find((sample) => !sample.ok);
+  return {
+    ok: !failed,
+    passed: samples.filter((sample) => sample.ok).length,
+    representative: failed ?? samples[0],
+  };
 }
 
 async function runSuite(name, options) {
   const spec = SUITE_SPECS[name];
   const cases = await loadCases(spec.fileName, options.limit);
-  console.log(`\n${name} — ${cases.length} case(s)`);
+  const repeat = options.repeat;
+  console.log(`\n${name} — ${cases.length} case(s)${repeat > 1 ? ` x ${repeat} samples` : ""}`);
 
   const scored = [];
   for (const item of cases) {
     const started = Date.now();
-    // Captured per case, from the tool path itself: a run-level hash cannot say
-    // WHICH case's prompt moved, and rebuilding the prompt here would drift
-    // from what was sent the first time the prompt changes.
-    let request;
-    const answer = await spec.call(item, (captured) => {
-      request = captured;
-    });
-    if (!request) {
-      throw new Error(
-        `${name}/${item.id} never reported its prompt — the run record cannot prove what was scored`,
-      );
+    const samples = [];
+    let blocked;
+    // `--repeat` exists because temperature 0 is not reproducibility: with one
+    // draw per case a 3-case suite cannot tell a fix from a lucky sample. Each
+    // attempt goes through the same tool path, so the eval scores the prompt a
+    // caller would actually get, N times.
+    for (let attempt = 1; attempt <= repeat; attempt++) {
+      // Captured per attempt, from the tool path itself: a run-level hash cannot
+      // say WHICH case's prompt moved, and rebuilding the prompt here would
+      // drift from what was sent the first time the prompt changes.
+      let request;
+      let answer;
+      try {
+        answer = await spec.call(item, (captured) => {
+          request = captured;
+        });
+      } catch (err) {
+        if (!(err instanceof PolicyError)) throw err;
+        // The policy decides on the paths the case names, before any model call,
+        // so a second attempt would be refused identically: record it once.
+        blocked = blockedCase(name, item, err);
+        break;
+      }
+      if (!request) {
+        throw new Error(
+          `${name}/${item.id} never reported its prompt — the run record cannot prove what was scored`,
+        );
+      }
+      const verdict = await scoreCase(answer, item);
+      samples.push({
+        answer,
+        model: request.model,
+        prompt_sha256: promptSha256(request),
+        verdict,
+        ok: verdict.ok,
+      });
     }
     const seconds = Math.round((Date.now() - started) / 1000);
 
-    const verdict = await scoreCase(answer, item);
+    if (blocked) {
+      console.log(`BLOCKED  ${name}/${item.id}  (${seconds}s, agent policy — not scored)`);
+      // The full refusal sentence is stored on the record; the console gets the
+      // paths, which is the part a reader can act on.
+      if (blocked.blocked_paths.length === 0) console.log(`      ${blocked.blocked}`);
+      for (const denied of blocked.blocked_paths) {
+        console.log(`      refused: ${denied.path} (${denied.reason})`);
+      }
+      scored.push({ ...blocked, seconds });
+      continue;
+    }
+
+    const { ok, passed, representative } = caseOutcome(samples);
+    const sampleNote = repeat > 1 ? `${passed}/${samples.length} samples, ` : "";
     console.log(
-      `${verdict.ok ? "PASS" : "FAIL"}  ${name}/${item.id}  (${seconds}s, ${verdict.badCitations.length} unverified citation(s))`,
+      `${ok ? "PASS" : "FAIL"}  ${name}/${item.id}  (${sampleNote}${seconds}s, ${representative.verdict.badCitations.length} unverified citation(s))`,
     );
-    reportProblems(verdict);
+    reportProblems(representative.verdict);
     if (options.showAnswers) {
-      // Prefixed per line so the transcript stays readable beside the verdicts
-      // and is obviously model output rather than harness output.
-      console.log(
-        answer
-          .split("\n")
-          .map((line) => `      | ${line}`)
-          .join("\n"),
-      );
+      for (const [index, sample] of samples.entries()) {
+        if (repeat > 1) {
+          console.log(
+            `      | --- sample ${index + 1}/${samples.length} (${sample.ok ? "PASS" : "FAIL"}) ---`,
+          );
+        }
+        // Prefixed per line so the transcript stays readable beside the verdicts
+        // and is obviously model output rather than harness output.
+        console.log(
+          sample.answer
+            .split("\n")
+            .map((line) => `      | ${line}`)
+            .join("\n"),
+        );
+      }
     }
 
     scored.push({
       suite: name,
       id: item.id,
-      model: request.model,
+      model: representative.model,
       seconds,
-      prompt_sha256: promptSha256(request),
-      answer,
+      prompt_sha256: representative.prompt_sha256,
+      samples,
+      answer: representative.answer,
       verdict: {
-        missing: verdict.missing,
-        phantom: verdict.phantom,
-        badCitations: verdict.badCitations,
+        missing: representative.verdict.missing,
+        phantom: representative.verdict.phantom,
+        badCitations: representative.verdict.badCitations,
       },
-      ok: verdict.ok,
+      ok,
     });
   }
   return scored;
@@ -494,10 +686,22 @@ function formatComparison(baseline, results) {
   const lines = [`baseline (${baseline.recorded_at}, ${baseline.model}):`];
   for (const [name, result] of Object.entries(results)) {
     const before = baseline.suites?.[name];
+    if (!before) {
+      lines.push(`  ${name}: no baseline`);
+      continue;
+    }
+    // "2/2 -> 0/0" would be printed as a REGRESSION by the pass count alone,
+    // and it is the one thing this comparison must not say: the cases did not
+    // run, so nothing about the model changed.
+    if (result.blocked > 0) {
+      lines.push(
+        `  ${name}: ${before.passed}/${before.total} -> not comparable, ` +
+          `${result.blocked} case(s) blocked by the agent policy`,
+      );
+      continue;
+    }
     lines.push(
-      before
-        ? `  ${name}: ${before.passed}/${before.total} -> ${result.passed}/${result.total} (${verdict(before, result)})`
-        : `  ${name}: no baseline`,
+      `  ${name}: ${before.passed}/${before.total} -> ${result.passed}/${result.total} (${verdict(before, result)})`,
     );
   }
   return lines.join("\n");
@@ -541,6 +745,12 @@ export function provenanceDiffs(before, after) {
   }
   if ((was.prompt_sha256 ?? null) !== (now.prompt_sha256 ?? null)) {
     diffs.push(`prompt ${shortHash(was.prompt_sha256)} -> ${shortHash(now.prompt_sha256)}`);
+  }
+  // Same prompt and weights, different number of draws: not the same
+  // measurement. A baseline recorded before --repeat existed has no field and
+  // is one sample, so it compares equal rather than reporting a phantom change.
+  if ((was.repeat ?? 1) !== (now.repeat ?? 1)) {
+    diffs.push(`samples per case ${was.repeat ?? 1} -> ${now.repeat ?? 1}`);
   }
   const models = new Set([...Object.keys(was.models ?? {}), ...Object.keys(now.models ?? {})]);
   for (const model of models) {
@@ -598,7 +808,7 @@ async function rescoreRun(file) {
   );
 
   console.log(
-    `wiserepo eval — re-scoring ${record.cases.length} recorded answer(s), model ${record.model}`,
+    `wiserepo eval — re-scoring ${record.cases.length} recorded case(s), model ${record.model}`,
   );
   console.log(`  recorded ${record.recorded_at}, git ${shortHash(record.provenance?.git_sha)}`);
 
@@ -612,6 +822,12 @@ async function rescoreRun(file) {
   }
 
   for (const entry of scored) {
+    if (entry.blocked) {
+      console.log(
+        `BLOCKED  ${entry.suite}/${entry.id}  (recorded blocked by the agent policy — nothing to re-score)`,
+      );
+      continue;
+    }
     const was = recordedOk.get(`${entry.suite}/${entry.id}`);
     const moved =
       was === undefined
@@ -619,25 +835,37 @@ async function rescoreRun(file) {
         : was === entry.ok
           ? ", same verdict as recorded"
           : ", VERDICT CHANGED since recording";
+    const sampleCount = entry.samples?.length ?? 1;
+    const sampleNote =
+      sampleCount > 1
+        ? `${entry.samples.filter((sample) => sample.ok).length}/${sampleCount} samples, `
+        : "";
     console.log(
-      `${entry.ok ? "PASS" : "FAIL"}  ${entry.suite}/${entry.id}  (${entry.seconds}s${moved})`,
+      `${entry.ok ? "PASS" : "FAIL"}  ${entry.suite}/${entry.id}  (${sampleNote}${entry.seconds}s${moved})`,
     );
     reportProblems(entry.verdict);
   }
 
   const suites = suiteScores(scored);
-  const passed = scored.filter((entry) => entry.ok).length;
+  const attempted = scored.filter((entry) => !entry.blocked);
+  const passed = attempted.filter((entry) => entry.ok).length;
 
   console.log("\n" + "─".repeat(72));
   for (const [name, result] of Object.entries(suites)) {
-    console.log(`${name}: ${result.passed}/${result.total} (${result.seconds}s)`);
+    const blockedNote = result.blocked > 0 ? `, ${result.blocked} blocked` : "";
+    console.log(`${name}: ${result.passed}/${result.total} (${result.seconds}s${blockedNote})`);
   }
-  console.log(
-    `overall: ${passed}/${scored.length} (${Math.round((passed / scored.length) * 100)}%)`,
-  );
+  if (attempted.length === 0) {
+    console.log(`overall: nothing scored — ${scored.length} recorded case(s) are blocked`);
+  } else {
+    console.log(
+      `overall: ${passed}/${attempted.length} (${Math.round((passed / attempted.length) * 100)}%)`,
+    );
+  }
+  printBlockedCases(scored);
 
   const baseline = await readBaseline();
-  if (baseline) {
+  if (baseline && attempted.length > 0) {
     console.log("\n" + formatComparison(baseline, suites));
     printProvenanceComparison(baseline, record.provenance);
   }
@@ -648,7 +876,11 @@ async function rescoreRun(file) {
 /** Every model the run actually used, with the weights and window behind it. */
 async function modelsUsed(cases) {
   const models = {};
-  for (const model of new Set(cases.map((entry) => entry.model))) {
+  // A blocked case was never sent to a model, so asking the daemon for its
+  // provenance would either invent one or fail the run over a case that never ran.
+  for (const model of new Set(
+    cases.filter((entry) => !entry.blocked).map((entry) => entry.model),
+  )) {
     models[model] = await modelProvenance(model);
   }
   return models;
@@ -689,7 +921,8 @@ async function main() {
   const suites = options.task === "all" ? SUITE_NAMES : [options.task];
 
   console.log(
-    `wiserepo eval — ${suites.join(" + ")}, model ${options.model ?? DEFAULT_OLLAMA_MODEL}`,
+    `wiserepo eval — ${suites.join(" + ")}, model ${options.model ?? DEFAULT_OLLAMA_MODEL}` +
+      (options.repeat > 1 ? `, ${options.repeat} samples/case` : ""),
   );
 
   // modelForTool reads each suite's override at call time, so setting all three
@@ -738,23 +971,35 @@ async function main() {
     model: options.model ?? DEFAULT_OLLAMA_MODEL,
     provenance: {
       ...(await gitState()),
+      repeat: options.repeat,
       prompt_sha256: runPromptSha256(caseRecords),
       models: await modelsUsed(caseRecords),
     },
     cases: caseRecords,
   });
+  const blockedCount = caseRecords.filter((entry) => entry.blocked).length;
+  const scoredCount = caseRecords.length - blockedCount;
   const passed = caseRecords.filter((entry) => entry.ok).length;
 
   console.log("\n" + "─".repeat(72));
   for (const [name, result] of Object.entries(record.suites)) {
-    console.log(`${name}: ${result.passed}/${result.total} (${result.seconds}s)`);
+    const blockedNote = result.blocked > 0 ? `, ${result.blocked} blocked` : "";
+    console.log(`${name}: ${result.passed}/${result.total} (${result.seconds}s${blockedNote})`);
   }
-  console.log(
-    `overall: ${passed}/${caseRecords.length} (${Math.round((passed / caseRecords.length) * 100)}%)`,
-  );
+  if (scoredCount === 0) {
+    console.log(`overall: nothing scored — ${blockedCount} case(s) blocked by the agent policy`);
+  } else {
+    console.log(
+      `overall: ${passed}/${scoredCount} (${Math.round((passed / scoredCount) * 100)}%)` +
+        (blockedCount > 0 ? `, ${blockedCount} blocked (not scored)` : ""),
+    );
+  }
+  printBlockedCases(caseRecords);
 
   const baseline = await readBaseline();
-  if (baseline) {
+  // An all-blocked run has no score and no prompts, so comparing it to the
+  // baseline would report policy as provenance noise.
+  if (baseline && scoredCount > 0) {
     console.log("\n" + formatComparison(baseline, record.suites));
     printProvenanceComparison(baseline, record.provenance);
   }
@@ -765,6 +1010,13 @@ async function main() {
   console.log(`\nanswers + provenance written to ${path.relative(REPO_ROOT, runFile)}`);
 
   if (options.writeBaseline) {
+    if (blockedCount > 0) {
+      console.error(
+        `\nbaseline NOT written: ${blockedCount} of ${caseRecords.length} case(s) were blocked by the ` +
+          "agent policy, so this record would make an incomplete case set the comparison point.",
+      );
+      return 3;
+    }
     const answersPath = path.relative(EVAL_DIR, runFile).split(path.sep).join("/");
     await writeFile(
       BASELINE_PATH,
@@ -773,7 +1025,10 @@ async function main() {
     console.log(`baseline written to eval/baseline.json (answers: ${answersPath})`);
   }
 
-  return 0;
+  // 3 says "the run completed but scored nothing", which is different from 0
+  // (a score) and from 2 (no backend): a script that treats 0 as success must
+  // not read an all-blocked run as one.
+  return blockedCount > 0 && scoredCount === 0 ? 3 : 0;
 }
 
 // Same import guard the CLI, the server and the launcher use: tests import

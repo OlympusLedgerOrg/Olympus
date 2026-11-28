@@ -162,8 +162,12 @@ graphify-out/
 .serena/
 plugins/
 .agents/plugins/
-# Local Freebuff Desktop MCP config (machine-specific absolute paths)
+# Freebuff reads .agents/mcp.json instead of the committed .mcp.json; its
+# entries carry machine-specific absolute paths (node, SERENA_BIN), so the
+# file stays local for the same reason .codex/ does.
 .agents/mcp.json
+# Freebuff's per-machine runtime: a sandbox home with its own pnpm store.
+.freebuff/
 security-audit-skill/
 
 # wiserepo eval runs: per-run answers + provenance (baseline.json points at them)
