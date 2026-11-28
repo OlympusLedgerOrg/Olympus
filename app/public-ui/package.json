@@ -24,7 +24,7 @@
     "framer-motion": "^14.9.1",
     "pdfjs-dist": "^6.2.108",
     "poseidon-lite": "^0.3.0",
-    "react": "^19.2.8",
+    "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "react-router-dom": "^7.18.5",
     "tailwindcss": "^4.3.3"
@@ -38,7 +38,7 @@
     "@testing-library/user-event": "^14.6.13",
     "@types/babel__core": "^7.20.5",
     "@types/node": "^26.1.2",
-    "@types/react": "^19.2.18",
+    "@types/react": "^19.3.3",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.0.5",
     "@vitest/coverage-v8": "^4.1.12",
