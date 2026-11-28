@@ -100,9 +100,13 @@ describe("<Layout>", () => {
     // Assert the active/inactive distinction without hardcoding the skin's
     // accent colour: the active link (current route = /keys) must render a
     // different colour than an inactive one. Decouples the test from the
-    // concrete RGB value the SkinProvider happens to use.
-    const keysColor = getComputedStyle(keysLink).color;
-    const verifyColor = getComputedStyle(verifyLink).color;
+    // concrete RGB value the SkinProvider happens to use. Read the inline
+    // declaration, not getComputedStyle: jsdom >= 31 resolves var() there,
+    // and with no skin stylesheet loaded every token resolves to the same
+    // initial colour, so computed values can no longer tell the two apart.
+    const keysColor = keysLink.style.color;
+    const verifyColor = verifyLink.style.color;
+    expect(keysColor).toBe("var(--accent)");
     expect(keysColor).not.toBe(verifyColor);
   });
 
