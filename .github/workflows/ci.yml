@@ -632,7 +632,7 @@ jobs:
         uses: taiki-e/install-action@37ba67210166984a515120020147f0b4ae3b8667 # nextest
 
       - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           workspaces: verifiers/rust -> target
 
@@ -717,7 +717,7 @@ jobs:
         uses: taiki-e/install-action@37ba67210166984a515120020147f0b4ae3b8667 # nextest
 
       - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           workspaces: clients/cli -> clients/cli/target
 
@@ -864,7 +864,7 @@ jobs:
           components: rustfmt, clippy
 
       - name: Rust cache
-        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           workspaces: ". -> target"
 
@@ -946,7 +946,7 @@ jobs:
         uses: taiki-e/install-action@37ba67210166984a515120020147f0b4ae3b8667 # nextest
 
       - name: Rust cache
-        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           workspaces: ". -> target"
 
@@ -1075,7 +1075,7 @@ jobs:
           components: clippy, rustfmt
 
       - name: Rust cache
-        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           workspaces: pg-embed-local -> target
 
@@ -1180,7 +1180,7 @@ jobs:
           toolchain: 1.95.0
 
       - name: Rust cache
-        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           workspaces: pg-embed-local -> target
           key: integration
@@ -1252,7 +1252,7 @@ jobs:
       - name: Install cargo-nextest
         uses: taiki-e/install-action@37ba67210166984a515120020147f0b4ae3b8667 # nextest
       - name: Rust cache
-        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           workspaces: ". -> target"
       - name: Verify seed reproduces the committed Poseidon parameters
@@ -1343,7 +1343,7 @@ jobs:
           toolchain: 1.95.0
 
       - name: Rust cache
-        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           workspaces: ". -> target"
           key: circomspect
@@ -1448,7 +1448,7 @@ jobs:
         run: rustup toolchain install nightly-2026-07-20 --no-self-update
 
       - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           workspaces: verifiers/rust -> target
           key: nightly
@@ -1497,7 +1497,7 @@ jobs:
         run: rustup toolchain install nightly-2026-07-20 --no-self-update
 
       - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           workspaces: fuzz -> fuzz/target
           key: nightly-root-fuzz
@@ -1843,7 +1843,7 @@ jobs:
         uses: taiki-e/install-action@37ba67210166984a515120020147f0b4ae3b8667 # nextest
 
       - name: Rust cache
-        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           workspaces: ". -> target"
 
@@ -2051,7 +2051,7 @@ jobs:
           toolchain: 1.95.0
 
       - name: Rust cache
-        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           workspaces: ". -> target"
           shared-key: external-db-contract
@@ -2144,7 +2144,7 @@ jobs:
         uses: taiki-e/install-action@37ba67210166984a515120020147f0b4ae3b8667 # nextest
 
       - name: Rust cache
-        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           workspaces: ". -> target"
           key: prover
