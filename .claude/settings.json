@@ -1,4 +1,13 @@
 {
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "enabledMcpjsonServers": ["wiserepo", "serena"],
+  "permissions": {
+    "deny": [
+      "Read(./graphify-out/**)",
+      "Read(./target/**)",
+      "Read(./node_modules/**)"
+    ]
+  },
   "hooks": {
     "PreToolUse": [
       {
@@ -6,11 +15,10 @@
         "hooks": [
           {
             "type": "command",
-            "shell": "bash",
-            "if": "Bash(git commit*)",
-            "command": "set -e; echo '=== cargo check ==='; cargo check --workspace 2>&1 | tail -20; echo '=== cargo clippy (warnings as errors) ==='; cargo clippy --workspace -- -D warnings 2>&1 | tail -20",
-            "timeout": 120,
-            "statusMessage": "Running cargo check + clippy before commit..."
+            "if": "Bash(git commit *)",
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/verify-gate.sh\"",
+            "timeout": 300,
+            "statusMessage": "verify-gate --fast (change-scoped) before commit..."
           }
         ]
       }

@@ -61,6 +61,14 @@ export function extractCitations(text) {
 // Tried only after the literal path fails, so a repo with a real `a/` still wins.
 const DIFF_HEADER_PREFIX = /^[ab]\//;
 
+// A Markdown link written relative to a doc rather than the repo root:
+// `[docs/development.md](../docs/development.md)` (qwen3.5:9b, a correct answer
+// whose link target scored as fabricated). The leading `../` only re-anchors the
+// path, so the remainder is tried from the root, and only once the literal path
+// has failed. Confinement is unchanged: the remainder goes through the same
+// lexical check, and a line check re-confines after resolving symlinks.
+const PARENT_PREFIX = /^(?:\.\.\/)+/;
+
 // A review that says "add a regression test in `src/pager.test.js`" is proposing
 // a file, not citing evidence of one: the path is meant NOT to exist, so scoring
 // it as invented punishes the recommendation. Decided per SENTENCE — a sentence
@@ -103,9 +111,8 @@ export async function verifyCitations(text, { exists = existsInRepo } = {}) {
     let target = null;
     if (await exists(citation.path)) target = citation.path;
     else {
-      const stripped = DIFF_HEADER_PREFIX.test(citation.path)
-        ? citation.path.replace(DIFF_HEADER_PREFIX, "")
-        : null;
+      const prefix = [DIFF_HEADER_PREFIX, PARENT_PREFIX].find((re) => re.test(citation.path));
+      const stripped = prefix ? citation.path.replace(prefix, "") : null;
       if (stripped && (await exists(stripped))) target = stripped;
     }
     if (target === null) {
