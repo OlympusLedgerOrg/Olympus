@@ -27,7 +27,7 @@ wrong in four different ways without seeing an error. This encodes that table.
 
 | Touched                          | Checks                                                                                                                         |
 | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| anything                         | `prettier --check` over the repo glob, `node scripts/check-license-headers.mjs`; `taplo format --check` when a `.toml` changed |
+| anything                         | `prettier --check` over the repo glob, `node scripts/check-license-headers.mjs`; `node scripts/taplo.mjs format --check` when a `.toml` changed |
 | `src-tauri/`, `crates/<pkg>/`    | `cargo fmt --all --check`, `cargo clippy -p <pkg> -- -D warnings`, `cargo test -p <pkg>`                                       |
 | root `Cargo.toml` / `Cargo.lock` | the same, at `--workspace`                                                                                                     |
 | `verifiers/rust/`                | fmt, clippy and tests via `--manifest-path`; the fuzz workspace gets `cargo check`                                             |
@@ -55,9 +55,10 @@ before a commit that matters.
 lockfile disagrees with the installed tree it installs to "fix" it — rewriting
 `pnpm-lock.yaml`. A verification gate that dirties the tree it is checking is
 not a gate, so Prettier, tsc, eslint and vitest are invoked through their
-`node` entry points in `node_modules`, and taplo through `scripts/taplo.mjs`
-(the npm `@taplo/cli` silently checks zero files on Windows); cargo, npm and
-python are unaffected.
+`node` entry points in `node_modules`, and taplo through `scripts/taplo.mjs` — the
+same command as `format:toml:check`, which a test pins — because the native taplo
+binary it fetches is not an npm dependency (and the npm `@taplo/cli` silently
+checks zero files on Windows); cargo, npm and python are unaffected.
 
 ## First failure is the verdict
 

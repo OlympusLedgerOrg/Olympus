@@ -38,6 +38,33 @@ that must precede `cargo tauri build`. Migrations in `migrations/` apply on
 startup — there is no migrate command. Both hash-vector commands are named in
 Critical Invariants rather than here.
 
+## First job on this repo
+
+Read this file (the only instruction document), then orient with the no-model
+commands instead of reading prose or generated artifacts:
+
+```bash
+node tools/wiserepo/bin/wiserepo.mjs context   # version, layout, constants (no model)
+node tools/wiserepo/bin/wiserepo.mjs circuits  # ZK artifact readiness (no model)
+node tools/model-router/route.mjs "<task>" --paths <path,...>  # tier + model, logs the decision
+node tools/verify-gate/verify.mjs --dry-run    # the checks this diff will run
+```
+
+Then narrow with `code_search`, Serena `find_symbol` / `find_referencing_symbols`,
+or `graphify query`, and read only the files the task touches. Before pushing,
+`node tools/verify-gate/verify.mjs` (add `--fast` while iterating) scopes the
+checks to the diff; `tools/verify-gate/README.md` owns which scope runs what.
+
+Never read whole: `graphify-out/graph.json` (18 MB), `graphify-out/GRAPH_REPORT.md`
+(118 KB — `rg` the section you need), `target/`, `node_modules/`. MCP schemas are
+part of the context budget too — wiserepo is 6 tools (~0.7k tokens), Serena 23
+(~7.7k) — so reach for Serena on symbol questions, not as a general read tool.
+
+Codex does not read `.mcp.json`; register both servers per machine as shown in
+`tools/wiserepo/README.md`. Freebuff Desktop reads `~/.agents/mcp.json` only —
+never a repository's `.agents/mcp.json`, which is the CLI's — and adds servers
+through its Connectors screen.
+
 ## Architecture
 
 `docs/architecture.md` owns the component map and `context.json` the workspace
@@ -83,6 +110,36 @@ returns 410 Gone.
 - **Persistent SMT writers serialise** — `NodeBackend::begin_write` (H-4, `src-tauri/src/smt/backend.rs`) MUST own the whole read-modify-write in `update_batch`; the hot cache is also refreshed inside that section to avoid stale-cache stomp. The Postgres impl opens the transaction at `READ COMMITTED` (deliberately pinned so the advisory wait cannot snapshot early), sets `lock_timeout`, then takes `pg_advisory_xact_lock`; SQLite uses `BEGIN IMMEDIATE`, in-mem a `tokio::Mutex`. Because the lock is transaction-scoped, leaves and nodes commit or roll back together, and the refreshed cache is not published until `commit()` succeeds.
 - **Lazy deep-node SMT storage (ADR-0022)** — `smt_nodes` persists only internal nodes with `depth ≤ LAZY_DEPTH` (`72`, in `src-tauri/src/smt/tree.rs`); deeper nodes are recomputed on read from the leaf "canopy" (the leaves sharing the key's first 72 bits = 9 bytes). Pure-physical: roots/proofs/verifiers are byte-identical (the in-memory `olympus_crypto::smt::SparseMerkleTree` is the parity oracle). `LAZY_DEPTH`/`CANOPY_RECOMPUTE_CAP` (`1024`) are **pinned consts**, mirrored in migration `0044`; a change is a migration-class event. **Over-cap exception:** a canopy with `> CANOPY_RECOMPUTE_CAP` live leaves (only reachable via 72-bit prefix collisions or non-hashed record keys) is _not_ recomputed — the read path reads its persisted deep nodes — so the write-path flush MUST keep persisting `depth > 72` nodes for it, evaluated at flush time against the post-batch live count and materialising the _whole_ canopy on a cap crossing. Migration `0044` prunes pre-existing deep rows except over-cap canopies.
 - **`/zk/verify` enforces the `treeSize=0` invariant** (H-2) — proofs against the document-existence or unified circuits with `treeSize=0` are rejected unless `root` equals `zk::poseidon::empty_doc_existence_root()`.
+
+## Branches and pull requests
+
+These rules apply to every agent and exist because each one was broken here:
+#1793 was a "docs" PR carrying 22 commits and +5.7k lines, including stale
+pre-squash copies of two merged PRs and unreviewed crypto work.
+
+- **Branch from `origin/main`, never local `main`.** Run `git fetch origin`, then
+  `git switch -c <branch> origin/main`. Local `main` drifts, and squash merges
+  leave duplicate commits on it that conflict, block CI and can silently revert
+  merged review fixes. Never commit directly to `main`.
+- **Read `git log --oneline origin/main..HEAD` before every push.** Every commit
+  must belong to this PR's one topic. If any commit is unrelated or already merged
+  upstream, rebuild the branch from `origin/main` with only the commits that belong.
+- **One concern per PR, kept small.** Aim for under ~400 changed lines and ~10
+  files, not counting lockfiles and generated output. Split larger work into a
+  stack of PRs that each build and pass alone, and ask the owner before opening
+  one over ~800 lines. Docs, tooling, dependency and Rust changes are separate PRs.
+- **Crypto-sensitive changes always get their own PR**: `crates/olympus-crypto`,
+  domain tags, hashing, SMT, canonicalization, signatures, circuits, `proofs/`.
+  Each needs top-tier review that a mixed PR buries.
+- **The title describes the whole diff, and the template is filled in**: a real
+  Summary, the Scope paths (the PR Scope Drift check enforces them), and the
+  commands actually run. Never open a PR with the empty template, and never open
+  one that conflicts with `main`, because conflicting PRs run no CI.
+- **No new dependency without asking the owner first**, and never a telemetry,
+  analytics or spend-tracking package in tooling that handles repo content (an
+  `@winding-labs/griffin` wrapper was removed from wiserepo for this).
+- **Stop after three failed attempts at the same approach** and report what was
+  tried. Seven rewordings of one wiserepo prompt each scored the same 2/3.
 
 ## Before every `git push`
 

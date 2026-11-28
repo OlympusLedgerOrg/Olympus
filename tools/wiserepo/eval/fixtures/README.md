@@ -5,6 +5,14 @@ one state per commit, so every case scores a real two-revision diff of the kind
 `review_diff` is used on. `review` and `summarize` both run inside that single
 repo, so both suites score the same checkout.
 
+The file is committed at **`app/public-ui/src/pager.js`**, not at the repo root:
+`app/public-ui/src/**` is an allowlisted path in
+`tools/agent-policy/policy.json`, and the policy checks the diff's paths before
+any model call. At the old `src/pager.js` the diff was refused, so every review
+case came back `BLOCKED` and the suite scored nothing. The path lives in one
+constant (`FIXTURE_PATH` in `bin/eval.mjs`) and `test/eval.test.mjs` asserts the
+policy still allows it.
+
 | revision | file | state |
 | --- | --- | --- |
 | `HEAD~2` | `pager.before.js` | correct `pageCount`, off-by-one `clampPage` |
@@ -66,9 +74,11 @@ The phantom case scores *attribution*, not mention: "the diff removes
 list, because `expect_absent` alone is satisfied by a review that never mentions
 `clampPage` at all — and that list is matched against the answer's prose, so a
 pasted diff does not satisfy it. See `src/eval-match.mjs`: attribution is judged
-per sentence (removed/replaced/restored/previously returned all count), a
-unified-diff `-` line counts as removal, and a present-tense marker such as
-"still" overrides attribution in the same sentence.
+per sentence (removed/replaced/restored/previously returned/the original code's
+behaviour/past tense/a value negated just before it all count — but a sentence
+that recommends undoing the change does not, however many removal words it
+carries — a unified-diff `-` line counts as removal, and a present-tense marker
+such as "still" overrides attribution in the same sentence.
 
 `test/eval.test.mjs` asserts both properties still hold: the `+ 1` is present in
 the after file and absent from the before file, and `lastPage - 1` is present
