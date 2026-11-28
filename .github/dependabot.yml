@@ -20,6 +20,21 @@ updates:
       # bumps create incompatible VerifyingKey and rand_core types.
       - dependency-name: "ed25519-dalek"
         versions: [">=3"]
+      # text/utf8-nfc canonicalization pins a Unicode version at compile time
+      # (olympus-manifest content::canon). Any unicode-normalization release
+      # that moves the Unicode version changes canonical output, so the pin
+      # moves only in a deliberate, versioned canon change (#1774).
+      - dependency-name: "unicode-normalization"
+      # babyjubjub-permissive's constant-time field arithmetic is written
+      # against crypto-bigint 0.5's modular::constant_mod, removed in 0.6+.
+      # Moving needs a reviewed port, not a lockfile bump (#1776).
+      - dependency-name: "crypto-bigint"
+        versions: [">=0.6"]
+      # olympus-crypto exchanges BigUint values with the arkworks stack,
+      # which is on num-bigint 0.4; a major move is a coordinated crypto
+      # change (#1758).
+      - dependency-name: "num-bigint"
+        versions: [">=0.5"]
   - package-ecosystem: "cargo"
     directory: "/verifiers/rust"
     schedule:
@@ -48,6 +63,10 @@ updates:
       # compile time; this lockfile must track the root Cargo.lock's
       # unicode-normalization, never move on its own.
       - dependency-name: "unicode-normalization"
+      # olympus-crypto is a path dependency here; its num-bigint major
+      # follows the root workspace (see the "/" entry, #1758).
+      - dependency-name: "num-bigint"
+        versions: [">=0.5"]
   - package-ecosystem: "cargo"
     directory: "/fuzz"
     schedule:
@@ -86,6 +105,10 @@ updates:
       # compile time; this lockfile must track the root Cargo.lock's
       # unicode-normalization, never move on its own.
       - dependency-name: "unicode-normalization"
+      # olympus-crypto is a path dependency here; its num-bigint major
+      # follows the root workspace (see the "/" entry, #1758).
+      - dependency-name: "num-bigint"
+        versions: [">=0.5"]
   - package-ecosystem: "pip"
     directory: "/clients/python"
     schedule:
