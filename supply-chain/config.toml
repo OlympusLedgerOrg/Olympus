@@ -3405,7 +3405,7 @@ version = "0.13.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.sysinfo]]
-version = "0.37.2"
+version = "0.40.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.system-configuration]]
@@ -4092,16 +4092,32 @@ criteria = "safe-to-deploy"
 version = "0.61.3"
 criteria = "safe-to-deploy"
 
+[[exemptions.windows]]
+version = "0.62.2"
+criteria = "safe-to-deploy"
+
 [[exemptions.windows-collections]]
 version = "0.2.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.windows-collections]]
+version = "0.3.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.windows-core]]
 version = "0.61.2"
 criteria = "safe-to-deploy"
 
+[[exemptions.windows-core]]
+version = "0.62.2"
+criteria = "safe-to-deploy"
+
 [[exemptions.windows-future]]
 version = "0.2.1"
+criteria = "safe-to-deploy"
+
+[[exemptions.windows-future]]
+version = "0.3.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.windows-implement]]
@@ -4126,6 +4142,10 @@ criteria = "safe-to-deploy"
 
 [[exemptions.windows-numerics]]
 version = "0.2.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.windows-numerics]]
+version = "0.3.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.windows-registry]]
@@ -4182,6 +4202,10 @@ criteria = "safe-to-deploy"
 
 [[exemptions.windows-threading]]
 version = "0.1.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.windows-threading]]
+version = "0.2.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.windows-version]]

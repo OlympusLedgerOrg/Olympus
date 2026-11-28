@@ -440,7 +440,7 @@ fn verify_owned_process(
         return Err(VerificationFailure::UnverifiableProcess);
     }
 
-    let system = System::new_all();
+    let system = System::new_all().map_err(|_| VerificationFailure::UnverifiableProcess)?;
     let Some(observed) = system.process(Pid::from_u32(postmaster.pid)) else {
         return Err(VerificationFailure::UnverifiableProcess);
     };
@@ -669,7 +669,7 @@ fn open_verified_process(
         return Err(VerificationFailure::UnverifiableProcess);
     }
 
-    let system = System::new_all();
+    let system = System::new_all().map_err(|_| VerificationFailure::UnverifiableProcess)?;
     let Some(observed) = system.process(Pid::from_u32(postmaster.pid)) else {
         return if retained_process_exited(&process)? {
             Ok(None)
@@ -769,7 +769,7 @@ fn open_verified_process(
     // The process handle is already retained. Re-read the PID-indexed command
     // metadata now and require it to describe the same creation second and
     // exact pg_embed invocation before granting termination authority.
-    let system = System::new_all();
+    let system = System::new_all().map_err(|_| VerificationFailure::UnverifiableProcess)?;
     let Some(observed) = system.process(Pid::from_u32(postmaster.pid)) else {
         return if retained_process_exited(&process)? {
             Ok(None)
@@ -791,7 +791,7 @@ fn open_verified_process(
     postmaster: &PostmasterIdentity,
     expected: &ExpectedPostgres,
 ) -> Result<Option<UnsupportedProcessPlaceholder>, VerificationFailure> {
-    let system = System::new_all();
+    let system = System::new_all().map_err(|_| VerificationFailure::UnverifiableProcess)?;
     if system.process(Pid::from_u32(postmaster.pid)).is_none() {
         return Ok(None);
     }
