@@ -56,7 +56,8 @@ const ATTRIBUTION = [
   "fixes",
   "fixed",
   "fixing",
-  // "Restore the removed line" is still describing a change, not citing one.
+  // "restore"/"revert"/"reinstate" describe the diff too ("the diff reverts X to
+  // Y"), but as an IMPERATIVE they propose undoing it — see RECOMMENDATION.
   "restore",
   "revert",
   "reinstate",
@@ -67,6 +68,15 @@ const ATTRIBUTION = [
   "changedfrom",
   "prior",
   "formerly",
+  // Past-tense and revision framing. A real review of `HEAD~2..HEAD` read the
+  // change correctly and then called the pre-diff code "the original code
+  // returns `lastPage - 1`": the right reading in wording the list did not
+  // know. "original", plain past tense and "was returning" all attribute the
+  // value to the earlier revision; present tense ("the current implementation
+  // returns …") stays a live claim and must keep scoring as a phantom.
+  "original",
+  "returned",
+  "wasreturn",
   "→",
   "->",
 ];
@@ -83,6 +93,90 @@ const DIFF_LINE = /^-\s{2,}|^-\t/;
 // though "removes" is right there.
 const CURRENT_OVERRIDES = ["still", "keeps", "continues", "remains"];
 
+// Negation immediately BEFORE the value describes what the code does NOT do:
+// "should return the page count without adding an extra page", "never returns
+// `lastPage - 1`". A real review of the removed `+ 1` phrased the correct post-
+// diff behaviour that way, with no removal word anywhere in the sentence, and
+// the case scored it as a live claim.
+//
+// Proximity, not a marker on the whole sentence: a blanket "without" would
+// excuse "clampPage returns `lastPage - 1` without a guard", which is exactly
+// the live claim this function exists to catch. The value is searched in the
+// text AFTER the negation, so the negation has to precede it.
+//
+// Matched as WHOLE WORDS in the raw sentence. The haystack is normalised with
+// spaces squeezed out, so a substring test for "not" also matches "Note:" —
+// which would excuse the very claim this function exists to catch.
+/**
+ * Whether the sentence PROPOSES undoing the change rather than describing it.
+ *
+ * "**Recommendation:** Revert the change and add `+ 1` back" asserts the removed
+ * value belongs in the new code, so its "revert" must not excuse the mention —
+ * that is how a review recommending the restoration of a removed bug scored
+ * PASS on the clean-fix case. A sentence that describes a revert ("the diff
+ * reverts `clampPage` to `lastPage`") is attribution and stays one: the test is
+ * the sentence's mood, which is why this looks at how it STARTS, not at whether
+ * a revert word appears.
+ */
+function isRecommendation(sentence) {
+  const stripped = String(sentence ?? "")
+    .trimStart()
+    // Headings, quotes and bullets, but not "*": bold labels come next.
+    .replace(/^[#>\s-]+/, "")
+    .replace(/^\*\*[^*]{1,40}\*\*\s*:?/, "")
+    .replace(/^[A-Za-z][A-Za-z /-]{0,30}:\s*/, "")
+    .replace(/^[:\s]+/, "")
+    .trimStart();
+  // Base/imperative forms only: "reverted" or "reverting" describes a past
+  // action or its consequence, which is attribution.
+  return /^(?:revert|restore|reinstate)\b/i.test(stripped);
+}
+
+// "rather than" is positional for the same reason as "not": "now returns
+// `lastPage` rather than `lastPage - 1`" (a real review, scored as a phantom
+// before this was added) puts the value AFTER it, while "returns `lastPage - 1`
+// rather than `lastPage`" is the live claim and still scores, because the value
+// precedes the marker.
+const NEGATION_PATTERN = /\b(?:without|not|never|rather than)\b/g;
+const NEGATION_WINDOW = 40;
+
+// A negation governs its own clause. "The diff does not touch `clampPage`, so it
+// returns `lastPage - 1`" negates the touching, not the return: proximity alone
+// excused that live claim. The value has to appear after the negation AND before
+// the next clause break.
+const CLAUSE_BREAK = /[,;:.!?]|\b(?:so|but|then|therefore|which|while|whereas)\b/;
+
+function negatedBefore(sentence, needle) {
+  const raw = String(sentence ?? "").toLowerCase();
+  for (const match of raw.matchAll(NEGATION_PATTERN)) {
+    const from = match.index + match[0].length;
+    const rest = raw.slice(from, from + NEGATION_WINDOW);
+    const breakAt = rest.search(CLAUSE_BREAK);
+    const clause = breakAt === -1 ? rest : rest.slice(0, breakAt);
+    if (normaliseForExpect(clause).includes(needle)) return true;
+  }
+  return false;
+}
+
+// "from X to Y" names X as the value the change replaced: "modifies the upper
+// bound of `clampPage` from `lastPage - 1` to `lastPage`" (qwen3.5:9b, a correct
+// review scored as a phantom before this was added). Positional like the
+// negations: only a value BETWEEN "from" and "to", inside one clause, counts. In
+// "moves the clamp from 1 to `lastPage - 1`" the value is the new one and still
+// scores.
+const FROM_TO = /\bfrom\b([^,;:!?]{1,60}?)\bto\b/g;
+
+function replacedFrom(sentence, needle) {
+  const raw = String(sentence ?? "").toLowerCase();
+  for (const match of raw.matchAll(FROM_TO)) {
+    // The span may hold a "." only inside the value itself (`v1.2`), never as a
+    // sentence break, so a period followed by a space ends the clause.
+    if (/\.\s/.test(match[1])) continue;
+    if (normaliseForExpect(match[1]).includes(needle)) return true;
+  }
+  return false;
+}
+
 function sentencesOf(text) {
   return String(text ?? "")
     .split(/(?<=[.!?])\s+|\n+/)
@@ -95,7 +189,9 @@ function sentencesOf(text) {
  * For a review of a diff the failure worth scoring is reading a deleted line as
  * current: no positive expectation catches it, because an answer can name every
  * real bug correctly and still invent a phantom beside it. A mention alone is
- * not that failure — the failure is an UNATTRIBUTED mention. Judging per
+ * not that failure — the failure is an UNATTRIBUTED mention. A value negated just
+ * before it ("without adding an extra page") is attributed too, unless the same
+ * sentence also claims it is still the case. Judging per
  * sentence, not per occurrence, is deliberate: the score needs "does the review
  * describe this value as gone", and a per-occurrence window made a correct
  * "Restore the line `lastPage - 1`" recommendation read as a live claim.
@@ -113,9 +209,21 @@ export function unexpectedMentions(answer, absent) {
       DIFF_LINE.test(sentence.trimStart()) ||
       ATTRIBUTION.some((marker) => haystack.includes(marker));
     const override = CURRENT_OVERRIDES.some((marker) => haystack.includes(marker));
+    const recommendation = isRecommendation(sentence);
     for (const [original, needle] of needles) {
       if (!needle || phantoms.has(original)) continue;
-      if (haystack.includes(needle) && (override || !attributed)) phantoms.add(original);
+      // A present-tense override beats both: "it never removes the guard, so
+      // `clampPage` still returns `lastPage - 1`" is a phantom. So does a
+      // recommendation to undo the change, however many attribution words it
+      // contains.
+      if (
+        haystack.includes(needle) &&
+        (override ||
+          recommendation ||
+          (!attributed && !negatedBefore(sentence, needle) && !replacedFrom(sentence, needle)))
+      ) {
+        phantoms.add(original);
+      }
     }
   }
   return (absent ?? []).filter((needle) => phantoms.has(needle));

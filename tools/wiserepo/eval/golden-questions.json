@@ -1,32 +1,37 @@
 [
   {
-    "id": "node-prefix",
-    "question": "Which constant holds the SMT node hash domain prefix, and what is its value?",
-    "files": ["crates/olympus-crypto/src/lib.rs"],
-    "expect": ["NODE_PREFIX"]
+    "id": "cd-hs-st-key-derivation",
+    "question": "How is the global SMT key computed from the shard id and the record key?",
+    "files": ["docs/architecture.md"],
+    "expect": ["GLOBAL_KEY_PREFIX", "KEY_PREFIX"],
+    "why": "Both prefixes are named only in the derivation formula, so an answer that gives the shape of the hash without reading it cannot produce them. The pair is scored rather than one, because the point of the two-step construction is that the outer and inner hashes use different prefixes."
   },
   {
-    "id": "lazy-depth",
-    "question": "What is LAZY_DEPTH set to, and what does it control in SMT storage?",
-    "files": ["src-tauri/src/smt/tree.rs"],
-    "expect": ["LAZY_DEPTH"]
+    "id": "zk-setup-scripts",
+    "question": "Which script is the fast all-in-one ZK setup path for development, and which one is the multi-contributor ceremony used for releases?",
+    "files": ["docs/quickstart.md"],
+    "expect": ["setup_circuits.sh", "phase2_ceremony.sh"],
+    "why": "The two scripts share a Phase 1 input and are easy to run together in prose; the case requires both names, so an answer that merges them into \"the setup script\" fails. File names, not descriptions, because a description can be guessed from the question."
   },
   {
-    "id": "shard-write-gate",
-    "question": "What does authorize_write check before a write to a shard is accepted?",
-    "files": ["src-tauri/src/api/shards.rs"],
-    "expect": ["authorize_write"]
+    "id": "dev-process-tree-wrapper",
+    "question": "Which script wraps cargo tauri dev so the whole process tree is torn down when the launcher exits?",
+    "files": ["docs/development.md"],
+    "expect": ["scripts/dev.py"],
+    "why": "An exact path that appears in one line of the guide, and the reason it exists (an orphaned embedded PostgreSQL holding the DB lock) is prose that no keyword in the question contains. One expectation only: scoring the reason as well would fail a correct answer that phrases the orphan differently."
   },
   {
-    "id": "backend-default-model",
-    "question": "Which model does the backend use by default, and how is its context window chosen?",
-    "files": ["tools/wiserepo/src/backend.mjs"],
-    "expect": ["qwen2.5-coder:7b-instruct"]
+    "id": "ui-root-route",
+    "question": "Where does the UI send a user who opens the root path, and which component renders the /commit page?",
+    "files": ["app/public-ui/src/App.tsx"],
+    "expect": [["/verify", "verify page"], "IngestPage"],
+    "why": "The only golden case on TypeScript rather than Markdown, so qa is not scored exclusively on docs. The redirect target is accepted either as the literal route or as the page name, because a review that reads the route table may describe it either way; the component name is scored exactly."
   },
   {
-    "id": "ceremony-coordinator-env",
-    "question": "Which environment variable supplies the ceremony coordinator signing key?",
-    "files": ["AGENTS.md"],
-    "expect": ["OLYMPUS_CEREMONY_COORDINATOR_KEY"]
+    "id": "c2pa-treatment",
+    "question": "What are C2PA manifests treated as in this repo, and what is implementation of the bridge waiting on?",
+    "files": ["docs/c2pa-bridge.md"],
+    "expect": ["third-party provenance claims", "transparency receipt RFC"],
+    "why": "A one-screen policy document whose whole point is the distinction it draws: C2PA manifests are third-party claims, never Olympus-native evidence. Both phrases are verbatim in the file, and neither is inferable from the question, so this scores reading rather than plausible-sounding summary."
   }
 ]

@@ -52,3 +52,5 @@ logs/
 .olympus-logs/
 *.log
 *.err.log
+# Freebuff's per-machine runtime (sandbox home, pnpm store); never ours to format.
+.freebuff/

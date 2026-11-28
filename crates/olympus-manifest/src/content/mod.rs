@@ -28,6 +28,7 @@ pub mod domains;
 pub mod error;
 pub mod tree;
 pub mod version;
+pub mod wire;
 
 pub use canon::CanonProfile;
 pub use commit::{MetaEntry, OptOutStatus};
