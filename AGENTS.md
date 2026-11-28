@@ -38,6 +38,33 @@ that must precede `cargo tauri build`. Migrations in `migrations/` apply on
 startup — there is no migrate command. Both hash-vector commands are named in
 Critical Invariants rather than here.
 
+## First job on this repo
+
+Read this file (the only instruction document), then orient with the no-model
+commands instead of reading prose or generated artifacts:
+
+```bash
+node tools/wiserepo/bin/wiserepo.mjs context   # version, layout, constants (no model)
+node tools/wiserepo/bin/wiserepo.mjs circuits  # ZK artifact readiness (no model)
+node tools/model-router/route.mjs "<task>" --paths <path,...>  # tier + model, logs the decision
+node tools/verify-gate/verify.mjs --dry-run    # the checks this diff will run
+```
+
+Then narrow with `code_search`, Serena `find_symbol` / `find_referencing_symbols`,
+or `graphify query`, and read only the files the task touches. Before pushing,
+`node tools/verify-gate/verify.mjs` (add `--fast` while iterating) scopes the
+checks to the diff; `tools/verify-gate/README.md` owns which scope runs what.
+
+Never read whole: `graphify-out/graph.json` (18 MB), `graphify-out/GRAPH_REPORT.md`
+(118 KB — `rg` the section you need), `target/`, `node_modules/`. MCP schemas are
+part of the context budget too — wiserepo is 6 tools (~0.7k tokens), Serena 23
+(~7.7k) — so reach for Serena on symbol questions, not as a general read tool.
+
+Codex does not read `.mcp.json`; register both servers per machine as shown in
+`tools/wiserepo/README.md`. Freebuff Desktop reads `~/.agents/mcp.json` only —
+never a repository's `.agents/mcp.json`, which is the CLI's — and adds servers
+through its Connectors screen.
+
 ## Architecture
 
 `docs/architecture.md` owns the component map and `context.json` the workspace

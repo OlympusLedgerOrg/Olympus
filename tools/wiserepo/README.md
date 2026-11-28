@@ -567,6 +567,31 @@ node -e "console.log(process.execPath)"   # -> the absolute interpreter path
 } } }
 ```
 
+### Freebuff
+
+The snippet above is the one both Freebuff surfaces need, but the path differs.
+Desktop does **not** read `.mcp.json`, and it does not read a repository's
+`.agents/mcp.json` either: its orchestrator loads the server list from exactly
+one file, `~/.agents/mcp.json` (`agentsConfigPath` in `McpConfigStore`), and
+keeps approvals and per-server enable flags beside it in `~/.freebuff/mcp.json`.
+A project-scoped `.agents/mcp.json` reaches the CLI only, so a server that works
+in a shell can be missing in Desktop without anything being broken.
+
+- **Where servers are added.** Settings → MCP / Connectors → _Add server_:
+  paste the `mcpServers` block, approve the command, then pick the tools. Desktop
+  writes the definition into `~/.agents/mcp.json` itself, so the CLI picks the
+  same entry up and the two surfaces do not drift.
+- **By hand.** The same entry in `~/.agents/mcp.json` is loaded, but disabled:
+  it connects only after you approve and enable it under Connectors. Restart
+  Desktop after editing the file; the config is read at startup.
+- **CLI.** `.agents/mcp.json` in the project, then `../.agents/mcp.json`, then
+  `~/.agents/mcp.json`; later wins, and a project file asks for trust before its
+  server starts.
+
+Only Desktop is limited this way. Desktop 0.0.206 has no project-scope loader at
+all — what its Connectors screen writes is the home file — so keep the entry in
+`~/.agents/mcp.json` and out of the committed `.agents/` config.
+
 ### Codex
 
 Codex does **not** read `.mcp.json`, and this repo gitignores `.codex/`, so a
