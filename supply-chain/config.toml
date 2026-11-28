@@ -1297,7 +1297,7 @@ version = "0.4.7"
 criteria = "safe-to-deploy"
 
 [[exemptions.flate2]]
-version = "1.1.9"
+version = "1.1.11"
 criteria = "safe-to-deploy"
 
 [[exemptions.fluid-let]]
@@ -2090,6 +2090,10 @@ criteria = "safe-to-deploy"
 
 [[exemptions.miniz_oxide]]
 version = "0.8.9"
+criteria = "safe-to-deploy"
+
+[[exemptions.miniz_oxide]]
+version = "0.9.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.mio]]
@@ -4449,7 +4453,7 @@ version = "9.8.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.zlib-rs]]
-version = "0.6.3"
+version = "0.6.9"
 criteria = "safe-to-deploy"
 
 [[exemptions.zmij]]
