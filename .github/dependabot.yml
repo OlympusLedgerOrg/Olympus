@@ -43,6 +43,11 @@ updates:
     labels:
       - "dependencies"
       - "security"
+    ignore:
+      # olympus-manifest's text/utf8-nfc canon pins a Unicode version at
+      # compile time; this lockfile must track the root Cargo.lock's
+      # unicode-normalization, never move on its own.
+      - dependency-name: "unicode-normalization"
   - package-ecosystem: "cargo"
     directory: "/fuzz"
     schedule:

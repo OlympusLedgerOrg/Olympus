@@ -11,6 +11,10 @@ use thiserror::Error;
 /// A rejection or construction failure.
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum ContentError {
+    /// Invalid or noncanonical compact proof bytes.
+    #[error("invalid compact dataset proof: {0}")]
+    InvalidProofEncoding(&'static str),
+
     /// The input is not valid UTF-8 under a text profile (§1).
     #[error("canonicalization rejected input: invalid UTF-8")]
     InvalidUtf8,
