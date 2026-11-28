@@ -162,6 +162,8 @@ graphify-out/
 .serena/
 plugins/
 .agents/plugins/
+# Local Freebuff Desktop MCP config (machine-specific absolute paths)
+.agents/mcp.json
 security-audit-skill/
 
 # wiserepo eval runs: per-run answers + provenance (baseline.json points at them)
