@@ -1,9 +1,10 @@
 # Plan (for review): RISC Zero 3.1 receipt migration
 
 **Status:** Core bump merged in [#1752](https://github.com/OlympusLedgerOrg/Olympus/pull/1752)
-(`359c7c7c`, 2026-11-27). This plan covers what "migrated" still requires: the
-receipt compatibility boundary, the pinned guest toolchain, and the checks that
-keep both honest.
+(`359c7c7c`, 2026-11-27); the P1/P2/P5 slice (CHANGELOG, pinned-digest tests,
+operator note) landed in `a86c9d13` (2026-11-27). What remains: keep the guest
+rebuild canary green (P3) and, only if it starts failing, migrate the guest to
+3.1.0 (P4).
 **Scope:** ADR-0040 canonicalization receipts. No Groth16, journal, or ceremony
 change.
 
@@ -21,8 +22,8 @@ change.
   and after the migration; only the receipt bytes changed.
 - The committed fixture was re-proven by the `measure cycles and generate
 receipt fixture` job (run 45935028508) and both verifiers accept it:
-  `committed_succinct_receipt_fixture_verifies_offline` (`verifiers/rust`, 9/9)
-  and `committed_succinct_receipt_fixture_verifies` (`olympus-desktop`, 6/6).
+  `committed_succinct_receipt_fixture_verifies_offline` (`verifiers/rust`, 10/10)
+  and `committed_succinct_receipt_fixture_verifies` (`olympus-desktop`, 7/7).
 - ADR-0040 gained a **Verifier and prover version** section recording the split
   pins, the changed control IDs, and the no-dual-root rule.
 - The `rebuild pinned guest ELF` job in `zkvm-guest.yml` still installs
@@ -35,10 +36,19 @@ receipt fixture` job (run 45935028508) and both verifiers accept it:
   `2026-11-27T06:56:57Z`; `zip` no longer appears in the host-tools lockfile, and
   the root lockfile's remaining `zip` is 9.8.1 (the advisories cover ≤ 9.0.4).
   No further dependency change is needed to close them.
+- The P1/P2/P5 slice landed as `a86c9d13`: the CHANGELOG entry, the operator
+  re-prove note in `proofs/zkvm/canonicalization/README.md`, and the pinned
+  parameters-digest regression test in both verifiers —
+  `canonicalization::tests::pinned_succinct_verifier_parameters_match_risc_zero_3_1_0`
+  in `verifiers/rust` and
+  `zk::canonicalization::tests::pinned_succinct_verifier_parameters_match_risc_zero_3_1_0`
+  in `olympus-desktop`. Both assert the strict context carries the 3.1.0 digest
+  (`f57f355f…`) and not the 3.0.x digest (`ece5e9b8…`).
 
-So the dependency and fixture work is done. What remains is the part a version
-bump cannot do by itself: deciding what happens to _other_ 3.0.x receipts, and
-making that boundary a tested property rather than a paragraph.
+So the dependency, fixture, and boundary work is done: what happens to _other_
+3.0.x receipts is now stated in the CHANGELOG and the canonicalization README,
+and the boundary is a tested property rather than a paragraph. What remains is
+P3's canary and the conditional P4 guest migration.
 
 ## 1. What changed for a receipt
 
@@ -110,22 +120,22 @@ the first build that ships 3.1.0.
 
 ## 4. Work items
 
-| #   | Item                                                                                                 | Size | Files                                                                            |
-| --- | ---------------------------------------------------------------------------------------------------- | ---- | -------------------------------------------------------------------------------- |
-| P1  | CHANGELOG entry: verifier pin, rejected 3.0.x receipts, re-prove requirement                         | S    | `CHANGELOG.md`                                                                   |
-| P2  | Parameters-digest regression test in both verifiers                                                  | S    | `verifiers/rust/src/canonicalization.rs`, `src-tauri/src/zk/canonicalization.rs` |
-| P3  | Keep the existing guest rebuild canary green (no new code)                                           | —    | `.github/workflows/zkvm-guest.yml` (already implemented)                         |
-| P4  | _Conditional:_ guest 3.1.0 migration (new image ID, ELF/`.id`, fixture, cycle report, ADR amendment) | L    | `proofs/zkvm/canonicalization/**`, `docs/adr/ADR-0040…`                          |
-| P5  | Operator note: what a parameters-digest rejection means, how to re-prove                             | S    | `proofs/zkvm/canonicalization/README.md`                                         |
+| #   | Item                                                                                                 | Size | Status            | Files                                                                            |
+| --- | ---------------------------------------------------------------------------------------------------- | ---- | ----------------- | -------------------------------------------------------------------------------- |
+| P1  | CHANGELOG entry: verifier pin, rejected 3.0.x receipts, re-prove requirement                         | S    | Done (`a86c9d13`) | `CHANGELOG.md`                                                                   |
+| P2  | Parameters-digest regression test in both verifiers                                                  | S    | Done (`a86c9d13`) | `verifiers/rust/src/canonicalization.rs`, `src-tauri/src/zk/canonicalization.rs` |
+| P3  | Keep the existing guest rebuild canary green (no new code)                                           | —    | Existing CI       | `.github/workflows/zkvm-guest.yml` (already implemented)                         |
+| P4  | _Conditional:_ guest 3.1.0 migration (new image ID, ELF/`.id`, fixture, cycle report, ADR amendment) | L    | Conditional       | `proofs/zkvm/canonicalization/**`, `docs/adr/ADR-0040…`                          |
+| P5  | Operator note: what a parameters-digest rejection means, how to re-prove                             | S    | Done (`a86c9d13`) | `proofs/zkvm/canonicalization/README.md`                                         |
 
-P1, P2, and P5 are one small PR. P3 is existing CI coverage, not a change. P4
-is separate and only if P3 starts failing.
+P1, P2, and P5 landed as `a86c9d13`. P3 is existing CI coverage, not a change.
+P4 is separate and only if P3 starts failing.
 
-**P2 shape.** `strict_verifier_context()` exists in both verifiers. Assert
-`context.succinct_verifier_parameters.digest()` equals the pinned 3.1.0 digest
-and is not the 3.0.5 digest. That makes a future silent `risc0-zkvm` bump fail
-CI instead of quietly changing which receipts are accepted — the exact failure
-#1752 had to discover through a red fixture test.
+**P2 shape (landed in `a86c9d13`).** `strict_verifier_context()` exists in both
+verifiers. Assert `context.succinct_verifier_parameters.digest()` equals the
+pinned 3.1.0 digest and is not the 3.0.5 digest. That makes a future silent
+`risc0-zkvm` bump fail CI instead of quietly changing which receipts are
+accepted — the exact failure #1752 had to discover through a red fixture test.
 
 **P3 shape.** Nothing to build. `zkvm-guest.yml`'s `reproducible-guest` job
 already runs `bash proofs/zkvm/build_canonicalization_guest.sh` after installing
@@ -138,7 +148,7 @@ guest manifest; do not add a second canary.
 
 | Check              | Command                                                                                           | Proves                                            |
 | ------------------ | ------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
-| Offline verifier   | `cargo test --locked -p olympus-verifier canonicalization`                                        | Fixture verifies; digest pins hold                |
+| Offline verifier   | `(cd verifiers/rust && cargo test --locked canonicalization)`                                     | Fixture verifies; digest pins hold                |
 | Desktop verifier   | `cargo test --locked -p olympus-desktop --no-default-features --features prover canonicalization` | Same, on the shipping path                        |
 | Fixture job        | `zkvm-guest.yml` → `measure cycles and generate receipt fixture`                                  | Re-prove still works under the pin                |
 | Guest canary (P3)  | `zkvm-guest.yml` → `rebuild pinned guest ELF`                                                     | ELF/`.id` byte-identical, toolchain installable   |
@@ -163,13 +173,18 @@ boundary.
 
 ## 7. Done criteria
 
-1. P1, P2, and P5 merged; P2 fails if the context digest drifts.
+1. P1, P2, and P5 are merged (`a86c9d13`); P2 fails if the context digest
+   drifts.
 2. The guest canary is green (it is today), or P4 has an owner and a separate
    ADR amendment.
 3. No open Dependabot alert for `zip` (already true) and `cargo tree -i zip`
    shows nothing below 9.0.5 on a shipped path.
 4. ADR-0040, README, and CHANGELOG tell the same story: 3.0.x receipts are
-   rejected, re-proving is required, and there is no dual-root path.
+   rejected, re-proving is required, and there is no dual-root path. Compared
+   against all three — ADR-0040 §"Verifier and prover version", the README's
+   "Receipt compatibility and re-proving", and the Unreleased CHANGELOG entry —
+   they agree on the split pins, the rejected receipt class, and the absence of
+   a dual-root path.
 
 **Explicitly not in scope:** changing the journal, the Groth16 circuit, the
 ceremony artifacts, or the receipt's base64/JSON envelope.

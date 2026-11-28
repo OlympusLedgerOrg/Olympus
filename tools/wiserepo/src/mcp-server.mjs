@@ -14,6 +14,9 @@ import {
   readRepoFile,
   gitDiff,
   gitGrep,
+  gitShowFile,
+  gitShowIndexFile,
+  sanitizeDiffArgs,
   truncateText,
   wouldTruncate,
 } from "./repo.mjs";
@@ -249,6 +252,67 @@ const SYSTEM_PROMPT =
   "You are wiserepo, a self-hosted repo assistant for the Olympus verifiable-ledger codebase. " +
   "Be precise, cite file paths and line numbers when possible, and never invent code you have not been shown.";
 
+// Files shown at most, so a large diff cannot spend the whole window on them.
+const POST_DIFF_MAX_FILES = 5;
+
+/**
+ * The files a diff touches, as they stand AFTER it.
+ *
+ * The fixture's phantom case exists because a model reads `-`/`+` lines as if
+ * they were the file, and three prompt attempts to explain the convention did
+ * not move it (see "Recorded scores" in the README). Showing the result is the
+ * direct fix: the post-diff code no longer has to be reconstructed from a
+ * deleted and an added line.
+ *
+ * The post-diff side is the INDEX for `--cached`/`--staged` (that diff compares a
+ * revision to the index, not the worktree), otherwise the second revision of a
+ * range, otherwise the working tree. A path the change deletes is named as such
+ * instead of being silently dropped: a review that cannot see the file has to be
+ * told why.
+ */
+async function postDiffContext(diffArgs, diff, { maxChars }) {
+  if (maxChars <= 0 || !diff) return "";
+  const safe = sanitizeDiffArgs(diffArgs);
+  const separator = safe.indexOf("--");
+  const revs = (separator === -1 ? safe : safe.slice(0, separator)).filter(
+    (arg) => !arg.startsWith("-"),
+  );
+  // `A..B` / `A...B` in ONE argument names the post side inside the argument.
+  const range = revs.length === 1 && /\.{2,3}/.test(revs[0]);
+  const rev = revs.length >= 2 ? revs[1] : range ? revs[0].split(/\.{2,3}/).pop() : null;
+  const cached = safe.includes("--cached") || safe.includes("--staged");
+  const shown = cached ? " (index)" : rev ? ` at ${rev}` : " (working tree)";
+  const paths = extractDiffPaths(diff).slice(0, POST_DIFF_MAX_FILES);
+  const parts = [];
+  let used = 0;
+  for (const relPath of paths) {
+    const room = maxChars - used;
+    if (room <= 0) break;
+    let content;
+    try {
+      // The cached flag wins over a revision: `git diff --cached A` still
+      // compares A to the index, so the index is the post-diff side.
+      if (cached) content = await gitShowIndexFile(relPath, { maxBytes: room });
+      else if (rev) content = await gitShowFile(rev, relPath, { maxBytes: room });
+      else content = await readRepoFile(relPath, { maxBytes: room });
+    } catch (err) {
+      // A deleted or renamed-away path is part of the change, not a tool
+      // failure: say so, and only swallow the errors that mean "not in that
+      // tree" — a permission problem is still the caller's to see.
+      if (err.code === "ENOENT" || /does not exist|exists on disk/.test(String(err.message))) {
+        content = "(this change deletes this path; it is not in the post-diff tree)";
+      } else {
+        throw err;
+      }
+    }
+    const part = `### ${relPath}${shown}\n\`\`\`\n${content}\n\`\`\``;
+    parts.push(part);
+    used += part.length + 2;
+  }
+  if (parts.length === 0) return "";
+  return `## Files after the change\n\n${parts.join("\n\n")}`;
+}
+
 /**
  * Execute one tool by name and return its text result.
  *
@@ -399,16 +463,23 @@ export async function runTool(name, args = {}, { onPrompt } = {}) {
       `Diff semantics: \`-\` lines are code the diff REMOVES (no longer in the file), \`+\` lines ` +
       `are code it ADDS, and a \`-\`/\`+\` pair at one position is a single change to read as a ` +
       `fix. Judge the code as it stands after the diff, and describe removed code as removed, ` +
-      `never as current behaviour.\n\n` +
+      `never as current behaviour. The files the diff touches, as they stand after it, are ` +
+      `included below; when they disagree with your reading of the markers, trust them.\n\n` +
       (standards ? `## AGENTS.md (standards)\n\`\`\`\n${standards}\n\`\`\`\n\n` : "");
     const diffStart = "## Diff\n```diff\n";
     const diffEnd = "\n```";
-    const contextBudget =
+    const windowBudget =
       budgetCharsFor(await effectiveNumCtx(model)) -
       SYSTEM_PROMPT.length -
       promptStart.length -
       diffStart.length -
       diffEnd.length;
+    // At most a third of the leftover space: the diff is what is being
+    // reviewed, so the post-change view must not crowd it out.
+    const afterChange = await postDiffContext(diffArgs, diff, {
+      maxChars: Math.floor(Math.max(0, windowBudget) * 0.35),
+    });
+    const contextBudget = windowBudget - afterChange.length;
     const partialNote = wouldTruncate(
       diff,
       Math.max(0, Math.min(DEFAULT_DIFF_MAX_CHARS, contextBudget)),
@@ -423,7 +494,12 @@ export async function runTool(name, args = {}, { onPrompt } = {}) {
     }
     const boundedDiff = diff.slice(0, Math.max(0, diffBudget));
     const prompt =
-      promptStart + partialNote + diffStart + (boundedDiff || "(empty diff)") + diffEnd;
+      promptStart +
+      partialNote +
+      diffStart +
+      (boundedDiff || "(empty diff)") +
+      diffEnd +
+      (afterChange ? `\n\n${afterChange}` : "");
     onPrompt?.({ system: SYSTEM_PROMPT, prompt, model });
     const answer = await withVerifiedCitations(
       await callModel({ system: SYSTEM_PROMPT, prompt, maxTokens: 8192, model }),
