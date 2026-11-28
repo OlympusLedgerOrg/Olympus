@@ -34,6 +34,12 @@ jobs:
           persist-credentials: false
 
       - name: Install pinned RISC Zero build tools
+        env:
+          # rzup resolves toolchain releases through api.github.com. Without a
+          # token it shares the runner IP's 60-requests/hour unauthenticated
+          # quota and fails with "API rate limit exceeded". rzup 0.5.1 reads
+          # GITHUB_TOKEN; the job token is read-only (contents: read).
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cargo install rzup --version 0.5.1 --locked \
             --no-default-features --features cli,install
