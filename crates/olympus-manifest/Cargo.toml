@@ -37,6 +37,17 @@ rayon = { version = "1", optional = true }
 # content::canon), and metadata blinders come from the OS CSPRNG.
 unicode-normalization = "0.1"
 getrandom = "0.3"
+# text/minhash-120 v1 (similarity companion): full case folding and the
+# L*/N* character classes at Unicode 17.0.0. Pinned exactly because they name
+# the profile's implementation_id; unicode-properties' version is checked at
+# compile time, ICU's by the dev-dep cross-check below. Kept on the 2.2 line
+# the workspace already locks so adding it moves no other ICU crate.
+icu_casemap = "=2.2.0"
+unicode-properties = { version = "=0.1.4", default-features = false, features = [
+  "general-category",
+] }
 
 [dev-dependencies]
+# Cross-checks that ICU 2.2's data (shared by icu_casemap) is Unicode 17.0.0.
+icu_properties = "=2.2.0"
 serde_json = "1"

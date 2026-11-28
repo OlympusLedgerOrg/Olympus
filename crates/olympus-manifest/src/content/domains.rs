@@ -128,6 +128,24 @@ pub fn h(domain: Domain, parts: &[&[u8]]) -> [u8; 32] {
 /// Context for content keys (§3).
 pub const CONTENT_KEY_CONTEXT: &str = "olympus 2026-11 dataset content-key v1";
 
+/// Context for MinHash shingle values (similarity companion, `text/minhash-120`).
+pub const MINHASH_SHINGLE_CONTEXT: &str = "olympus 2026-11 dataset minhash-shingle v1";
+
+/// Context whose `derive_key` output stream supplies the MinHash coefficients.
+pub const MINHASH_COEFFICIENTS_CONTEXT: &str = "olympus 2026-11 dataset minhash-coefficients v1";
+
+/// Context for LSH band keys (similarity companion, "Similarity index").
+pub const BAND_KEY_CONTEXT: &str = "olympus 2026-11 dataset band-key v1";
+
+/// Every derived-identifier context, for the disjointness test.
+#[cfg(test)]
+const DERIVED_CONTEXTS: [&str; 4] = [
+    CONTENT_KEY_CONTEXT,
+    MINHASH_SHINGLE_CONTEXT,
+    MINHASH_COEFFICIENTS_CONTEXT,
+    BAND_KEY_CONTEXT,
+];
+
 /// The `u32` length prefix for `x`, or [`ContentError::FieldTooLong`].
 ///
 /// Encoders call this *before* sizing or copying anything from `x`, so an
@@ -159,8 +177,15 @@ mod tests {
         assert_eq!(names.len(), ALL.len(), "duplicate domain name");
         let keys: HashSet<_> = ALL.iter().map(|d| *d.key()).collect();
         assert_eq!(keys.len(), ALL.len(), "two domains share a key");
-        // The content-key context is a derived identifier, not a keyed-hash
-        // domain, and must not coincide with any domain context.
-        assert!(ALL.iter().all(|d| d.context() != CONTENT_KEY_CONTEXT));
+        // Derived-identifier contexts are not keyed-hash domains, must not
+        // coincide with any domain context, and are unique among themselves.
+        for ctx in DERIVED_CONTEXTS {
+            assert!(
+                ALL.iter().all(|d| d.context() != ctx),
+                "{ctx} reuses a domain"
+            );
+        }
+        let derived: HashSet<_> = DERIVED_CONTEXTS.iter().collect();
+        assert_eq!(derived.len(), DERIVED_CONTEXTS.len());
     }
 }
